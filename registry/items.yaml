@@ -5270,6 +5270,7 @@
   description: |
     sd_push writes but doesn't boot. After the invalid-record fix, boot record 13 (config boot to record 13 + power-cycle, or record-picker i264b) to confirm cjs runs end-to-end.
   status: OPEN
+  depends_on: [i295]
   kind: leaf
   owner: agent
 
@@ -5277,7 +5278,7 @@
   title: "sd_push cleanup: prune dead HWSAD/HRECORD seam routines + plumb record name from filename"
   description: |
     Own-LBA sd_push leaves dead HWSAD/HRECORD seam routines (Pete: delete duplicate code); record name hardcoded 'cj.mgt' - plumb from pushed filename (<=16).
-  status: OPEN
+  status: IN_PROGRESS
   kind: leaf
   owner: agent
 
