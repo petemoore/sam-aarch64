@@ -108,6 +108,34 @@ real on-hardware auto-load + boot is a **separate hardware shot** (emulation-ver
 not hardware-verified, CLAUDE.md §5). The launcher boots whatever record you name — make
 sure it holds a bootable disk.
 
+## `delete-record.py` — free/delete a Trinity SD record N via `delete_record` (i317)
+
+The store/boot/**delete** toolkit closer: it patches the record number into
+`build/delete_record.bin`'s `DEL_CONFIG` block, then TrinLoad-pushes the program to
+**page 1** / `&8000` and runs it. `delete_record` (`src/netboot/delete_record.asm`) clears
+that record's central record-**list** name entry — a single-entry read-modify-write (real
+CMD17 read, zero this record's 16 bytes, real CMD24 write-back) — so the slot reads as
+free/reusable and the next `sd-push.py` lands there. This lets the autonomous loop build a
+disk, push it, boot it, then **free it and re-push cleanly**, hands-off, without exhausting
+records. The record number is delivered by **patching the binary** (no wire loop), exactly
+like `boot-record.py`.
+
+```sh
+make netboot-delete-record
+tools/trinload-push/delete-record.py 192.168.2.75 3     # free record 3 (re-pushable)
+```
+
+Args: `<sam-ip> <record> [--bin build/delete_record.bin] [--map …] [--page 1]`. Record is
+1..255; record 0 (the floppy) has no list entry and is rejected.
+
+**Data-safety** (the Trinity SD card is a SHARED user resource): `delete_record` frees
+**only** the named record's 16-byte list entry — no neighbour is touched — and refuses an
+out-of-range record (0, or beyond the card's record count) without writing. The list-entry
+clear + neighbour-safety are **emulation-verified only**
+(`tools/netboot-oracle/z80/delete_record_test.go`); the real on-hardware free is a
+**separate, Pete-gated hardware shot** (CLAUDE.md §5; i295 family). The launcher frees
+whatever in-range record you name — make sure it is one you own / may reuse.
+
 TrinLoad must already be running on the SAM (it listens on `0xEDB0`). The full
 hardware procedure lives in
 [`docs/notes/netboot-trinity-testing.md`](../../docs/notes/netboot-trinity-testing.md).
