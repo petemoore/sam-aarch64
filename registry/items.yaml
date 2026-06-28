@@ -5495,9 +5495,38 @@
     The remaining i319 scope after the i319a toolkit proof: push + boot + verify each feature .mgt on real silicon (release/assembler disk, disassembler, editor, netboot demos...). Split one leaf per image as each is attempted.
   status: OPEN
   depends_on: [i328]
-  kind: leaf
+  kind: umbrella
   owner: agent
   parent: i319
+
+- id: i319b-b1
+  title: "build-disk: multi-file CODE-auto record vessel for the assembler test disk (make disk-record)"
+  description: |
+    First i319b image: the assembler BUILD_TESTS disk (build/test.mgt -- the ONLY assembler disk the build produces) reshaped as a boot_record-bootable RECORD: the AUTO BASIC (CLEAR/LOAD/CALL, which a record boot never runs -- i332) is replaced by ONE auto-executing CODE file 'AUTOasm' (the assembler.bin, load=exec=&8000, single page <=16K -- a strict subset of the proven 2-page serve encoding), with every sibling payload the assembler HLOADs BY NAME post-exec kept as normal named files on the same record: enctab.enc, sd13, zx013, d15 + the BUILD_TESTS payloads (test_mem, enc_fix, cluster, p14). build-disk's codeAuto branch ships only ONE file today (buildNetbootDisk, main.go:771-787) -- extend the MAIN (non-netboot) composition with a code-auto mode instead. Scout evidence: the assembler start: is CODE-auto-safe (sets its own SP, CAPTURES boot LMPR/HMPR rather than assuming BASIC's -- assembler.asm:269-315); the AUTO BASIC carries no load-bearing setup.
+  status: IN_PROGRESS
+  kind: leaf
+  owner: agent
+  parent: i319b
+
+- id: i319b-b2
+  title: "Emulation gate: the assembler record vessel boots under captured B-DOS ALHK (real-hook HLOADs from the record; boot self-tests pass)"
+  description: |
+    The rule-7 gate before any hardware shot, and the answer to the scout's one open risk: whether B-DOS's hook workspace under ALHK CODE-auto exec supports the assembler's subsequent RST-8 HGTHD/HLOAD-by-name calls the way BASIC's CALL 32768 does. Rig: generalize the serve_record_vessel_test.go pattern (netboot-oracle) -- seedRecordFromMGT already takes any .mgt; stage boot_record at the vessel's record, continue into real captured B-DOS 1.5t ALHK, then assert the assembler (a) execs, (b) HLOADs enctab.enc + the page payloads by name from the RECORD through the real hooks, (c) runs the BUILD_TESTS boot self-tests to a PASS verdict (assert via map symbols / print recorder, the TestBootSelfTestsPass idiom -- that harness models hooks and skips BASIC, so it cannot answer this; no existing test boots the assembler under a real DOS).
+  status: OPEN
+  depends_on: [i319b-b1]
+  kind: leaf
+  owner: agent
+  parent: i319b
+
+- id: i319b-b3
+  title: "Hardware shot: push + boot the assembler record vessel; best-effort confirm, visual check deferred"
+  description: |
+    After the emulation gate: sd-push build/test_record.mgt (or final name) to the first free record, boot-record.py it, and best-effort-confirm per the ROADMAP rule (network-reporting disks self-confirm; a purely-visual disk gets the boot + a trinload-gone probe -- boot dispatched, machine left trinload -- with the on-screen BUILD_TESTS self-test verdict DEFERRED to Pete-presence). Power-cycle recovery via tapo.sh; keep the record for re-boots; standard deploy-guard checklist applies.
+  status: OPEN
+  depends_on: [i319b-b1, i319b-b2]
+  kind: leaf
+  owner: agent
+  parent: i319b
 
 - id: i320
   title: registry-sync-check should also run 'validate' — local pre-commit gate misses invariants CI catches
