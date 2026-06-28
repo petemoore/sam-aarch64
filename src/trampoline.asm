@@ -227,8 +227,8 @@ LMPR_TEST_MEM:  equ     &20 + TEST_MEM_PAGE         ; = &2D
 ; extended_reg / litpool self-test suites (1225 B), HLOADed at boot and
 ; invoked once via an LMPR swap (cluster_dispatch at section-A &0000).
 ;
-; Page 11: encode_inst fixture data payload (BUILD_TESTS only — i69
-; lever 3).
+; Page 11: encode_inst fixture data payload (BUILD_TESTS_ENCODE only —
+; the enc-tests boot variant, i234; page assignment from i69 lever 3).
 ;
 ; The enc_fix_table rows and operand-stream data that feed
 ; run_encode_inst_self_tests are assembled into a separate binary
@@ -250,7 +250,7 @@ LMPR_TEST_MEM:  equ     &20 + TEST_MEM_PAGE         ; = &2D
 ; LMPR = page 12 (the cluster page), but the LDIR touches only
 ; section A; the copy completes before enctab_map_in, so ENCTAB
 ; (page 4) is not involved.
-if defined(BUILD_TESTS)
+if defined(BUILD_TESTS_ENCODE)
 ENC_FIX_PAGE:       equ     11
 LMPR_ENC_FIX:       equ     &20 + ENC_FIX_PAGE          ; = &2B
 ; ENC_FIX_TABLE_RAM: section-D destination for the LDIR bulk-copy.
