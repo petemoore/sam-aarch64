@@ -71,10 +71,25 @@ const (
 // as it does on the real card.
 func composeAutoBootMGT(t *testing.T, autoName string, payload []byte) []byte {
 	t.Helper()
+	return composeCodeAutoMGT(t, autoName, payload, 0x6000)
+}
+
+// composeCodeAutoMGT is the any-load-address generalization: `load` is the
+// logical load address in system-map terms (&6000, &8000, ...), giving
+// StartPage = (load>>14)-1 (the physical page whose section-C mapping holds the
+// load address), the &8000-form page offset (load&0x3FFF)|0x8000, and the
+// exec-page convention StartPage+1 with the same offset form.
+func composeCodeAutoMGT(t *testing.T, autoName string, payload []byte, load uint16) []byte {
+	t.Helper()
 	if len(autoName) > 10 {
 		t.Fatalf("auto filename %q longer than 10 chars", autoName)
 	}
 	name10 := autoName + "          "[:10-len(autoName)]
+	startPage := byte(load>>14) - 1
+	offForm := (load & 0x3FFF) | 0x8000
+	lenMod := len(payload) & 0x3FFF
+	pages := byte(len(payload) >> 14)
+	execPage := startPage + 1
 
 	img := make([]byte, 819200)
 
@@ -88,7 +103,7 @@ func composeAutoBootMGT(t *testing.T, autoName string, payload []byte) []byte {
 	s0[0xF0], s0[0xF1] = 0x10, 0x27 // LengthMod16K = 10000
 	s0[0xF2], s0[0xF3], s0[0xF4] = 0xFF, 0xFF, 0xFF
 
-	// Slot 1: the AUTO CODE file at T6S1.., load &6000, exec page 1/&A000.
+	// Slot 1: the AUTO CODE file at T6S1...
 	nSec := (9 + len(payload) + 509) / 510
 	s1 := img[0x100:0x200]
 	s1[0x00] = 0x13
@@ -100,22 +115,22 @@ func composeAutoBootMGT(t *testing.T, autoName string, payload []byte) []byte {
 		bit := track*10 + (sector - 1) - 40
 		s1[0x0F+bit/8] |= 1 << (bit % 8)
 	}
-	s1[0xEC] = 0x00                                                // StartAddressPage
-	s1[0xED], s1[0xEE] = 0x00, 0xA0                                // StartAddressPageOffset = &A000
-	s1[0xEF] = byte(len(payload) >> 14)                            // full 16K pages
-	s1[0xF0], s1[0xF1] = byte(len(payload)), byte(len(payload)>>8) // LengthMod16K
-	s1[0xF2] = 0x01                                                // ExecAddrDiv16K = HMPR page 1
-	s1[0xF3], s1[0xF4] = 0x00, 0xA0                                // ExecAddrMod16K = &A000
+	s1[0xEC] = startPage                              // StartAddressPage
+	s1[0xED], s1[0xEE] = byte(offForm), byte(offForm>>8) // StartAddressPageOffset, &8000-form
+	s1[0xEF] = pages                                  // full 16K pages
+	s1[0xF0], s1[0xF1] = byte(lenMod), byte(lenMod>>8) // LengthMod16K
+	s1[0xF2] = execPage                               // ExecAddrDiv16K
+	s1[0xF3], s1[0xF4] = byte(offForm), byte(offForm>>8) // ExecAddrMod16K, &8000-form
 
 	// Body: 9-byte header + payload, chained 510 bytes per sector from T6S1.
 	body := make([]byte, 0, 9+len(payload))
 	body = append(body,
 		0x13,
-		byte(len(payload)), byte(len(payload)>>8), // LengthMod16K
-		0x00, 0xA0, // PageOffset = &A000 (load &6000)
+		byte(lenMod), byte(lenMod>>8), // LengthMod16K
+		byte(offForm), byte(offForm>>8), // PageOffset, &8000-form
 		0x00, 0x00, // exec marker (non-&FF: auto-exec armed, dist shape)
-		byte(len(payload)>>14), // Pages
-		0x00,                   // StartPage
+		pages,     // Pages
+		startPage, // StartPage
 	)
 	body = append(body, payload...)
 	for i := 0; i < nSec; i++ {

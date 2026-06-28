@@ -203,7 +203,7 @@ jobs:
         # is built by ci-netboot-z80 and its test fails hard if missing.
         run: SKIP_PRIVATE_TESTS=true make ci-netboot-z80
       - name: Bootable netboot disks build
-        run: make netboot-smoke-disk netboot-server-disk netboot-serve-disk netboot-client-disk netboot-http-disk
+        run: make netboot-smoke-disk netboot-server-disk netboot-serve-disk netboot-serve-record netboot-client-disk netboot-http-disk
       - name: Serve push launcher config-patch test (i121d)
         run: make netboot-trinpush-test
 
