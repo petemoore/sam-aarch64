@@ -296,7 +296,17 @@ func ixTStates(m *mem, cpu *z80.CPU, pc uint16, prefix uint8) (uint, error) {
 	if t := ixTime[sub]; t >= 0 {
 		return uint(t), nil
 	}
-	return 0, unknownOp(pc, prefix, sub)
+	// Undocumented DD/FD forms: the prefix substitutes IXH/IXL (IYH/IYL) for
+	// H/L — or is ignored by ops not touching H/L — and costs one extra opcode
+	// fetch, so the timing is the unprefixed op's + 4. Every (IX+d) memory
+	// form is in ixTime above, so anything landing here is a register or
+	// immediate form (e.g. the zx0 compressor's LD IXH,n / DEC IXL / CP IXH,
+	// which the assembler record vessel executes at boot; i319b-b2).
+	t, err := baseTStates(m, cpu, pc+1, sub)
+	if err != nil {
+		return 0, unknownOp(pc, prefix, sub)
+	}
+	return t + 4, nil
 }
 
 // ixcbTStates returns the timing of a DD-CB/FD-CB opcode. BIT b,(IX+d) = 20;

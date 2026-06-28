@@ -1501,11 +1501,12 @@ assembler-prod: $(BUILD)/assembler-prod.bin
 # dependency — all values are literals), and exports the payload length
 # via its sym file.  The payload must be built before the assembler so
 # this --importfile is satisfied.
-$(BUILD)/assembler.bin $(BUILD)/assembler.sym: src/assembler.asm $(wildcard src/*.asm) $(wildcard src/**/*.asm) $(wildcard src/*.inc) $(BUILD)/enc_fix_payload.sym
+$(BUILD)/assembler.bin $(BUILD)/assembler.sym $(BUILD)/assembler.map: src/assembler.asm $(wildcard src/*.asm) $(wildcard src/**/*.asm) $(wildcard src/*.inc) $(BUILD)/enc_fix_payload.sym
 	@mkdir -p $(BUILD)
 	pyz80 -D BUILD_TESTS=1 \
 	    --obj=$(BUILD)/assembler.bin \
 	    --exportfile=$(BUILD)/assembler.sym \
+	    --mapfile=$(BUILD)/assembler.map \
 	    --importfile=$(BUILD)/enc_fix_payload.sym \
 	    src/assembler.asm
 	@./tools/check-code-budget.sh $(BUILD)/assembler.bin test
