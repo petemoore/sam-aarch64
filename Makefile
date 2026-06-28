@@ -939,20 +939,6 @@ $(BUILD)/csd_probe.bin $(BUILD)/csd_probe.map: src/netboot/csd_probe.asm src/net
 
 netboot-csd-probe: $(BUILD)/csd_probe.bin $(BUILD)/csd_probe.map
 
-# netboot-sd-sector-probe (i299) — csd_probe built with -D SD_SECTOR_PROBE: the SAME
-# read-only probe plus three extra TFTP files (list.bin / r13.bin / r3.bin) that
-# CMD17-read raw card sectors into STAGE, so the host can see WHERE the create-record
-# write landed (the record-13-reads-invalid diagnosis). NO CMD24 in the binary — it
-# cannot write the card. Diagnostic build; not booted, trinload-pushed.
-$(BUILD)/sd_sector_probe.bin $(BUILD)/sd_sector_probe.map: src/netboot/csd_probe.asm src/netboot/netboot_serve.asm src/netboot/build_udp_frame.asm src/netboot/build_arp_reply.asm src/netboot/tftp_build.asm src/netboot/tftp_parse.asm src/netboot/encdrv.asm src/netboot/eeprom.asm
-	@mkdir -p $(BUILD)
-	pyz80 -D SD_SECTOR_PROBE=1 --obj=$(BUILD)/sd_sector_probe.bin \
-	    --mapfile=$(BUILD)/sd_sector_probe.map \
-	    src/netboot/csd_probe.asm
-	@tools/netboot-boot-fit-check.sh $(BUILD)/sd_sector_probe.bin 16384 sd_sector_probe.bin
-
-netboot-sd-sector-probe: $(BUILD)/sd_sector_probe.bin $(BUILD)/sd_sector_probe.map
-
 # netboot-sd-push (i293) — the small trinload-pushable cj.mgt -> Trinity-SD-record
 # pusher: receives a .mgt over UDP (port 0xEDB0, our own ?/@/F framing) and writes
 # each 512-byte sector into the FIRST FREE record via the B-DOS HWSAD hook (A=2 =
