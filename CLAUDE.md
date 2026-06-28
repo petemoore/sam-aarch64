@@ -87,6 +87,16 @@ If incomplete work fails a test, **do not relax the test** (a ratchet, an "allow
 
 Most of this project is "implement in Go first (the authority), then port to Z80." When the Go side already implements a behaviour (e.g. PC-relative branch-target rendering via `DecodeAt(pc, …)`), porting it to Z80 is a **mechanical task with a known answer** — read the Go function and mirror it. Don't flag such work as "needs a design decision / Pete's input" unless there is a genuinely *new* choice the Go code doesn't already settle. Manufacturing a blocker where the authority already has the answer just stalls autonomous progress.
 
+## Git hygiene (i343 — three recurring slips, codified)
+
+1. **Never revert-by-checkout over uncommitted work.** `g checkout <path>` discards EVERY uncommitted change in that file — use it only when discarding everything uncommitted there is the intent. To undo a *targeted* edit (a test mutation, a one-line probe), use a targeted tool: the Edit tool or `sed` on the exact lines. **Stage (`g add`) work-in-progress before mutation-testing it**, so a later discard has a restore point that isn't the last commit. **Why:** three-plus June-era wipes, 10–15 min each — a one-line teeth-check undo wiped the whole uncommitted B1c routine (06-17); the same shape wiped ~250 lines of B5a (06-19); two more path-imprecise checkout wipes the same week.
+
+2. **Branch is the FIRST action after returning to `main`.** After a merge: `g checkout main && g pull --ff-only`, then IMMEDIATELY `g fetch origin && g checkout -b <next-branch> origin/main` (§4) *before touching any file*. Diving into the next brick unbranched committed onto local `main` twice (06-17 lexer, 06-21 samboot-chain) and near-missed twice more.
+
+3. **Stage by explicit path — never `g add -A` or `g add .`.** Blanket staging swept unrelated in-flight changes into commits twice (a `go.work.sum` sweep 06-19; a code change into a registry commit 07-01). Registry mutations print their exact `git add` file list (i341) — use it verbatim; for everything else, name the files.
+
+No enforcement hook for rule 1 (judged at i343 implementation): an over-broad `checkout` matcher is worse than no hook (the i340 deploy-guard lesson), the checkout-a-path *intentional* discard is common in normal work (twice in the very session that implemented this), and incident frequency was already declining post-retro. Re-weigh if a wipe recurs.
+
 ## Development inner loop for Z80 changes
 
 When iterating on SAM-side Z80 code (the assembler in `src/`, tests, paging trampoline, etc.), use `tools/z80-test-harness-go/` for fast (~1 ms/fixture) feedback during inner-loop development. See its README for usage. Before pushing, run SimCoupé under Docker locally for a real-hardware confirmation; CI runs the SimCoupé matrix as the gate.
