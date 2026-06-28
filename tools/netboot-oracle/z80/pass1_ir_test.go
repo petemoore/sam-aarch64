@@ -446,3 +446,79 @@ func TestPass1IRCoreFixtures(t *testing.T) {
 		}
 	}
 }
+
+// TestPass1IRRedefinitionHardFails pins the .set/.equ redefinition hard-fail
+// parity across the two implementations: the Go authority (assemble.Pass1
+// returns an error) and the Z80 (pass1_ir_walk hits the fail trap, because the
+// second insert of the same symbol id makes symbol_insert `jp fail`). This is a
+// DELIBERATE divergence from GNU as, which silently overwrites (i73/q49;
+// docs/ARCHITECTURE.md §3). The Z80 has always hard-failed here (test_pass1_ir
+// / symbol_insert); this test locks it against the newly-aligned Go behaviour.
+func TestPass1IRRedefinitionHardFails(t *testing.T) {
+	dirID, ok := format.DirectiveID(".equ")
+	if !ok {
+		t.Fatal("unknown directive .equ")
+	}
+	// equ builds a `.equ FOO, value` record (operand 1 = PUSH_SYM nameID,
+	// operand 2 = the constant), directly — no Translate dependency, so the
+	// redefinition is guaranteed to reach pass1_ir_walk.
+	equ := func(nameID uint16, val int64) format.Record {
+		var ow format.OperandWriter
+		var sym format.ExprWriter
+		sym.WriteSym(nameID)
+		ow.WriteImmExpr(sym.Bytes())
+		var v format.ExprWriter
+		v.WriteImm(val)
+		ow.WriteImmExpr(v.Bytes())
+		return format.Record{
+			Kind:         format.KindDirective,
+			DirectiveID:  dirID,
+			OperandCount: 2,
+			Operands:     ow.Bytes(),
+		}
+	}
+	// FOO defined twice — the redefinition.
+	f := &format.File{
+		Version: format.Version,
+		Flags:   format.Flags,
+		Names:   []string{"FOO"},
+		Records: []format.Record{equ(0, 1), equ(0, 2)},
+	}
+
+	// Go authority: the redefinition must be a hard-fail.
+	if _, err := assemble.Pass1(f); err == nil {
+		t.Fatal("host assemble.Pass1 accepted a .equ redefinition; want a hard-fail error")
+	}
+
+	// Z80 oracle: pass1_ir_walk must hit the fail trap.
+	ir := serializeIR(t, f)
+	if len(ir) > pass1IRBufSize {
+		t.Fatalf("redefinition IR %d bytes exceeds PASS1_IR_BUF %d", len(ir), pass1IRBufSize)
+	}
+	mac := loadPass1IR(t)
+	bufAddr, err := mac.Sym("PASS1_IR_BUF")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lenAddr, err := mac.Sym("PASS1_IR_LEN")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mac.Write(bufAddr, ir)
+	mac.WriteU16LE(lenAddr, uint16(len(ir)))
+
+	res, err := mac.CallEntry("pass1_ir_walk", z80h.Entry{})
+	if err != nil {
+		t.Fatalf("pass1_ir_walk: %v", err)
+	}
+	if !res.Halted {
+		t.Fatalf("pass1_ir_walk did not halt (PC=&%04X)", res.PC)
+	}
+	failHalt, err := mac.Sym("fail_halt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.PC != failHalt {
+		t.Fatalf("pass1_ir_walk returned cleanly (PC=&%04X) on a redefinition; want the fail trap at &%04X", res.PC, failHalt)
+	}
+}

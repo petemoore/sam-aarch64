@@ -117,6 +117,16 @@ implements first; the Z80 side mirrors it.**
 - **Ultimate truth is GNU binutils**: every gate byte-compares our output
   against `as` (+ `ld -Ttext=0` where relocations need resolving) +
   `objcopy -O binary` (§7).
+- **We match binutils on *output* byte-identity, but may be *stricter* on
+  *input*.** The guarantee is strict-input / byte-identical-output: for any
+  input we accept, the emitted binary is byte-identical to GNU `as`, so a
+  stricter input rule never diverges the generated code — it only rejects a
+  class of source GNU `as` tolerates. Deliberate input divergences: we reject
+  SIMD/FP mnemonics GNU accepts (an unsupported-feature rejection), and
+  **`.set`/`.equ` redefinition is a hard fail** (GNU `as` silently overwrites;
+  we reject, matching the Z80 assembler's `symbol_insert` `jp fail` — i73/q49).
+  Add a new input-strictness divergence only when it preserves this guarantee,
+  and record it here.
 - Where the Z80 carries a copy of Go-side data (the sysreg/pstate/dc/tlbi
   tables in `src/sysreg_tables.inc`), it is **generated** from the Go
   authority by `tools/tables-gen` (`make tables`), not hand-mirrored, so the
