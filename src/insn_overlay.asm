@@ -854,7 +854,7 @@ compact_inst:
 ; Fully-literal: store the bare word, no patch.  The probes left PASS_PC
 ; at probe B; restore the true PC so the caller's PC state survives
 ; (the compactor calls compact_inst per instruction and owns the running
-; PC — a stale probe value here was the i351 latent trap).
+; PC — a stale probe value here would corrupt it; i351).
                 ld      (ovl_base + 0), hl
                 ld      (ovl_base + 2), de
                 call    ci_restore_pc
