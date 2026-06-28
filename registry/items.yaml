@@ -5503,9 +5503,11 @@
   title: "build-disk: multi-file CODE-auto record vessel for the assembler test disk (make disk-record)"
   description: |
     First i319b image: the assembler BUILD_TESTS disk (build/test.mgt -- the ONLY assembler disk the build produces) reshaped as a boot_record-bootable RECORD: the AUTO BASIC (CLEAR/LOAD/CALL, which a record boot never runs -- i332) is replaced by ONE auto-executing CODE file 'AUTOasm' (the assembler.bin, load=exec=&8000, single page <=16K -- a strict subset of the proven 2-page serve encoding), with every sibling payload the assembler HLOADs BY NAME post-exec kept as normal named files on the same record: enctab.enc, sd13, zx013, d15 + the BUILD_TESTS payloads (test_mem, enc_fix, cluster, p14). build-disk's codeAuto branch ships only ONE file today (buildNetbootDisk, main.go:771-787) -- extend the MAIN (non-netboot) composition with a code-auto mode instead. Scout evidence: the assembler start: is CODE-auto-safe (sets its own SP, CAPTURES boot LMPR/HMPR rather than assuming BASIC's -- assembler.asm:269-315); the AUTO BASIC carries no load-bearing setup.
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 812, role: completing}
   parent: i319b
 
 - id: i319b-b2
