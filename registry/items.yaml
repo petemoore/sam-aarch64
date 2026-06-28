@@ -1254,9 +1254,8 @@
 - id: i73
   title: i17 review residuals — LOW-severity hardening and dead-code findings
   description: |
-    Low-severity hardening items split from i17 (PR #185). Landed: L1 emit_byte off-by-one (PR #338), L6 .align>=16 silent no-op (PR #339), L7 pass-1 backward-.org check missing (PR #340), L9 retired symbolic-encoder path removed (PR #371, q20 sweep), and L3/L4/L5/L10/L11 hardening guards (this PR): L3 symbol_abs_bit_ptr id<512 bound (symbols.asm), L4 reader STAGING_BUF exactly-full off-by-one — a 1024-byte record now fits (reader.asm), L5 zero-length LIT_DATA/INSN_RUN BC-underflow guard (main_loop.asm), L10 litpool u8 segment-counter wrap guard (litpool.asm), L11 load_in_file editor-offset b2>=&40 decode-wrap guard (main_loop.asm). Each guard only affects its documented edge case; release byte-match + boot self-tests unchanged. Open: L12 .set/.equ redefinition divergence — Go silently overwrites, Z80 hard-fails on duplicate; a real behaviour change with a two-pass tie-break question -> deferred to q49 (owner pete). Follow-up i109 (vestigial soft-reject hook).
+    L12: .set/.equ REDEFINITION -> HARD FAIL (Pete 2026-07-01, q49). The Z80 assembler hard-fails on .set/.equ redefinition; make the Go authority (tools/sam-aarch64/assemble/pass1.go resolveEquDirective ~L382) ALSO hard-fail (it currently silently overwrites, matching GNU as). This is a DELIBERATE divergence from GNU as -- document it. Rationale (Pete): strict-input / byte-identical-output. We already reject inputs GNU accepts (e.g. SIMD), so there is precedent; if code assembles at all, the generated binary is byte-identical to GNU as, so there is NO divergence in emitted code -- the desired guarantee. WORK: (a) add a test asserting the hard-fail on redefinition (Go + Z80 oracle); (b) change the Go resolveEquDirective from silent-overwrite to hard-fail; (c) document the intentional GNU-as input divergence (near the align-with-binutils notes). See memory feedback_align_with_binutils (refined: match binutils on OUTPUT byte-identity, but we may be STRICTER on input).
   status: OPEN
-  depends_on: [q49]
   kind: leaf
   owner: agent
   refs: ["PR #185", i17]
