@@ -167,3 +167,32 @@ than guessing — this writes Pete's real shared SD card.
   card currently has cj.mgt at record 13 (catalogue-named, body written, but not get.label-valid).
   trinload is up (no power-cycle needed). The deploy-guard false-fires on the word "tftp" in any
   command (i268) — avoid it in greps.
+
+## LANDED (2026-06-30) + NEXT STEPS
+- **Committed/pushed/PR'd** per Pete ("bank progress even if failing"):
+  - Spec → **main** (`39a9457`, doc-only).
+  - Working code (from #771 worktree) → branch **`i295-create-record`** (pushed).
+  - Clean main-based landing → **PR #773** (`i295-create-record-land`): **builds green** (6933 B),
+    restores `bd_record_write_hw` + adds `-D NETBOOT_WANT_CLAIM` to the Makefile sd_push recipe,
+    reverts #772's *minor* sd_csd.asm comment tweaks (core purge preserved). **CI expected RED**
+    (Go tests assert the old HWSAD path; record not yet get.label-valid). Do NOT bypass branch
+    protection to merge — Pete's call.
+- **NEXT (priority order), for a fresh-context agent:**
+  1. **Diagnose the invalid record (the blocker).** Read record 13's body sector 0 off the card
+     (LBA `csd_base+1600*12`, csd_base=2438 → ~21638) and inspect +210/+232/+250. No existing tool
+     reads an arbitrary SD sector (dumper=ROM/EEPROM; sd_listread targets the list region) — adapt
+     `sd_listread_standalone`/`bd_list_read_hw` to a chosen LBA, or add a tiny read-and-report-over-UDP
+     probe. Compare what's at +232 (expect "BDOS"). Test the hypotheses in the RESULTS block:
+     (a) sector-0 mutation didn't land (offset/trigger bug — but binary decode showed
+     `ld de,BD_WRITE_BUF+232` + "BDOS" present, so less likely); (b) **body base off-by-one** vs
+     B-DOS's record base (the catalogue/list matched, but the body uses csd_base directly — verify
+     csd_base == B-DOS &80C2 base, and the linearSec-0 → track0/sector1 mapping). (c) get.label's
+     exact read sector. THIS is what makes RECORD 13 valid + bootable.
+  2. **Update the Go tests** (`sd_push_test.go`, `sd_push_faithful_test.go`) for the own-LBA +
+     sector-0-mutation flow (they still assert HWSAD) → green CI → mergeable.
+  3. **Speed:** drop the per-sector `sdc_init_ladder` (init once, or rely on B-DOS's boot-time init —
+     Pete: B-DOS already inited the card; no per-block ENC re-arm disturbs the bus). ~8KB/s → tens of KB/s.
+  4. **Boot record 13** to confirm cjs runs (after it's get.label-valid): configure boot to record 13
+     + power-cycle, or via the record-picker (i264b).
+  5. Prune the dead HWSAD/HRECORD seam routines from the binary (Pete: "delete the other code");
+     plumb the record name from the host filename (currently hardcoded "cj.mgt").
