@@ -5536,3 +5536,11 @@
   status: OPEN
   kind: leaf
   owner: agent
+
+- id: i327
+  title: Faithful-machine drv_init fails after a real-B-DOS boot (emulation artifact) — blocks a faithful come-up gate for pushable tools
+  description: |
+    Under the faithful machine (Colin's ROM + B-DOS booted to WTKY2, ENC model via capIO), drv_init's chk_trinity identity probe FAILS for both sd_push and list_records -- yet both init fine on real hardware from the same trinload context (i319a session, 2026-07-02). The model's post-boot ENC/PIC state does not match real silicon after B-DOS's boot-time Trinity traffic -- an emulation gap in the OPPOSITE direction from usual (model stricter than hardware). It masked the i319a scroll-wedge diagnosis (a faithful end-to-end come-up test wedged at sp_fail_init instead of the real cause) and blocks committing TestSDPushComesUpOn64GBFaithful (written+parked in the i319a session -- see PR 801's description for the test body location in git history). Fix the model state, then land the faithful come-up test for every pushable tool (the class the flat harness cannot see: it stubs RST &10 and the ENC probe timing).
+  status: OPEN
+  kind: leaf
+  owner: agent

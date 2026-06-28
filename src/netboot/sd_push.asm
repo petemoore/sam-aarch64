@@ -137,6 +137,16 @@ sam_ip:         equ chunk+6                    ; SAM IP
 ; ===========================================================================
 sd_push_main:
                 di
+                ; Clear the lower screen + home the print position (CLSLOWER, stock
+                ; ROM &06B5 — hardware-proven from this exact trinload-pushed context
+                ; by mgt_screen_demo, i230) BEFORE any RST &10 print. Load-bearing,
+                ; not cosmetic (i319a): printing a CR with the position at the screen
+                ; bottom sends the ROM into its scroll key-wait prompt — on an
+                ; unattended SAM that wedges the tool before it ever serves (found on
+                ; real hardware; reproduced in the faithful emulator, see
+                ; rom_print_scroll_test.go). CLS resets the scroll count, so this
+                ; tool's few lines can never reach the prompt.
+                call    &06b5
                 ld      hl, sp_str_banner      ; "SD-PUSH " — announce the tool (i318);
                 call    sp_print_str           ; the stage markers follow on the same line
                 ld      a, "1"                 ; DBG: entered main (after di)
