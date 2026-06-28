@@ -11,6 +11,8 @@
 ;     drv_read  -> a received Ethernet frame (or nothing)
 ;     parse     -> UDP dst port 67? op BOOTREQUEST? option-53 message type?
 ;     dispatch  -> DISCOVER(1) => OFFER(2);  REQUEST(3) => ACK(5);  else ignore
+;     gate      -> option-60 vendor class starts "PXEClient"?  else ignore
+;                  (rogue-DHCP protection: only PXE netboot clients are served)
 ;     lease     -> a yiaddr from a tiny fixed pool keyed by client MAC
 ;     build     -> build_dhcp_reply (the OFFER/ACK body) then build_udp_frame
 ;                  (wrap as a UDP 67->68 L2-broadcast)
@@ -112,6 +114,13 @@ not_discover:
                 ld      a, MSG_ACK
 have_reply_type:
                 ld      (DP_MSGTYPE), a        ; into the build_dhcp_reply param
+
+                ; --- vendor class (option 60) must start "PXEClient" ----
+                ; Rogue-DHCP protection — port of responder.go::OnRequest's
+                ; option-60 gate: the SAM serves only PXE netboot clients, so
+                ; any other DHCP client on a shared LAN is ignored.
+                call    check_vendor_pxe       ; CY set if conformant
+                jp      nc, serve_none
 
                 ; --- echo request fields into the reply params ----------
                 ; xid (4)
@@ -267,6 +276,79 @@ fmt_got53:
                 scf
                 ret
 fmt_absent:
+                or      a                      ; clear CY
+                ret
+
+; ---------------------------------------------------------------------------
+; check_vendor_pxe — scan the received DHCP options for option 60 (vendor
+; class) and require its value to carry the 9-byte "PXEClient" prefix. Port of
+; responder.go::OnRequest's option-60 gate (rogue-DHCP protection: the SAM
+; serves only PXE netboot clients). Prefix match, not equality — the real
+; Pi 400 sends the 32-byte "PXEClient:Arch:00000:UNDI:002001". The compare
+; string is the included dhcp_reply.asm's pxeclient (the outbound echo), so
+; the gate and the echo share the same bytes.
+; Out: CY set if option 60 is present with the PXEClient prefix; CY clear
+;      otherwise. Bounded by RX_LEN so a malformed packet can't run away.
+; Clobbers: A, BC, DE, HL.
+; ---------------------------------------------------------------------------
+check_vendor_pxe:
+                ; HL = first option byte; DE = one past the frame end.
+                ld      hl, RXBUF + RX_UDP_PAYLOAD + RX_DHCP_OPTIONS
+                ld      de, (RX_LEN)
+                push    hl
+                ld      hl, RXBUF
+                add     hl, de
+                ex      de, hl                 ; DE = RXBUF + RX_LEN (end)
+                pop     hl
+cvp_loop:
+                ; stop if HL >= end
+                push    hl
+                or      a
+                sbc     hl, de
+                pop     hl
+                jr      nc, cvp_no
+                ld      a, (hl)                ; A = option code
+                cp      OPTPAD
+                jr      z, cvp_pad
+                cp      OPTEND
+                jr      z, cvp_no
+                ld      c, a                   ; C = option code (kept)
+                inc     hl                     ; -> length
+                push    hl
+                or      a
+                sbc     hl, de
+                pop     hl
+                jr      nc, cvp_no             ; length byte past end
+                ld      b, (hl)                ; B = option length
+                inc     hl                     ; HL -> value
+                ld      a, c
+                cp      OPT_VCLASS
+                jr      z, cvp_got60
+                ; skip this option's value (B bytes)
+                ld      c, b
+                ld      b, 0
+                add     hl, bc                 ; HL += length
+                jr      cvp_loop
+cvp_pad:
+                inc     hl
+                jr      cvp_loop
+cvp_got60:
+                ; prefix match: length >= 9 and the first 9 bytes = "PXEClient".
+                ld      a, b
+                cp      pxeclient_len
+                jr      c, cvp_no              ; value too short for the prefix
+                ld      de, pxeclient
+                ld      b, pxeclient_len
+cvp_cmp:
+                ld      a, (de)
+                cp      (hl)
+                jr      nz, cvp_no
+                inc     hl
+                inc     de
+                djnz    cvp_cmp
+                scf
+                ret
+cvp_no:
                 or      a                      ; clear CY
                 ret
 

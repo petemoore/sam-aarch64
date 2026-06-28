@@ -19,7 +19,8 @@
 ;     dispatch (mirrors Server.OnFrame, in this order):
 ;       1. ARP request for our IP        -> an ARP reply       (build_arp_reply)
 ;       2. not IPv4/UDP                   -> ignore
-;       3. UDP dst 67  (DHCP DISCOVER/REQUEST) -> an OFFER/ACK  (dhcp dispatch + pool)
+;       3. UDP dst 67  (DHCP DISCOVER/REQUEST) -> an OFFER/ACK  (dhcp dispatch + pool;
+;          PXEClient vendor-class gate — non-PXE DHCP clients are ignored)
 ;       4. UDP dst 69  (TFTP RRQ)         -> an OACK (hit) / ERROR(1) (miss), arm xfer
 ;       5. UDP dst = our transfer TID (TFTP ACK) -> FirstData (ack 0) / next DATA
 ;       6. anything else                  -> ignore
@@ -300,6 +301,13 @@ dh_not_disc:
 dh_have_type:
                 ld      (DP_MSGTYPE), a
 
+                ; vendor class (option 60) must start "PXEClient" — rogue-DHCP
+                ; protection, port of responder.go::OnRequest's option-60 gate:
+                ; the SAM serves only PXE netboot clients, so any other DHCP
+                ; client on a shared LAN is ignored.
+                call    check_vendor_pxe       ; CY set if conformant
+                jp      nc, ns_none
+
                 ; echo request fields into the reply params.
                 ; xid (4)
                 ld      hl, RXBUF + RX_UDP_PAYLOAD + DH_XID
@@ -435,6 +443,72 @@ fmt_got53:
                 ret
 fmt_absent:
                 or      a
+                ret
+
+; check_vendor_pxe — scan the received DHCP options for option 60 (vendor class)
+; and require its value to carry the 9-byte "PXEClient" prefix. Port of
+; responder.go::OnRequest's option-60 gate (rogue-DHCP protection); textually
+; mirrors dhcp_loop.asm::check_vendor_pxe. Prefix match, not equality — the real
+; Pi 400 sends the 32-byte "PXEClient:Arch:00000:UNDI:002001". The compare
+; string is the included dhcp_reply.asm's pxeclient (the outbound echo).
+; Out: CY set if option 60 is present with the PXEClient prefix; CY clear
+;      otherwise. Bounded by RX_LEN like find_msgtype.
+check_vendor_pxe:
+                ld      hl, RXBUF + RX_UDP_PAYLOAD + DH_OPTIONS
+                ld      de, (RX_LEN)
+                push    hl
+                ld      hl, RXBUF
+                add     hl, de
+                ex      de, hl                 ; DE = RXBUF + RX_LEN (end)
+                pop     hl
+cvp_loop:
+                push    hl
+                or      a
+                sbc     hl, de
+                pop     hl
+                jr      nc, cvp_no
+                ld      a, (hl)                ; option code
+                cp      OPTPAD_
+                jr      z, cvp_pad
+                cp      OPTEND_
+                jr      z, cvp_no
+                ld      c, a
+                inc     hl                     ; -> length
+                push    hl
+                or      a
+                sbc     hl, de
+                pop     hl
+                jr      nc, cvp_no             ; length byte past end
+                ld      b, (hl)                ; length
+                inc     hl                     ; -> value
+                ld      a, c
+                cp      OPT_VCLASS
+                jr      z, cvp_got60
+                ld      c, b
+                ld      b, 0
+                add     hl, bc
+                jr      cvp_loop
+cvp_pad:
+                inc     hl
+                jr      cvp_loop
+cvp_got60:
+                ; prefix match: length >= 9 and the first 9 bytes = "PXEClient".
+                ld      a, b
+                cp      pxeclient_len
+                jr      c, cvp_no              ; value too short for the prefix
+                ld      de, pxeclient
+                ld      b, pxeclient_len
+cvp_cmp:
+                ld      a, (de)
+                cp      (hl)
+                jr      nz, cvp_no
+                inc     hl
+                inc     de
+                djnz    cvp_cmp
+                scf
+                ret
+cvp_no:
+                or      a                      ; clear CY
                 ret
 
 ; copy_uuid — find option 97 in the received DHCP and copy its value verbatim

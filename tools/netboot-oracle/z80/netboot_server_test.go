@@ -337,6 +337,33 @@ func TestServerIgnoresUnrelated(t *testing.T) {
 	}
 }
 
+// TestServerIgnoresNonPXE confirms the integrated dispatch answers only PXE
+// netboot clients on its DHCP port — rogue-DHCP protection, the netboot_server.asm
+// check_vendor_pxe port of responder.go's option-60 gate: a DISCOVER/REQUEST
+// whose vendor class is absent or lacks the "PXEClient" prefix gets no reply,
+// and the conformant golden DISCOVER is still served afterwards.
+func TestServerIgnoresNonPXE(t *testing.T) {
+	mac := loadServer(t)
+	_, refDHCP, _, _ := fillServerConfig(t, mac, "config.txt", makeFile(512))
+	enc := z80h.NewENC28J60()
+	initServerDriver(t, mac, enc)
+
+	for _, tc := range nonPXEDHCPVariants(t) {
+		if r := serveServer(t, mac, enc, tc.req); r != nil {
+			t.Errorf("%s: dispatch replied (%d bytes), want silence", tc.name, len(r))
+		}
+	}
+
+	// The conformant golden DISCOVER is still answered, byte-for-byte the Go
+	// authority — the silences above are the gate, not a wedged dispatch, and
+	// the ignored frames allocated no lease.
+	got := serveServer(t, mac, enc, golden.DHCPDiscover)
+	want := refDHCP.OnRequest(golden.DHCPDiscover)
+	if got == nil || !bytes.Equal(got, want) {
+		t.Errorf("conformant DISCOVER after non-PXE frames != Go authority\n  z80 %x\n  go  %x", got, want)
+	}
+}
+
 // TestServerIgnoresStrayACK confirms that, mid-transfer, an ACK arriving on our
 // transfer TID from a *different* source port than the client of this transfer is
 // ignored — matching serverloop.OnACK's SrcPort guard (not part of this transfer).

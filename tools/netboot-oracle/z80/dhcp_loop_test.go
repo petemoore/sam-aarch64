@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/petemoore/sam-aarch64/tools/netboot-oracle/dhcp"
+	"github.com/petemoore/sam-aarch64/tools/netboot-oracle/frame"
 	"github.com/petemoore/sam-aarch64/tools/netboot-oracle/golden"
 	"github.com/petemoore/sam-aarch64/tools/netboot-oracle/internal/mask"
 	z80h "github.com/petemoore/sam-aarch64/tools/netboot-oracle/z80"
@@ -193,6 +194,103 @@ func TestDHCPResponderDORA(t *testing.T) {
 	if !bytes.Equal(offer[yiOff:yiOff+4], ack[yiOff:yiOff+4]) {
 		t.Errorf("yiaddr differs OFFER %v vs ACK %v (lease not stable)",
 			offer[yiOff:yiOff+4], ack[yiOff:yiOff+4])
+	}
+}
+
+// mutateVendorClass returns a copy of a golden DHCP request frame with its
+// vendor-class (option 60) TLV removed (val == nil) or its value replaced by
+// val. The option is located by walking the option tags — never a hardcoded
+// offset — and the frame is re-originated with BuildUDPFrame so the IP/UDP
+// lengths and checksums stay valid. Mirrors the helper beside
+// TestResponderRequiresPXEVendorClass in the parent module's oracle_test.go
+// (test helpers are not importable across the module boundary).
+func mutateVendorClass(t *testing.T, orig, val []byte) []byte {
+	t.Helper()
+	u, ok := frame.ParseUDP(orig)
+	if !ok {
+		t.Fatal("golden frame did not parse as UDP")
+	}
+	body := u.Payload
+	out := append([]byte(nil), body[:dhcp.OffOptions]...)
+	found := false
+	for off := dhcp.OffOptions; off < len(body); {
+		code := body[off]
+		if code == dhcp.OptPad {
+			out = append(out, code)
+			off++
+			continue
+		}
+		if code == dhcp.OptEnd {
+			out = append(out, body[off:]...)
+			break
+		}
+		l := int(body[off+1])
+		if code == dhcp.OptVendorClass {
+			found = true
+			if val != nil {
+				out = append(out, code, byte(len(val)))
+				out = append(out, val...)
+			}
+		} else {
+			out = append(out, body[off:off+2+l]...)
+		}
+		off += 2 + l
+	}
+	if !found {
+		t.Fatal("golden frame carries no option 60 (helper bug)")
+	}
+	return frame.BuildUDPFrame(frame.UDP{
+		DstMAC: u.DstMAC, SrcMAC: u.SrcMAC,
+		SrcIP: u.SrcIP, DstIP: u.DstIP,
+		SrcPort: u.SrcPort, DstPort: u.DstPort,
+		Payload: out,
+	})
+}
+
+// nonPXEDHCPVariants are the rogue-DHCP negative frames: a DISCOVER and a
+// REQUEST with the vendor class (option 60) stripped, and with a non-PXE
+// vendor class — none may be answered (responder.go's option-60 gate, ported
+// as check_vendor_pxe in dhcp_loop.asm and netboot_server.asm).
+func nonPXEDHCPVariants(t *testing.T) []struct {
+	name string
+	req  []byte
+} {
+	t.Helper()
+	return []struct {
+		name string
+		req  []byte
+	}{
+		{"DISCOVER without option 60", mutateVendorClass(t, golden.DHCPDiscover, nil)},
+		{"DISCOVER with a non-PXE vendor class", mutateVendorClass(t, golden.DHCPDiscover, []byte("MSFT 5.0"))},
+		{"REQUEST without option 60", mutateVendorClass(t, golden.DHCPRequest, nil)},
+		{"REQUEST with a non-PXE vendor class", mutateVendorClass(t, golden.DHCPRequest, []byte("MSFT 5.0"))},
+	}
+}
+
+// TestDHCPResponderRequiresPXEVendorClass — rogue-DHCP protection: the loop
+// serves only PXE netboot clients, so a DISCOVER/REQUEST whose vendor class
+// (option 60) is absent or lacks the "PXEClient" prefix is ignored (nothing
+// transmitted), and the conformant golden DISCOVER is still answered
+// afterwards. Verifies the Z80 check_vendor_pxe port of responder.go's gate.
+func TestDHCPResponderRequiresPXEVendorClass(t *testing.T) {
+	mac := loadDHCPLoop(t)
+	fillDHCPConfig(t, mac)
+	enc := z80h.NewENC28J60()
+	initDHCPLoopDriver(t, mac, enc)
+
+	for _, tc := range nonPXEDHCPVariants(t) {
+		if got := serveOnce(t, mac, enc, tc.req); got != nil {
+			t.Errorf("%s: loop replied (%d bytes), want silence", tc.name, len(got))
+		}
+	}
+
+	// The conformant golden DISCOVER on the same machine is still answered,
+	// byte-for-byte the Go authority — the silences above are the gate, not a
+	// wedged loop, and the ignored frames allocated no lease.
+	got := serveOnce(t, mac, enc, golden.DHCPDiscover)
+	want := goResponder().OnRequest(golden.DHCPDiscover)
+	if got == nil || !bytes.Equal(got, want) {
+		t.Errorf("conformant DISCOVER after non-PXE frames != Go authority\n  z80 %x\n  go  %x", got, want)
 	}
 }
 
