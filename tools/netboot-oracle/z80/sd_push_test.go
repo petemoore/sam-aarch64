@@ -32,6 +32,7 @@ package z80_test
 import (
 	"bytes"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/petemoore/sam-aarch64/tools/netboot-oracle/frame"
@@ -249,6 +250,62 @@ func TestSDPushLogic(t *testing.T) {
 	}
 	if got := countPayload(enc.TXFrames(), []byte{'D'}); got != 0 {
 		t.Errorf("premature finalize replied 'D' (%d) — a 3-sector record must NOT validate as complete", got)
+	}
+}
+
+// TestSDPushRecordNameFromN drives sd_push with an 'N' record-name message before the
+// body blocks and asserts the catalogue list entry + the sector-0 label carry the
+// PUSHED name ("mydisk", from "mydisk.mgt" with the .mgt suffix stripped) instead of the
+// built-in default "cj". This is the i303 filename plumbing: sp_set_name writes the name
+// buffer, and the deferred claim (sp_claim_once, on the first body block) builds
+// BD_CLAIM_ENTRY from it.
+func TestSDPushRecordNameFromN(t *testing.T) {
+	mac, enc, sd := setupSDPushMain(t, z80h.CSDForV2(0x001D59))
+
+	sec := make([]byte, 512)
+	for i := range sec {
+		sec[i] = byte((i*13 + 0x05) & 0xFF)
+	}
+	// discovery, then the record NAME ('N'), then one body block, then finalize.
+	enc.InjectRX(sdPushFrame([]byte{'?'}))
+	enc.InjectRX(sdPushFrame(append([]byte{'N'}, []byte("mydisk.mgt")...)))
+	enc.InjectRX(sdPushBlock(0, sec))
+	enc.InjectRX(sdPushFrame([]byte{'F'}))
+
+	if _, err := mac.RunBoot("sd_push_main", z80h.Entry{StepCap: 30_000_000}); err != nil {
+		t.Fatalf("RunBoot sd_push_main faulted: %v", err)
+	}
+
+	sym := func(name string) uint16 {
+		a, err := mac.Sym(name)
+		if err != nil {
+			t.Fatalf("sd_push symbol %q absent from %s", name, sdPushMap)
+		}
+		return a
+	}
+	base := int(leU16(mac.Read(sym("csd_base"), 2)))
+	free := int(leU16(mac.Read(sym("BD_FREE_RECORD"), 2)))
+	if free != 1 {
+		t.Fatalf("BD_FREE_RECORD = %d, want 1 (the first free record on an empty list)", free)
+	}
+
+	// (a) The deferred claim wrote record 1's 16-byte list entry as the pushed name,
+	// .mgt stripped and space-padded — "mydisk", NOT the default "cj".
+	listSec, ok := sd.CapturedSector(1) // record 1's entry is at offset 0 of list sector 1
+	if !ok {
+		t.Fatalf("no list sector captured at LBA 1 — the deferred claim did not write")
+	}
+	if got := strings.TrimRight(string(listSec[0:16]), " "); got != "mydisk" {
+		t.Errorf("record 1 list entry = %q, want \"mydisk\" (the pushed 'N' name reaching the catalogue, not the default)", got)
+	}
+
+	// (b) The sector-0 label mutation reuses the same 16-byte name (+210 = name[0..9]).
+	sec0, ok := sd.RecordDataSector(uint32(base), free, 0)
+	if !ok {
+		t.Fatalf("record %d linear sector 0 absent from the SD store", free)
+	}
+	if got := strings.TrimRight(string(sec0[210:220]), " "); got != "mydisk" {
+		t.Errorf("sector 0 +210 label = %q, want \"mydisk\" (the pushed name, not the default \"cj\")", got)
 	}
 }
 

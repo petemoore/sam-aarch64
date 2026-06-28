@@ -361,8 +361,10 @@ sd_push_main:
                 call    dbg_char
 
                 ; =====================================================================
-                ; CLAIM the record's CATALOGUE / list-name entry, so the record appears
-                ; in the SAM `RECORD` listing. This is the ONLY create step — the "BDOS"
+                ; The record's CATALOGUE / list-name entry (the ONLY create step) makes it
+                ; appear in the SAM `RECORD` listing — registered by the DEFERRED claim
+                ; (sp_claim_once, on the first body block; contract below = bdos_claim_record).
+                ; The "BDOS"
                 ; validity stamp goes INSIDE the body's first sector (mutated in the serve
                 ; loop, i==0), not a separate sector, and the body is written by own LBA.
                 ; NO HRECORD-select and NO HWSAD: the write path uses no B-DOS rst-8 hook.
@@ -384,15 +386,11 @@ sd_push_main:
                 ;   SAFETY: it touches ONLY BD_FREE_RECORD's own 16-byte entry; every other
                 ;   entry in the list sector is preserved byte-for-byte, and the slot was
                 ;   proven free, so no other user's record is ever overwritten.
-                ld      hl, sp_record_name     ; the pushed filename (<=16 chars)
-                ld      (BD_CLAIM_NAME_PTR), hl
-                call    bdos_claim_record      ; catalogue 16-byte name; builds BD_CLAIM_ENTRY
-                ld      a, "7"                 ; DBG: catalogue entry written
-                call    dbg_char
-                ld      a, "R"                 ; DBG: show which record we claimed + write to
-                call    dbg_char
-                ld      hl, (BD_FREE_RECORD)
-                call    dbg_hl                 ; the 1-based record number (hex)
+                ; The claim is DEFERRED to the first body block (sp_claim_once, called
+                ; from sp_data_block) so an 'N' message can set the pushed record name
+                ; before the 16-byte list entry + BD_CLAIM_ENTRY are built. Only the
+                ; free-record PICK (above) runs at boot; nothing is written to the card
+                ; until the first '@' block arrives.
 
                 ; NO ENC re-arm after the startup SD work. An SD transaction on the Trinity
                 ; controller does NOT disturb the ENC's autonomous RX: the &DC byte only
@@ -517,9 +515,73 @@ sp_not_disc:
                 jp      sp_data_block
 
 sp_not_data:
+                cp      "N"                    ; record name?
+                jr      nz, sp_not_name
+                jp      sp_set_name
+sp_not_name:
                 cp      "F"                    ; finalize?
                 jp      nz, sp_serve_loop
                 jp      sp_finalize
+
+; ---------------------------------------------------------------------------
+; sp_set_name — an 'N' message: payload = [<=16 record-name bytes]. Copy into the
+; writable sp_record_name buffer (truncated to 16, NUL-terminated) so the deferred
+; claim (sp_claim_once) and the sector-0 label carry the PUSHED filename instead of
+; the default. Must arrive before the first '@' block (the pusher sends it right after
+; discovery). Clobbers AF, BC, DE, HL.
+; ---------------------------------------------------------------------------
+sp_set_name:
+                ; name length = UDP data length - 8 (UDP hdr) - 1 ('N'), clamped to 16.
+                ld      ix, packet+14+20       ; UDP header start
+                ld      a, (ix+5)              ; UDP length LSB (a record name never spans 256 B)
+                sub     8+1
+                cp      17                     ; >16 (or an underflow) -> clamp to 16
+                jr      c, spsn_len_ok
+                ld      a, 16
+spsn_len_ok:
+                ld      hl, packet+43          ; first name byte
+                ld      de, sp_record_name
+                or      a
+                jr      z, spsn_terminate      ; empty name: just NUL-terminate
+                ld      b, a
+spsn_copy:
+                ld      a, (hl)
+                ld      (de), a
+                inc     hl
+                inc     de
+                djnz    spsn_copy
+spsn_terminate:
+                xor     a
+                ld      (de), a                ; NUL-terminate (<=16 chars in a 17-byte buffer)
+                ld      a, "."                 ; ack (mirror the block ack)
+                ld      (packet+42), a
+                ld      bc, 1
+                call    ack_len
+                jp      sp_serve_loop
+
+; ---------------------------------------------------------------------------
+; sp_claim_once — register the picked free record's catalogue list-name entry from the
+; (default or 'N'-set) sp_record_name and build BD_CLAIM_ENTRY (reused by the sector-0
+; label). Idempotent via sp_claimed: the first body block claims, the rest skip.
+; Deferred from boot so an 'N' message can set the name first. The claim is a raw CMD24
+; (bdos_claim_record, no B-DOS rst 8). Clobbers AF, BC, DE, HL.
+; ---------------------------------------------------------------------------
+sp_claim_once:
+                ld      a, (sp_claimed)
+                or      a
+                ret     nz                     ; already claimed this push
+                ld      a, 1
+                ld      (sp_claimed), a
+                ld      hl, sp_record_name     ; default 'cj.mgt' or the 'N'-pushed name
+                ld      (BD_CLAIM_NAME_PTR), hl
+                call    bdos_claim_record      ; builds BD_CLAIM_ENTRY + writes the list entry
+                ld      a, "7"                 ; DBG: catalogue entry written
+                call    dbg_char
+                ld      a, "R"                 ; DBG: record number claimed + written to
+                call    dbg_char
+                ld      hl, (BD_FREE_RECORD)
+                call    dbg_hl                 ; the 1-based record number (hex)
+                ret
 
 ; ---------------------------------------------------------------------------
 ; sp_data_block — a '@' block: payload = [linearSec LE16][<=512 data bytes].
@@ -528,6 +590,10 @@ sp_not_data:
 ; (own CMD24); count it; then ACK the 4-byte header.
 ; ---------------------------------------------------------------------------
 sp_data_block:
+                ; Register the catalogue entry on the FIRST body block (idempotent), so an
+                ; 'N' message's pushed name is captured before BD_CLAIM_ENTRY is built and
+                ; reused by the sector-0 label below.
+                call    sp_claim_once
                 ; UDP data length (bytes after the 8-byte UDP header) -> BC.
                 ld      ix, packet+14+20       ; UDP header start
                 ld      a, (ix+5)              ; UDP length LSB
@@ -750,18 +816,20 @@ sp_fail_wait:
 sp_chunk_name:  defm "Trinity Network "       ; the EEPROM chunk holding MAC+IP
 
 ; The record name written into BOTH the catalogue entry (bdos_claim_record) and the
-; sector-0 label mutation (the serve loop, i==0) — both read the SAME 16-byte name
-; from BD_CLAIM_ENTRY that the claim builds from this string.
-; This is the pushed file's name. HARDCODED to "cj.mgt" for now; TODO: plumb the real
-; filename from the host (e.g. send it in the discovery/first '@' message) so each
-; push is catalogued under its own name. NUL-terminated: bdos_build_claim_entry strips
-; a "trinity-sam-disks/" prefix (no match here), takes the final path segment, drops
-; the dotted suffix (so "cj.mgt" -> "cj"), sanitises to the legal 0x20..0x7E charset,
-; and space-pads to the 16-byte record-name field. byte0 = 'c' (0x63): non-zero, bit7
-; clear -> the slot reads NAMED (never accidentally free) and is not write-protected,
-; so bdos_find_free_record skips this record on the next push.
-sp_record_name: defm "cj.mgt"
+; sector-0 label mutation (the serve loop, i==0) — both read the SAME 16-byte name from
+; BD_CLAIM_ENTRY that the claim builds from this string. An 'N' message overwrites this
+; buffer with the pushed filename (sp_set_name) BEFORE the deferred claim (sp_claim_once)
+; runs, so each push is catalogued under its own name; "cj.mgt" is the default used when
+; no 'N' is sent. The buffer is 17 bytes: a <=16-char name + NUL. bdos_build_claim_entry
+; strips a "trinity-sam-disks/" prefix, takes the final path segment, drops the dotted
+; suffix (so "cj.mgt" -> "cj"), sanitises to the legal 0x20..0x7E charset, and space-pads
+; to the 16-byte record-name field. byte0 non-zero, bit7 clear -> the slot reads NAMED
+; (never accidentally free) and is not write-protected, so bdos_find_free_record skips
+; this record on the next push.
+sp_record_name: defm "cj.mgt"                  ; DEFAULT; an 'N' message overwrites it
                 defb 0                          ; NUL terminator
+                defs 10                         ; room for a <=16-char pushed name + NUL (17 B)
+sp_claimed:     defb 0                          ; 0 until sp_claim_once registers the record
 sp_recv_count:  defw 0                         ; sectors received this session
 
 packet:         defs 1518                      ; RX/TX frame buffer (drv_read fills it)

@@ -11,6 +11,7 @@ Two stages, both over UDP port 0xEDB0:
 
   2. sd_push then listens on the SAME port with its OWN small framing:
        '?'                         -> '!'   (discovery)
+       'N' + name(<=16 bytes)      -> '.'   (record name for the catalogue entry)
        '@' + linearSec(LE16) + data-> '.'×4 (data block; <=512 data bytes)
        'F'                         -> 'D'   (finalize: complete 1600-sector record)
                                       'E'   (finalize: wrong sector count)
@@ -29,6 +30,7 @@ Usage:
   tools/trinload-push/sd-push.py [SAM_IP] [MGT_PATH] [SD_PUSH_BIN]
 Defaults: 192.168.2.75  <required>  build/sd_push.bin
 """
+import os
 import socket
 import struct
 import sys
@@ -75,6 +77,20 @@ def finalize(sock, dst):
     return reply[:1]
 
 
+def send_name(sock, dst, name):
+    """Send the record name as an 'N' message (<=16 ASCII bytes) so sd_push catalogues
+    the pushed record under its own filename instead of the hardcoded default. Sent once,
+    after discovery and before the '@' block stream (the deferred claim reads it on the
+    first block). Best-effort: a missing ack is non-fatal — sd_push falls back to its
+    built-in default name."""
+    payload = name.encode("ascii", "replace")[:16]
+    sock.sendto(b"N" + payload, (dst, PORT))
+    try:
+        sock.recvfrom(8)
+    except socket.timeout:
+        print("  WARN: no ack for the record-name ('N') message; sd_push uses its default")
+
+
 def push_mgt(sam, mgt_path, sd_push_bin):
     data = open(mgt_path, "rb").read()
     if len(data) != RECORD_SECTORS * SECTOR:
@@ -96,6 +112,10 @@ def push_mgt(sam, mgt_path, sd_push_bin):
     if dst is None:
         print("FAILED: sd_push did not answer discovery (it may not have come up)")
         return False
+
+    record_name = os.path.basename(mgt_path)
+    send_name(sock, dst, record_name)
+    print(f"  record name: {record_name!r} (the record's catalogue entry)")
 
     print(f"stage 2: streaming {mgt_path} ({len(data)} B) as @-blocks")
     t0 = time.time()
