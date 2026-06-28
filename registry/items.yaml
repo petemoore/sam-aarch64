@@ -4372,10 +4372,12 @@
 - id: i234
   title: "Section-C test-variant budget relief for the encode_inst+overlay self-tests (&C000 cliff)"
   description: |
-    Section-C test-variant budget relief via a SECOND BUILD_TESTS boot variant (Pete 2026-07-01, q54 = lever 2). The BUILD_TESTS binary cannot fit the i204b overlay_classify/literal_word/compact_inst routines (~1300B, which MUST stay in section-C -- they call encode_inst reading the section-A ENCTAB, so cannot be evicted off-axis) + their boot self-test ALONGSIDE the existing inline test suites (the &C000 cliff). FIX (lever 2, i69 'tests need not coexist'): a second BUILD_TESTS boot variant -- new -D flag + make target + harness boot test + CI job -- running the encode/overlay self-test suite WITHOUT the other inline suites, time-multiplexing section-C memory across two test runs. Same pattern as the existing off-axis test clusters. This is a TEST-BUILD budget issue ONLY (the production editor runtime fits, not affected). Option 4 (i2/q36 page-pool) rejected: i2 is DONE + q36 deleted (stale framing), AND the routines cannot page off-axis anyway. Unblocks i204b + the i27b/i27c errata ports.
-  status: IN_PROGRESS
+    DONE 2026-07-03 (PR 825): q54 lever 2 shipped. New -D BUILD_TESTS_ENCODE variant (make assembler-enc-tests) carries the encode_inst family (insn_encode + test_encode_inst + enc_fix load + encode_imm16; sysname + assert_eq32 under the both-builds gate - enc_sysname tail-jumps into sysname's encoders). Variant-1 headroom 72 B -> 2889 B (~2.7 KB regained); prod byte-identical; enc-tests code_end &BBCB (1077 B free). build-disk -variant enc-tests (enctab+enc_fix+prod sd13/zx013/d15); harness TestBootSelfTestsEncodePass + FailProbe (FAIL00E100 negative control); CI job enc-tests boots the variant to OK under SimCoupé. Unblocks i204b + i27b/i27c. NOTE: enc-tests may need adding to branch-protection required checks.
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 825, role: completing}
 
 - id: i235
   title: "Trinity emulator hardware-parity: exhaustively encode EVERY documented hardware behaviour into the Go Trinity model (microcontroller/SD/ENC/EEPROM/SPI), no skips"
