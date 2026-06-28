@@ -182,6 +182,14 @@ rrs_pad:
 ; seam (bdos_write_record)" per the i122b brief.
 ; ===========================================================================
 rrs_flush_sector:
+                if defined(NETBOOT_DEBUG)
+                ; i280b-b2: a full sector is staged and we are about to write it.
+                ; Paired with DBG_HWSAD_PRE/POST in bdos_write_sector, this pins
+                ; the per-block write hang: FLUSH_PRE->HWSAD_PRE gap = our decode
+                ; (bdos_write_record), HWSAD_PRE->HWSAD_POST gap = the B-DOS rst 8.
+                ld      a, DBG_FLUSH_PRE
+                call    dbg_marker
+                endif
                 ld      hl, (RRS_LINEAR)
                 ld      (BD_WRITE_START), hl    ; write at the current linear sector
                 ld      hl, 1

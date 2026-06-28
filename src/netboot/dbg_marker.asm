@@ -36,7 +36,13 @@ DBG_WRQ_ENTRY:      equ &10           ; handle_wrq entered
 DBG_WRQ_CLAIMED:    equ &11           ; free record claimed + ENC re-armed
 DBG_WRQ_NOFREE:     equ &12           ; no free record -> ERROR(3)
 DBG_WRQ_HANDSHAKE:  equ &13           ; about to send the OACK / ACK-0 handshake
+DBG_CLAIM_FIND_PRE:    equ &14        ; wrq_claim_record: about to bdos_find_record_for_strategy (CMD17 list reads)
+DBG_CLAIM_SELECT_PRE:  equ &15        ; free record found; about to bdos_select_record (HRECORD hook)
+DBG_CLAIM_SELECT_POST: equ &16        ; HRECORD select returned (the claim succeeded)
 DBG_DATA_BLOCK:     equ &20           ; a DATA block accepted, about to sink/stage it
+DBG_FLUSH_PRE:      equ &21           ; rrs_flush_sector entered: a full 512-byte sector is staged, about to write it
+DBG_HWSAD_PRE:      equ &22           ; bdos_write_sector entered: about to RST 8 / DEFB 149 (B-DOS HWSAD)
+DBG_HWSAD_POST:     equ &23           ; the HWSAD RST 8 returned (the per-sector SD write completed)
 DBG_FINALIZE:       equ &30           ; final block: entering wd_finalize (flush+validate+claim)
 DBG_FINALIZE_VALID: equ &31           ; record validated + claimed -> final ACK
 DBG_FINALIZE_BAD:   equ &32           ; invalid image -> ERROR(3)
