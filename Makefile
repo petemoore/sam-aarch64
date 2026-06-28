@@ -1823,17 +1823,23 @@ editor-mockups: release-unstripped-tbn
 	@echo "editor-mockups: $$(ls $(BUILD)/mockups/*.png | wc -l) PNG sheets in $(BUILD)/mockups/"
 
 # Generate ZX0 test blocks for harness T-state measurement (i60a).
-# Requires: the real ZX0 compressor (zx0 binary on PATH or at /tmp/zx0).
+# Requires: the real ZX0 compressor (zx0 binary on PATH or at /tmp/zx0) —
+# build it from https://github.com/einar-saukas/ZX0 (src/: cc -O2 -o zx0
+# zx0.c optimize.c compress.c memory.c).
 # Produces: build/zx0-blocks/block_NNkb_NNNN.{raw,zx0}
 # Run: make zx0-blocks
 .PHONY: zx0-blocks
 ZX0_BINARY ?= $(shell which zx0 2>/dev/null || echo /tmp/zx0)
 zx0-blocks: release-unstripped-tbn
+	@command -v $(ZX0_BINARY) >/dev/null || { \
+	    echo "zx0-blocks: ZX0 compressor not found ($(ZX0_BINARY)) — build https://github.com/einar-saukas/ZX0 and put zx0 on PATH" >&2; \
+	    exit 1; \
+	}
 	cd tools/comment-bench && go build -o $(CURDIR)/$(BUILD)/comment-bench .
 	mkdir -p $(BUILD)/zx0-blocks
 	$(BUILD)/comment-bench --dump-blocks=$(BUILD)/zx0-blocks $(BUILD)/release-unstripped.tbn > /dev/null
 	@for f in $(BUILD)/zx0-blocks/*.raw; do \
-	    $(ZX0_BINARY) "$$f" "$${f%.raw}.zx0" 2>/dev/null || true; \
+	    $(ZX0_BINARY) -f "$$f" "$${f%.raw}.zx0" >/dev/null || exit 1; \
 	done
 	@echo "zx0-blocks: $$(ls $(BUILD)/zx0-blocks/*.zx0 | wc -l) compressed blocks written to $(BUILD)/zx0-blocks/"
 
