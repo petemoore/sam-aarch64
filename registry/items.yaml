@@ -5364,9 +5364,11 @@
   title: "Makefile: several netboot .bin rules omit sd_csd.asm (and other transitive includes) from prereqs → stale local incremental builds"
   description: |
     Several netboot .bin rules omit sd_csd.asm (and other transitive includes) from their Makefile prerequisites, so a source edit + make gives 'Nothing to be done' and tests run against STALE binaries (found 2026-07-01 via mtime check before trusting a suite; make -B was the workaround). ESCALATED BY THE i324 RETRO-MINING (P2): this is one instance of the single most persistent friction class in the 67-report corpus - stale build artifact -> false test verdict - independently hit in 10+ sessions (stale .bin after a FAILED pyz80 build reading as 'IDENTICAL'; stale mutant binaries after mutation-test reverts, twice; Go test-result cache hiding a red test until -count=1; a stale build/registry binary stranding queue state, i320; a regressed sd_push binary silently rebuilt then hardware-tested, 06-30; the stale netboot_serve_record.mgt vessel feeding TestBootRecordServeRecordVessel a false red, fixed pointwise in #815). Each instance got a point fix; the class keeps producing. SCOPE (widened): audit EVERY build artifact a test consumes (netboot .bins, .mgt vessels, build/registry, fixture payloads) for complete+transitive Makefile prerequisites, fix the gaps, and add a guard where cheap (e.g. a make target or check script asserting each test-consumed artifact is newer than every source it embeds - the mtime check that caught the 07-01 instance, mechanised). Done = a source edit to any transitive include reliably rebuilds every consumer, and the audit list is in the PR description.
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 818, role: completing}
 
 - id: i310
   title: Provide a standards-compliant TFTP server in the test environment (for the i118b OACK-interop hardware test)
