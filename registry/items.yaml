@@ -1687,7 +1687,7 @@
 - id: i93b
   title: B-DOS RST 8 hook dispatch on real Trinity — hardware-gated (HGTHD/HLOAD/HSAVE/HRECORD)
   description: ""
-  status: OPEN
+  status: IN_PROGRESS
   depends_on: [i133, i295, i316]
   kind: leaf
   owner: agent
