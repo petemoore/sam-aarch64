@@ -260,6 +260,38 @@ ENC_FIX_TABLE_RAM:  equ     &E100
 ; ENC_FIX_PAYLOAD_LEN is imported at build time from enc_fix_payload.sym
 ; (see Makefile: assembler target depends on enc-fix-payload and uses
 ; --importfile=$(BUILD)/enc_fix_payload.sym).
+
+; Page 12: overlay_classify boot-self-test suite (i204b) — CODE, not
+; just data.  The suite (src/test_overlay_suite.asm: the insn_overlay.asm
+; routines + their fixture driver) is ~1.5 KB and, like the encode
+; family, must be addressable while ENCTAB occupies section A — but it
+; does not fit the enc-tests variant's section-C budget (417 B over the
+; &C000 cliff when inline).  Section-D RAM is the relief: the payload is
+; HLOADed here at boot ("ovl12"), then a stub in assembler.asm copies
+; its code via LDIR into the free section-D region at OVERLAY_SUITE_RAM
+; and calls it there.  Section D is HMPR-controlled, so the suite stays
+; addressable inside its enctab_map_in bracket (which swaps only LMPR)
+; and can call every section-C routine (encode_inst, insn_fold, fail)
+; directly.  Same execute-from-copied-RAM pattern as the section-B
+; paged_call/DOSER bodies (paged_bodies.asm).
+;
+; The payload is self-describing: its first 2 bytes are the code length
+; (the LDIR count), so the main binary needs no build-time import from
+; the suite — the suite instead imports assembler-enc-tests.sym, keeping
+; the build graph acyclic (main <- enc_fix_payload.sym; suite <- main).
+;
+; Page 12 is free during the boot-self-test phase in THIS variant: the
+; off-axis cluster (its BUILD_TESTS occupant) is not in the enc-tests
+; build, and IN does not claim pages 7..12 until main_assemble.
+;
+; OVERLAY_SUITE_RAM = &F080 sits in the free &F01B-&FFFF section-D
+; region (see the assembler.asm memory map), clear of the encode_inst
+; scratch at &F000-&F01A (live while the suite runs) and of the enc_fix
+; payload copy at &E100+ (the suite's fixture tables, read while the
+; suite runs).  Suite end ~&F700 leaves ~2.3 KB of the region free.
+OVERLAY_SUITE_PAGE: equ     12
+LMPR_OVERLAY_SUITE: equ     &20 + OVERLAY_SUITE_PAGE    ; = &2C
+OVERLAY_SUITE_RAM:  equ     &F080
 endif
 
 ; Page 12: a free page per the Tech Manual PAGE ALLOCATION TABLE (pages
