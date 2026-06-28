@@ -206,8 +206,6 @@ jobs:
         run: make netboot-smoke-disk netboot-server-disk netboot-serve-disk netboot-serve-record netboot-client-disk netboot-http-disk
       - name: Serve push launcher config-patch test (i121d)
         run: make netboot-trinpush-test
-      - name: Deploy-guard detection test (i336)
-        run: make deploy-guard-test
 
   # sysreg-sync — Go↔Z80 sysreg table sync guard (repo-audit §5 / §6 #9).
   # Two complementary checks, both pure Go (no container, no binutils):
@@ -277,6 +275,8 @@ jobs:
         run: make check-hosttest-carveouts
       - name: trinity-authority provenance ledger (i273)
         run: make check-trinity-authority
+      - name: deploy-guard detection test (i336)
+        run: make deploy-guard-test
 
   # core — sweeps the fixture corpus end-to-end on the dev container:
   #   sam-aarch64 → build-disk → SimCoupé (Xvfb 24bit) → samfile extract
