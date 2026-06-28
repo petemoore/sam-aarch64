@@ -582,13 +582,14 @@ endif
 ; storage_sink_leaf(HL = window ptr, BC = window length) — the per-window store
 ; leaf the streaming flush reaches (through the body-skip filter). It (1) hashes
 ; the window into the running verify, then (2) HSAVEs it to Trinity as the next
-; bounded record <prefix><NNN>. NOT host-verifiable (no RST 8 / DOS in the
-; harness) — unverified until Pete's Trinity test (CLAUDE.md §5).
+; bounded record <prefix><NNN>. The real RST-8 HSAVE is exercised faithfully by
+; http_store_faithful_test.go (real ROM + B-DOS 1.5t + SD model); the on-wire
+; round-trip is the i70b hardware gate (CLAUDE.md §5).
 ;
-; The HSAVE source-paging (page = ptr>>14, offset = ptr&0x3FFF | &8000) follows
-; the assembler's own save sites' convention; the exact physical-page mapping for
-; the loaded image is the q16 hardware detail confirmed on Trinity. Clobbers A,
-; BC, DE, HL, IX.
+; The HSAVE source page is the flush buffer's PHYSICAL page — read live from HMPR
+; (the window is always in section C, so HMPR names its page) — and the offset is
+; (ptr&0x3FFF | &8000). Deriving the page from the section index (ptr>>14) instead
+; was the i355 store-leg wedge. Clobbers A, BC, DE, HL, IX.
 storage_sink_leaf:
                 ; --- (1) hash this window into the running SHA-256 verify ---
                 push    hl                      ; save window ptr across the hash
@@ -609,11 +610,17 @@ storage_sink_leaf:
                 pop     bc                      ; BC = window length (HSAVE size)
                 pop     hl                      ; HL = window ptr (HSAVE source addr)
                 ld      (BD_SAVE_SIZE), bc      ; HSAVE byte count = window length
-                ; page = ptr >> 14 (top 2 bits of H); bdos masks to the low 5 bits.
-                ld      a, h
-                rlca
-                rlca
-                and     3
+                ; The HSAVE source page is the PHYSICAL page the window lives in,
+                ; which real B-DOS 1.5t pages into section C to read the file body —
+                ; NOT the CPU section index (ptr>>14). CONN_FLUSH_BUF (&9E88) plus its
+                ; 6144-byte window ends at &B688, so the window is always wholly in
+                ; section C (&8000..&BFFF); its physical page is therefore the current
+                ; HMPR — the page trinload pushed the image's section-C half into. A
+                ; bare section index (=2) named physical page 2, so B-DOS read the
+                ; image's section-D half and wild-jumped on the hook return (i355 / the
+                ; i70b store-leg wedge). This mirrors hook_roundtrip's proven store.
+                in      a, (251)                ; HMPR = the section-C physical page
+                and     &1F                     ; bdos uses the low 5 bits
                 ld      (BD_SAVE_PAGE), a
                 ; section-C source offset = (ptr & 0x3FFF) | &8000.
                 ld      a, h
