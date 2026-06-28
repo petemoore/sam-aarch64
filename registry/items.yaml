@@ -408,6 +408,8 @@
   depends_on: [i27a, i234]
   kind: leaf
   owner: agent
+  prs:
+    - {num: 845, role: completing}
   parent: i27
 
 - id: i27c
