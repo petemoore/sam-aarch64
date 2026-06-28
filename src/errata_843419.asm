@@ -427,15 +427,18 @@ e843_rw_sext_done:
 
 ; --- Step 4: Subtract (place & 0xfff). ---
 ; place_low12: L = pc[7:0], H & 0x0f = pc[11:8].
+; Compute D = pc[11:8] BEFORE the `sub l` — `and &0f` clears the carry
+; flag, so it must not sit between `sub l` and the `sbc a,d` that consumes
+; the byte0 borrow (the same flag-clobber trap as the e843_advance4 counter).
                 ld      hl, (E843_SCAN_PC)
+                ld      a, h
+                and     &0f
+                ld      d, a            ; D = pc[11:8]
 
                 ld      a, (e843_r_b0)
                 sub     l               ; r_b0 - pc[7:0]; carry = borrow
                 ld      (e843_r_b0), a
 
-                ld      a, h
-                and     &0f
-                ld      d, a            ; D = pc[11:8]
                 ld      a, (e843_r_b1)
                 sbc     a, d            ; r_b1 - pc[11:8] - borrow
                 ld      (e843_r_b1), a
@@ -593,16 +596,26 @@ e843_advance4:
                 sbc     hl, de
 e843_adv4_ok:
                 ld      (E843_SCAN_PTR), hl
+; Decrement the u24 E843_BYTES_LEFT by 4 with a proper borrow chain.
+; `dec (hl)` neither consumes nor sets the carry flag, so it cannot
+; propagate a multi-byte borrow — use the `sbc a,0` idiom (the codebase's
+; multi-byte subtract, e.g. src/test_compact_ir.asm), which subtracts the
+; borrow from `sub 4` / the previous `sbc` and re-sets carry on a new borrow.
+; The intervening `ld`/`inc hl`/untaken `ret nc` leave the carry flag intact.
                 ld      hl, E843_BYTES_LEFT
                 ld      a, (hl)
                 sub     4
                 ld      (hl), a
                 ret     nc
                 inc     hl
-                dec     (hl)
-                ret     nz
+                ld      a, (hl)
+                sbc     a, 0
+                ld      (hl), a
+                ret     nc
                 inc     hl
-                dec     (hl)
+                ld      a, (hl)
+                sbc     a, 0
+                ld      (hl), a
                 ret
 
 ; e843_read4_plus4: read 4 bytes at cursor+4 into E843_INSN_BUF+4.
@@ -710,30 +723,40 @@ e843_read1_bhl:
                 ret
 
 ; Write helpers: A = byte to write.
+; The byte is carried in C across the address computation because both the
+; SCAN_PAGE load and e843_norm_bhl clobber A (neither touches C).  A is
+; restored from C just before e843_write1_bhl, which writes A at (B,HL).
 e843_poke_cur0:
+                ld      c, a            ; C = byte to write
                 ld      a, (E843_SCAN_PAGE)
                 ld      b, a
                 ld      hl, (E843_SCAN_PTR)
+                ld      a, c            ; A = byte
                 jp      e843_write1_bhl
 
 e843_poke_cur1:
+                ld      c, a
                 ld      a, (E843_SCAN_PAGE)
                 ld      b, a
                 ld      hl, (E843_SCAN_PTR)
                 inc     hl
                 call    e843_norm_bhl
+                ld      a, c
                 jp      e843_write1_bhl
 
 e843_poke_cur2:
+                ld      c, a
                 ld      a, (E843_SCAN_PAGE)
                 ld      b, a
                 ld      hl, (E843_SCAN_PTR)
                 inc     hl
                 inc     hl
                 call    e843_norm_bhl
+                ld      a, c
                 jp      e843_write1_bhl
 
 e843_poke_cur3:
+                ld      c, a
                 ld      a, (E843_SCAN_PAGE)
                 ld      b, a
                 ld      hl, (E843_SCAN_PTR)
@@ -741,6 +764,7 @@ e843_poke_cur3:
                 inc     hl
                 inc     hl
                 call    e843_norm_bhl
+                ld      a, c
                 jp      e843_write1_bhl
 
 ; e843_write1_bhl: write A to (B=page_idx, HL=section-B addr).

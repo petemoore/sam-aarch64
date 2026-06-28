@@ -25,15 +25,15 @@
 ;
 ; Test 2 rewrite check: ADRP x0, #0 at place=0x2ff8 (page 2, offset 0xff8).
 ;   imm21 = 0: adr_imm = 0 << 12 - (0x2ff8 & 0xfff) = -0xff8 = -4088.
-;   new_word = aarch64ReencodeADRImm(0x10000000, -4088) | 0 (Rd=0).
-;   -4088 = 0xFFFFF008 in 32 bits; as 21-bit signed = 0x1FF008.
-;   immlo = 0x1FF008 & 3 = 0.
-;   immhi = 0x1FF008 >> 2 = 0x7FC02.
-;   ADR word = 0x10000000 | (0 << 29) | (0x7FC02 << 5)
-;            = 0x10000000 | 0x0FF80040 = 0x1FF80040.
-;   LE bytes: 40 00 f8 1f.
+;   new_word = aarch64ReencodeADRImm(0x10000000, adr_imm) | 0 (Rd=0).
+;   adr_imm = -4088 = 0xFFFFF008 in 32 bits.
+;   new_word = 0x10000000
+;            | ((adr_imm & 3) << 29)             = 0
+;            | ((adr_imm & (mask19 << 2)) << 3)  = (0x1FF008 << 3) = 0x00FF8040
+;            = 0x10FF8040.
+;   LE bytes: 40 80 ff 10.
 ;   (Spot-checked via Go: aarch64ReencodeADRImm(0x10000000, int32(-4088)) =
-;    0x1ff80040.)
+;    0x10FF8040.)
 
 
 ; -----------------------------------------------------------------------
@@ -298,6 +298,161 @@ e843t_t5_seqA_ok:
 e843t_t5_ok:
 
 ; =======================================================================
+; Test 6 — e843_advance4 24-bit counter borrow propagation.
+;
+; The predicate/rewrite tests above never call e843_advance4, so its
+; borrow chain went untested.  With E843_BYTES_LEFT = 0x000100 the step
+; 0x000100 - 4 = 0x0000FC requires the borrow from byte0 to decrement
+; byte1 (0x01→0x00) WITHOUT touching byte2.  A broken `dec (hl); ret nz`
+; chain corrupts byte2 to 0xFF (result 0xFF00FC) — which makes the scan
+; run away past the OUT buffer.  This is a deterministic pin for that bug.
+; =======================================================================
+
+; Safe cursor (no page cross) and the boundary counter value 0x000100.
+                xor     a
+                ld      (E843_SCAN_PAGE), a
+                ld      hl, &4000
+                ld      (E843_SCAN_PTR), hl
+                xor     a
+                ld      (E843_BYTES_LEFT + 0), a
+                ld      a, 1
+                ld      (E843_BYTES_LEFT + 1), a
+                xor     a
+                ld      (E843_BYTES_LEFT + 2), a
+
+                call    e843_advance4
+
+; Expect E843_BYTES_LEFT == 0x0000FC (byte0=0xFC, byte1=0x00, byte2=0x00).
+                ld      a, (E843_BYTES_LEFT + 0)
+                cp      &fc
+                jr      nz, e843t_t6_fail
+                ld      a, (E843_BYTES_LEFT + 1)
+                or      a
+                jr      nz, e843t_t6_fail
+                ld      a, (E843_BYTES_LEFT + 2)
+                or      a
+                jr      z, e843t_t6_ctr_ok
+e843t_t6_fail:
+                ld      a, &c7
+                jp      fail_with_tag   ; t6: 24-bit counter borrow wrong
+e843t_t6_ctr_ok:
+
+; Cursor advanced by 4 with no page cross.
+                ld      hl, (E843_SCAN_PTR)
+                ld      de, &4004
+                or      a
+                sbc     hl, de
+                ld      a, h
+                or      l
+                jr      z, e843t_t6_ok
+                ld      a, &c7
+                jp      fail_with_tag
+e843t_t6_ok:
+
+; =======================================================================
+; Test 7 — full errata_843419_scan over a 260-byte synthetic OUT buffer.
+;
+; Exercises the whole scan loop end-to-end over a real PP_OUT run: ADRP
+; predicate + page-offset gate + sequence predicate + rewrite +
+; e843_advance4 across the 256-byte counter boundary + the paged
+; read/write helpers.
+;
+; Layout: 260 bytes.  Offsets 0..247 = NOP (0xd503201f).  Offset 248 =
+; a Case A hazard (adrp x0,#0 / ldr x4,[x5] / ldr x9,[x0]).  With
+; start_pc = 0x0F00 the ADRP's virtual PC is 0x0F00 + 248 = 0x0FF8 (the
+; vulnerable page offset), so the scan rewrites it to ADR x0, #-4088 =
+; 0x10FF8040 (LE 40 80 ff 10, per the Test 2 derivation).
+;
+; A correct scan TERMINATES (returns here); the broken 24-bit counter
+; ran away past the buffer and never returned (step-budget timeout).
+; =======================================================================
+
+; Allocate a 1-page PP_OUT run (260 < 16384) and reset the emit cursor.
+                ld      hl, 260
+                ld      (PASS_PC + 0), hl
+                xor     a
+                ld      (PASS_PC + 2), a
+                ld      (PASS_PC + 3), a
+                call    reset_out_buffer
+
+; Emit 62 NOP words (248 bytes): byte pattern 1f 20 03 d5.
+; emit_byte preserves BC (clobbers A, HL), so B survives the djnz loop.
+                ld      b, 62
+e843t_t7_nop_loop:
+                ld      a, &1f
+                call    emit_byte
+                ld      a, &20
+                call    emit_byte
+                ld      a, &03
+                call    emit_byte
+                ld      a, &d5
+                call    emit_byte
+                djnz    e843t_t7_nop_loop
+
+; Emit the 12-byte Case A hazard at offset 248 via emit_bytes_n
+; (emit_byte clobbers HL, so drive the copy through the run-aware helper).
+                ld      hl, e843t_hazard
+                ld      a, 12
+                call    emit_bytes_n
+
+; OUT_LEN is now 260.  Set PASS_PC so start_pc = PASS_PC - OUT_LEN = 0x0F00.
+                ld      hl, &1004               ; 0x0F00 + 260
+                ld      (PASS_PC + 0), hl
+                xor     a
+                ld      (PASS_PC + 2), a
+                ld      (PASS_PC + 3), a
+
+; Enable the fix and run the scan.
+                ld      a, 1
+                ld      (FIX_843419_ENABLED), a
+                call    errata_843419_scan
+
+; --- Reaching here proves the scan TERMINATED. ---
+
+; The planted ADRP at offset 248 must now be ADR 0x10FF8040 (LE 40 80 ff 10).
+; out_run_peek: A = page index (0), HL = section-B addr (&4000 + 248 = &40F8).
+                xor     a
+                ld      hl, &40f8
+                call    out_run_peek
+                cp      &40
+                jr      nz, e843t_t7_rw_fail
+                xor     a
+                ld      hl, &40f9
+                call    out_run_peek
+                cp      &80
+                jr      nz, e843t_t7_rw_fail
+                xor     a
+                ld      hl, &40fa
+                call    out_run_peek
+                cp      &ff
+                jr      nz, e843t_t7_rw_fail
+                xor     a
+                ld      hl, &40fb
+                call    out_run_peek
+                cp      &10
+                jr      z, e843t_t7_rw_ok
+e843t_t7_rw_fail:
+                ld      a, &c8
+                jp      fail_with_tag   ; t7: planted ADRP not rewritten to ADR
+e843t_t7_rw_ok:
+
+; A non-hazard NOP word (offset 0) must be untouched (still 1f 20 03 d5).
+                xor     a
+                ld      hl, &4000
+                call    out_run_peek
+                cp      &1f
+                jr      nz, e843t_t7_nop_fail
+                xor     a
+                ld      hl, &4003
+                call    out_run_peek
+                cp      &d5
+                jr      z, e843t_t7_nop_ok
+e843t_t7_nop_fail:
+                ld      a, &c9
+                jp      fail_with_tag   ; t7: NOP word wrongly modified
+e843t_t7_nop_ok:
+
+; =======================================================================
 ; Restore state and return.
 ; =======================================================================
                 pop     af
@@ -313,3 +468,9 @@ e843t_adrp_x0:      defb    &00, &00, &00, &90  ; adrp x0,#0     0x90000000 LE
 e843t_ldr_x4:       defb    &a4, &00, &40, &f9  ; ldr x4,[x5]    0xf94000a4 LE
 e843t_ldr_from_x0:  defb    &09, &00, &40, &f9  ; ldr x9,[x0]    0xf9400009 LE
 e843t_ldr_from_x7:  defb    &e9, &00, &40, &f9  ; ldr x9,[x7]    0xf94000e9 LE
+
+; 12-byte Case A hazard for the full-scan test (Test 7):
+; adrp x0,#0 / ldr x4,[x5] / ldr x9,[x0].
+e843t_hazard:       defb    &00, &00, &00, &90  ; adrp x0,#0
+                    defb    &a4, &00, &40, &f9  ; ldr x4,[x5]
+                    defb    &09, &00, &40, &f9  ; ldr x9,[x0]
