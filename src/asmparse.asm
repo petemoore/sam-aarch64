@@ -124,6 +124,10 @@
 
                 if defined(ASMPARSE_STANDALONE)
                 org     &8000
+                else
+                if defined(ASMPARSE_PAGED_BUFS)
+                org     &4000
+                endif
                 endif
 
 ; OP_KIND_* operand-kind equates (generated; zero runtime bytes) + the lexer
@@ -138,7 +142,7 @@
 ; of a future B8 integrated build, where the integrator owns where the equates
 ; come from and a second include here would double-define (mirrors the org
 ; guard above).
-                if defined(ASMPARSE_STANDALONE)
+                if defined(ASMPARSE_STANDALONE) | defined(ASMPARSE_PAGED_BUFS)
                 include "mnemonic_ids.inc"
                 endif
 
@@ -4606,7 +4610,12 @@ POM_EXT:        defs 1          ; parse_operand_mem: ExtendKind value
 POM_KWPTR:      defs 2          ; parse_operand_mem: keyword span pointer
 POM_KWLEN:      defs 1          ; parse_operand_mem: keyword span length
 POM_EXPRLEN:    defs 2          ; parse_operand_mem: offset expression byte count
+                if defined(ASMPARSE_PAGED_BUFS)
+; Paged build: SYM_NAMES in page-8 window (equ, not inline defs).
+SYM_NAMES:      equ  &1000      ; page-8 window; 512 B cap (ends &1200)
+                else
 SYM_NAMES:      defs 2048       ; document symbol table: `len,name` records + sentinel
+                endif
 
 ; ===========================================================================
 ; Public I/O buffers
@@ -4618,5 +4627,11 @@ AP_NAMEBUF:     defs 32         ; scratch the harness fills with a candidate nam
 ; LEX_TOKS block at &0100-&3900 (10752 B cap covers every corpus fixture IR).
 PARSE_RECS:     equ  &3A00      ; emitted record stream (10752 B, ends &6400)
                 else
+                if defined(ASMPARSE_PAGED_BUFS)
+; Paged build: PARSE_RECS in page-8 window base; 2048 B cap (ends &0800).
+; Length = PARSE_RECPTR value (since PARSE_RECS = &0000 = page-8 window base).
+PARSE_RECS:     equ  &0000      ; page-8 window base
+                else
 PARSE_RECS:     defs 2048       ; emitted INST record stream (harness reads here)
+                endif
                 endif
