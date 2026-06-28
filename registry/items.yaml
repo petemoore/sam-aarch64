@@ -5484,7 +5484,7 @@
   description: |
     The boot leg re-shot with the i328 fix (2026-07-02): the fixed boot_record CHANGED hardware behaviour -- record 186 (BASIC-auto serve disk) now proceeds into the boot and ends in a silent livelock (emulation-reproduced: the BASIC-run leg derails, see i332), and a record-3 re-boot attempt from real trinload idle returned to trinload instantly without booting (the first-boot-residue divergence, see i331). TFTP confirmation therefore still outstanding. Blocked on: i331 (make the pushed boot dispatch work from REAL trinload idle) + i332 (a boot_record-bootable serve image -- CODE-auto <=16K is the proven shape). Once both land: store the new serve image to a free record (sd-push, data-safe first-free), boot-record.py it, poll TFTP; then optionally delete the stale BASIC-auto record 186.
   status: OPEN
-  depends_on: [i328, i331, i332]
+  depends_on: [i328, i331, i332, i330, i329]
   kind: leaf
   owner: agent
   parent: i319a
