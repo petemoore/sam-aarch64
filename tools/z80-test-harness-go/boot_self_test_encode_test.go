@@ -35,6 +35,10 @@
 //     the i204b overlay suite: it corrupts the first toc_ci_table row's
 //     expected base word (offset located via enc_fix_payload.sym) and
 //     asserts the FAIL banner carries that row's pointer.
+//   - TestBootSelfTestsCompactAdapterFailProbe is the negative control for
+//     the i48c-b8e compact-adapter suite: it corrupts the baked expected
+//     compact record stream (cadapt_expected) and asserts the FAIL banner
+//     carries the &cb byte-mismatch tag + that byte's address.
 //
 // Requires (all from `make assembler-enc-tests enctab sysreg-data
 // disasm-payload zx0-payload enc-fix-payload overlay-suite sam-aarch64`):
@@ -281,6 +285,78 @@ func TestBootSelfTestsOverlayFailProbe(t *testing.T) {
 	}
 	if !t.Failed() {
 		t.Logf("gate correctly caught the corrupted overlay fixture with tag %q pc=%04X", tag, pc)
+	}
+}
+
+// TestBootSelfTestsCompactAdapterFailProbe is the negative control for the
+// i48c-b8e compact-adapter suite (src/test_compact_adapter.asm): it corrupts
+// the first byte of the baked EXPECTED compact record stream
+// (cadapt_expected, at the enc_fix payload tail) and asserts the boot halts
+// with the suite's byte-mismatch FAIL banner carrying that byte's address.
+// Because the encode and overlay suites run first and must PASS for the boot
+// to reach the adapter suite, this also proves the adapter suite genuinely
+// executes its byte-compare.
+func TestBootSelfTestsCompactAdapterFailProbe(t *testing.T) {
+	root := repoRoot(t)
+
+	asmPath, encPath, sd13Path, d15Path, zx0Path, encFixPath, ovlSuitePath := encTestsArtifacts(t, root)
+
+	// Locate cadapt_expected inside the payload from its sym export.  The
+	// payload is org'd at ENC_FIX_TABLE_RAM, so file offset = addr - org.
+	syms, err := loadSAMSymbols(filepath.Join(root, "build", "enc_fix_payload.sym"))
+	if err != nil {
+		t.Fatalf("build/enc_fix_payload.sym unreadable: %v", err)
+	}
+	cadaptExpected, ok := syms["cadapt_expected"]
+	if !ok {
+		t.Fatal("cadapt_expected missing from build/enc_fix_payload.sym — compact-adapter fixture block gone?")
+	}
+
+	asm, _ := os.ReadFile(asmPath)
+	enc, _ := os.ReadFile(encPath)
+	sd13, _ := os.ReadFile(sd13Path)
+	d15, _ := os.ReadFile(d15Path)
+	zx0, _ := os.ReadFile(zx0Path)
+	encFix, _ := os.ReadFile(encFixPath)
+	ovlSuite, _ := os.ReadFile(ovlSuitePath)
+
+	// No IN .tbn needed: the adapter self-test runs before main_assemble.
+	var in []byte
+
+	// Corrupt expected[0].  The baked length (cadapt_expected_len, a
+	// separate word) is untouched, so the length compare passes and the
+	// byte compare fails at index 0 → cadapt_cmp_fail records the failing
+	// EXPECTED byte's address (= cadapt_expected) in LAST_FAIL_PC with the
+	// CADAPT_TAG_BYTES tag (&cb) → banner FAILcb<cadapt_expected>.
+	off := int(cadaptExpected) - encFixTableRAM
+	if off <= 0 || off >= len(encFix) {
+		t.Fatalf("computed corruption offset %d outside enc_fix payload (%d B) — payload layout drifted?", off, len(encFix))
+	}
+	broken := append([]byte(nil), encFix...)
+	broken[off] ^= 0xFF
+
+	res := runBootEncodeSelfTests(asm, enc, in, sd13, d15, zx0, broken, ovlSuite)
+
+	t.Logf("Exit: %s", res.ExitReason)
+	t.Logf("Printer: %q", res.PrinterCapture)
+
+	if res.Passed {
+		t.Fatalf("BROKEN compact-adapter fixture still produced a passing boot — the gate is vacuous!")
+	}
+	tag, pc, ok := parseFailBanner(res.PrinterCapture)
+	if !ok {
+		t.Fatalf("expected a FAIL banner from the corrupted compact-adapter fixture, got printer=%q exit=%q",
+			res.PrinterCapture, res.ExitReason)
+	}
+	if !strings.EqualFold(tag, "cb") {
+		t.Errorf("expected the CADAPT_TAG_BYTES tag cb, got %q (printer=%q)", tag, res.PrinterCapture)
+	}
+	if pc != uint16(cadaptExpected) {
+		t.Errorf("expected the failing expected-byte address %04X in the banner, got %04X (printer=%q)",
+			cadaptExpected, pc, res.PrinterCapture)
+	}
+	if !t.Failed() {
+		t.Logf("gate correctly caught the corrupted compact-adapter fixture with tag %q pc=%04X", tag, pc)
 	}
 }
 
