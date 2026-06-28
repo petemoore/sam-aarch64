@@ -3949,7 +3949,7 @@
   title: "i48c-b8e-4b: overlay_classify + literal_word + compact_inst (Z80 port + boot self-test)"
   description: |
     Faithful Z80 port of overlay.go::overlayClassify (+classifyMem/classifyMovImm/exprContextDep/foldSlotPCDependent), compact.go::literalWord + compactInst, litinsts.go::IsFullyLiteral, and aarch64enc::ZeroSlot, wired as a BUILD_TESTS boot self-test asserting Z80 output against Go-authority-computed values. The port is WRITTEN, Go-authority-verified, and staged (scratchpad i204b-insn_overlay.asm / i204b-test_overlay_classify.asm; Go authority test tools/sam-aarch64/assemble/overlay_classify_fixtures_test.go landed by the i204a PR). BLOCKED ON BUDGET: the routines are ~1300 B and, like encode_inst, MUST be inline in section C (they call encode_inst which reads ENCTAB in section A, so they cannot be evicted off-axis — the registry's i69/i205 analysis confirms lever-1 is exhausted for ENCTAB-coupled code). The test-variant assembler.bin has ~11 B of &C000 headroom; commoning recovers tens of bytes, not 1300. Depends on i234 (a budget-relief item) which must free section-C space (serial test bay / multiple-boot variant / page-pool memory model per q36/i2) before these can land + the boot self-test runs green.
-  status: OPEN
+  status: IN_PROGRESS
   depends_on: [i234]
   kind: leaf
   owner: agent
