@@ -1504,7 +1504,16 @@ Executed §8ae's plan: built a **faithful** driver for our raw machine-code HWSA
 
 **FIX (this PR, `src/netboot/bdos_seam.asm`):** load `A = BD_DRIVE_TRINITY` (=2) immediately before the `rst 8` in both `bdos_write_sector` and `bdos_read_sector` (after D/E, so the value the prelude reads is the drive, not a leftover sector); removed the inert §8h A'=0 pin; corrected the HWSAD register-contract comment (A MUST be 2). Guards: `TestServeRawSectorHooksPresentTrinityDrive` (static byte-guard: the single HWSAD/HRSAD `rst 8` in the **assembled production serve image** is each preceded by `ld a,2`) + `TestHWSADFaithfulDriveSelectsByMainA` (faithful behavioural: A=2 → write core + `CMD24` + clean RET; A=1 → floppy poll hang).
 
-**REMAINING — hardware retest (TAPO, i283 fallback):** emulation now reproduces both the hang (A=sector→floppy) and the fix (A=2→CMD24), but the koron-go SD model cannot exercise the real SD-write-core busy-wait, so a TAPO shot must confirm the push **completes** end-to-end on real hardware. The §8d–§8w hardware evidence predates this fix (it ran A=sector). If a *separate* write-core wedge survives the fix on hardware, the i283 `&DC`-bit-3 measurement is the fallback.
+**HARDWARE-CONFIRMED (2026-06-29, i283, TAPO shot on the real SAM+Trinity):** the fixed `netboot_serve_boot_debug` (`ld a,2` verified before `cf 95` = the HWSAD `rst 8`) was pushed and a disk-record WRQ driven; the i271 UDP:9001 markers show, repeatedly across blocks and through `FINALIZE`:
+
+```
+… CLAIM_SELECT_POST → DATA_BLOCK → FLUSH_PRE → HWSAD_PRE → HWSAD_POST
+→ DATA_BLOCK → FLUSH_PRE → HWSAD_PRE → HWSAD_POST → … → FINALIZE → … HWSAD_PRE → HWSAD_POST
+```
+
+Every `HWSAD_PRE` is now followed by `HWSAD_POST` — **the per-block SD write completes on real hardware** (the exact step that hung as `HWSAD_PRE → silence` for the whole §8a–§8w investigation). `HMPR=&01 / LMPR=&1F` at each write (matching §8l). `curl exit 70` is the **expected** `FINALIZE` rejection of the synthetic non-800K test payload (after the path under test) — not a hang. So the §8a FDC-poll model was **right all along**, and the fix is the device-select drive value.
+
+**Reconciling §8c (which "refuted" A=2):** §8c (2026-06-28) pushed an A=2 binary and saw `WRQ_ENTRY ×3 → DATA_BLOCK ×1 → hang`, concluding A=2 was refuted. **§8d then corrected that**: at that time the run died **upstream** in the claim/`serve_rearm_enc`/handshake (`HWSAD_PRE` never fired) — the per-block write was never reached, so §8c's hang was NOT the write and A=2 was never actually tested. **b2d (#728) fixed that post-`ereset` handshake**, after which §8g exposed the *real* §8a HWSAD hang (A=sector at `HWSAD_PRE`). This fix (A=2), now that the write is genuinely reached, makes `HWSAD_PRE → HWSAD_POST`. So §8c was a misattribution corrected by §8d; the §8a model stands. (A real-800K-`.mgt` end-to-end push — `FINALIZE_VALID` + final ACK to curl = a genuinely written record — is i194.)
 
 Authority: this section; `bdos15a.src.txt` (`HWSAD:530`, `set.drive`); `bdos15t-beta6.annotated.dis` (`&9E16` HWSAD prelude `&9E3C/&9E3F`, `&8662` device-select `cp 1`/`cp 2`); the faithful rig `bdos_save_writes_record_test.go` (§8ad) + `bdos_hwsad_drive_contract_test.go` (this section).
 
