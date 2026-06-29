@@ -4892,7 +4892,7 @@
   description: |
     OPEN. The data-phase HWSAD hang, with the prelude-addressing/register-bank/paging-context hypotheses now ALL cleared. Cleared so far: addressing (§8l HMPR=1, &BE42 names the buffer's own page — no displacement); SD bus health at the write (§8m hardware probe: sdc_init_ladder runs clean one instruction before the rst8, still hangs); the §8m 'wrong DOS-call paging context' fix (§8n: ROM PTDOS &381C re-pages section A=ROM0 / section B=DOS-page on EVERY hook, so the prelude's &780F + call &0005 resolve correctly regardless of the serve's pre-rst8 LMPR); and §8n's residual 'hk.hl from a bank our seam never sets' hypothesis (§8o/i280b-b2m: measured in emulation — hk.hl/hk.de/hk.a all come from the MAIN bank, so our seam's ld hl,BD_WRITE_BUF=&BE42 DOES reach hk.hl; the §8k/§8l assumption was right). SURVIVING CAUSE: downstream in B-DOS's own SD CMD24 write core — the &DC bit-3 busy-wait the koron-go SD model cannot reproduce (it always clears busy), i.e. the §8l suspect (b). §8m's read-only reinit (sdc_init_ladder) re-enters SPI mode but the per-op write core (&A81F/&A918) re-issues only OUT(&DC),&31 and relies on the boot-time HDINIT SPI state PERSISTING; the ENC ereset (serve_rearm_enc) between the claim-select and the data-phase write may leave the shared one-PIC controller's SD side in a state the write core can't recover without the full &38/&04 init. NEXT: authority-diff i270a (Colin's 1.5t SD-write additions) for what the write core assumes about persistent SD/SPI state across an ENC ereset, then a hardware marker INSIDE the write-core busy-wait + a quiesce/full-reinit of the SD side after serve_rearm_enc, then a TAPO retest. Hardware-gated (the busy-wait cannot reproduce in koron-go).
   status: OPEN
-  depends_on: [i280b-b2h, i280b-b2l, i280b-b2m]
+  depends_on: [i280b-b2h, i280b-b2l, i280b-b2m, i280b-b2q]
   kind: leaf
   owner: agent
   parent: i280b-b2
@@ -4928,6 +4928,37 @@
   owner: agent
   prs:
     - {num: 735, role: completing}
+  parent: i280b-b2
+
+- id: i280b-b2n
+  title: "§8p methodology unlock: the B-DOS HWSAD handler now runs END-TO-END in emulation (the §8b honest boundary solved via §8o's DOSCNT=0 arming + real-ROM bridges)"
+  description: |
+    DONE (§8p). Since §8a the HWSAD handler was held un-traceable in emulation (the prelude calls a SAM-ROM bridge; the flat harness escaped at real &9BF1 -> &0103 into unmapped memory). §8o's full-dispatch arming (DOSCNT &5BC3=0 carries an external caller's rst8 through the ROM recursion guard at &37E8) + the real-boot harness's real ROM (so &0103/&0005/&0033 execute and return) dissolve that barrier. New SKIP_PRIVATE_TESTS-gated TestHWSADHandlerTraceable boots Colin's real ROM v3.0 + B-DOS 1.5t, arms the serve map + DOSCNT=0 + faithful device vars (&780B=2/&8135=&44/&8132=2), drives rst8/defb149, and observes the handler run end-to-end: dispatcher &8319 -> handler &9E16 -> prelude &9E27 -> device-select &8662 -> across the real &0103 bridge -> returns to editor idle, no fault, no wander. Also corrected two earlier framings: experiment-1's 'DOS-call chain not armed' was really the DOSCNT=1 recursion guard; and device-select's hk.a=0 'else' branch (&8680) is the FDC-vs-SD dispatch read (&8684), not floppy-port setup, so hk.a=0 leaves &780B=2 (SD). SCOPE: guards traceability, NOT hang reproduction — with hand-set state the handler returns without reaching the SD write core &A8F4; that needs the faithful claim-select state, tracked as the continuation.
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 736, role: completing}
+  parent: i280b-b2
+
+- id: i280b-b2q
+  title: "Drive the HWSAD handler into the SD write core (&A8F4) in emulation: reconstruct the faithful claim-select state + model the &DC bit-3 busy so the suspected busy-wait hang can be exercised"
+  description: |
+    OPEN (i280b-b2i continuation; §8q). Pete's capture-and-diff plan: drive a WORKING B-DOS record write in emulation, trap IN/OUT + hooks, diff our serve's write against it. DONE this session: the capture RIG (tools/netboot-oracle/z80/bdos_save_capture_wip_test.go) — types real BASIC RECORD/SAVE/FORMAT via InjectKeys+FrameIntPeriod against Colin's real ROM+B-DOS and decodes the live &DC-&DF SD command frames. Empirical findings (§8q): RECORD n runs the FULL SD init ladder every time (self-heals the bus — the read/write asymmetry §8m noted), then CMD17-reads a FIXED block 152 (=base) — the same for RECORD 1 AND RECORD 300 — i.e. block 152 is the card's record DIRECTORY, read to resolve any record number; on a blank card it is empty -> 'Invalid record' -> SAVE never reaches a write. The device-select &8662 'else' branch (hk.a=0) is the FDC-vs-SD dispatch read &8684, not floppy-port setup (leaves &780B=2=SD). BLOCKER: a working SAVE/FORMAT RECORD needs the card formatted at the CARD level (the supplied BASIC formatter builds the record-list/master structure; a bare BDOS stamp suffices for the HRECORD HOOK but not the BASIC RECORD command). The format is fully derivable from docs we hold: bdos15a.src.txt hd.init (last.record/last.recs ~:1778) + FORMAT (bdos14e.src.txt:2565); no hardware/card-dump needed. NEXT: (1) build a valid Trinity card in the SDCard model via SeedSector (record-list + block-152 directory + stamped record); (2) capture a working RECORD n:SAVE (or HRECORD+HSAVE via the §8o arming) IN/OUT+hooks; (3) capture our HRECORD+HWSAD; (4) diff — the missing setup/wait/hook is the fix. Leading hypothesis (option 1, unconfirmed): our serve's raw HWSAD (149, skips directory/allocation) omits the orchestration HSAVE (132) does.
+  status: OPEN
+  kind: leaf
+  owner: agent
+  parent: i280b-b2
+
+- id: i280b-b2r
+  title: "§8r: the record mount/select works in emulation (DEVICE mounts from CSD: last.record=4809; RECORD 1 self-heals + selects) — the write blocker is re-aimed downstream to SAVE/HSAVE"
+  description: |
+    DONE (§8r, PR #736). Measured last.record (&80C4) on B-DOS's resident page (correcting the prior wrong-page poke). Boot does NOT mount; DEVICE re-runs HDINIT (&A1B1) and mounts FROM THE CSD ALONE (last.record=4809 = the GetBDOSCaps count for csdV2(0x001D59)); HDINIT needs no on-card boot sector/record-list for the count. With the full mount var-set poked (last.record &80C4 / base &80C2 / capacity &80BD / record.no &80C6 / hd.wp &80C8), RECORD 1 self-heals the bus (full init ladder) + CMD17-reads block 152 and the select PERSISTS — identical for a bare BDOS@232 stamp or a real MGT directory, so record-1 content is NOT the gate. The write blocker is downstream at SAVE/HSAVE (no SD I/O, resets last.record, falls back to floppy; stock SAM error &0C raised downstream of the directory read, not B-DOS rep81). Guards: TestBDOSBootNoMountDeviceMounts, TestBDOSRecordSelectSelfHeals. Findings: trinity-sd-z80-interface.md §8r.
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 736, role: completing}
   parent: i280b-b2
 
 - id: i281

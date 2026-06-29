@@ -1050,6 +1050,51 @@ Alternatively, trace B-DOS 1.5t's real mount path (`hd.init`, `bdos15a.src.txt:1
 (`bdos_save_capture_wip_test.go`), the §8o/§8p arming, the samdisk format spec, and the verified
 seed mechanism are all in place; only B-DOS mounting the card remains.
 
+## 8r. The mount works from the CSD; the §8q "boot doesn't mount" blocker is resolved and the gap is re-aimed at the SAVE/HSAVE write (i280b-b2r)
+
+Empirical, in emulation (real ROM v3.0 + B-DOS 1.5t + a `csdV2(0x001D59)` SD card seeded
+with a `"BDOS"@232` record-1 stamp), reading `last.record` from B-DOS's resident page
+(page 29 = section C at editor idle; 1.5t var map per `ANALYSIS.md §3`: **`last.record`
+=`&80C4`**, base=`&80C2`, capacity=`&80BD`, record.no=`&80C6`, hd.wp=`&80C8`). Regression
+guards: `TestBDOSBootNoMountDeviceMounts` + `TestBDOSRecordSelectSelfHeals`
+(`bdos_record_mount_test.go`).
+
+- **Fact 1 — boot does NOT mount.** At editor idle `last.record`=0 (confirms §8q's
+  measurement, now read from the *correct* page — the prior session's "didn't change"
+  poke was on the wrong page / partial var-set).
+- **Fact 2 — `DEVICE` mounts the card FROM THE CSD ALONE.** Typing `DEVICE` re-runs HDINIT
+  (`&A1B1`): the full SD init ladder, a `CMD17` read of block 152 (the record directory =
+  `base_sectors`), and **`last.record` = 4809** — *exactly* the CSD-derived count
+  (`GetBDOSCaps(7 694 336)` ⇒ base=152, records=4809). HDINIT computes the count from the
+  **CSD (`CMD9`)**, NOT from any on-card boot sector or record-list. **So the §8q plan's
+  premise — "build a full card-level format so boot-time HDINIT mounts" — is unnecessary
+  for the mount/count; `DEVICE` is the mount trigger and the count is CSD-derived.** (The
+  boot path simply never calls HDINIT — a deliberate safe-mode stance, not a missing
+  format.)
+- **Fact 3 — the record SELECT reaches the card and PERSISTS.** With the full mount
+  var-set poked into B-DOS's page (range-checks satisfied), `RECORD 1` runs the **faithful
+  self-heal init ladder** (`CMD0..CMD16`, the §8m read/write asymmetry: every record op
+  re-inits the bus) + the `CMD17` read of block 152, and the select **sticks**
+  (`last.record` stays 4809). This is **identical whether block 152 holds a bare
+  `"BDOS"@232` stamp or a real valid MGT directory sector** (A/B tested with
+  `build/empty.mgt`'s real directory) — so the record-1 sector *content* is **not** the
+  gate.
+- **The real write blocker is DOWNSTREAM, at `SAVE`/`HSAVE`.** After a (poked) `RECORD 1`
+  selects, `SAVE "x"CODE …` issues **no SD I/O at all**, **resets `last.record` to 0**, and
+  ends with `ERRNR=&00` — i.e. it silently falls back to the default (floppy) device rather
+  than writing to the record. A BASIC-level error code **`&0C` (12, a stock SAM-ROM error —
+  B-DOS overrides only 81+)** appears around the `RECORD`/`SAVE` path; it is raised
+  **downstream of the directory read**, not by B-DOS's `get.label` (whose failure is
+  `rep81`=81). Its exact origin is a **model-fidelity gap in the SAVE/HSAVE write path**
+  (candidates: the Trinity-detect `&DC` `&08/&09`→`'TR'` identity our ENC model may not
+  serve; a post-init ready/status the write path validates; or the default-device routing).
+
+**NEXT (i280b-b2q):** drive the write directly via the §8o-armed dispatch — `HRECORD`(156)
+then `HSAVE`(132) (build the UIFA like `bdos_seam.asm bdos_fill_save_uifa`) — with the
+mount var-set poked, and trace where the SAVE/HSAVE path diverges (no `CMD24`); then the
+same with `HWSAD`(149) for the diff. The mount + select are no longer in the way; the
+capture target is the SAVE-vs-HWSAD write step.
+
 ## 9. Porting to fresh Z80
 
 The fork's primitives map onto existing sam-aarch64 SPI code (the SD port reuses the same busy-poll / one-byte-lag / auto-null shapes the ENC and EEPROM drivers already implement). **Mirror these:**
