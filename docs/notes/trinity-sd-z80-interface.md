@@ -1488,6 +1488,26 @@ Started i280b-b2t (port the working setup into `bdos_seam.asm`). Did the authori
 
 Authority: this section + §8ad/§8aa/§8s/§8o; `bdos15a.src.txt` (`HSAVE:405`, `HWSAD:530`, `set.drive`); `bdos15t-beta6.annotated.dis` (`&9E16` HWSAD, `&8662` device-select). Note: `set.drive`/`wr.buff` definitions fall in the detokeniser's known zero-gap (ANALYSIS.md) — read them from the disasm, not the source.
 
+## 8af. ROOT CAUSE FOUND + FIXED in the faithful rig — the raw HWSAD presented A = the SECTOR number to device-select; the first .mgt sector (1) selected the FLOPPY → the FDC-poll hang. Fix: present A = 2 (Trinity SD). (i280b-b2t)
+
+Executed §8ae's plan: built a **faithful** driver for our raw machine-code HWSAD — a new harness primitive `Machine.ContinueFrom(addr, in)` resumes the post-`RECORD` editor CPU **in place** (all registers, the alternate bank, the interrupt state, and the live LMPR/HMPR paging preserved), redirecting only PC and pushing a HALT-trap return. This avoids the §8ae `&01CB` reboot-artifact that contaminated the §8c–§8o armed-dispatch (`RunBootFrom(stub)`) harness. Guards: `bdos_hwsad_drive_contract_test.go`.
+
+**The device-select diff (at `&8662`, the routine BOTH paths call), measured with B-DOS correctly mapped (resident page 29):**
+- **GOLD** `RECORD 1; SAVE` → `HSAVE` → `set.drive` → `&8662`: **live A = &02** → the Trinity-SD branch → reaches the write core `&A8F4` → `CMD24`.
+- **OURS** raw `HWSAD` via `rst 8`: the prelude does `&9E3C ld a,(hk.a) / &9E3F call &8662`, so live A at `&8662` = **hk.a**. Our `bdos_write_sector` left **main A = `BD_WRITE_SECTOR`** at the `rst 8` (the trailing `ld a,(BD_WRITE_SECTOR) / ld e,a`), so hk.a = the sector number.
+
+**`hk.a` comes from MAIN A — the §8h/#730 "hk.a = alternate A'" finding is REFUTED (it was &01CB-contaminated, exactly as §8ae warned).** Decisive faithful probe: `A'=2, mainA=0` → `hk.a=0` (device-select fails, no write); `A'=0, mainA=2` → `hk.a=2` (write core + `CMD24@153`, clean RET). So our prior `xor a / ex af,af'` A'=0 pin was inert; what reaches `&8662` is main A.
+
+**The hang reproduces in emulation (refining §8ac's "hardware-only"):** driving the raw HWSAD with **A = 1** (the value our old code left for the FIRST .mgt sector — linear 0 → track 0, sector 1) spins forever in the B-DOS floppy poll (`&85F3`-region) — never reaching the write core, issuing no `CMD24`, never returning = the `HWSAD_PRE → silence` hardware shape (the §8a "un-timed FDC poll" hang). **A = 2** issues `CMD24` and returns clean. The §8ad/§8s "our invocation always issues CMD24 in emulation" was the `&01CB` artifact; in the faithful rig the floppy-branch hang is plainly visible. (The koron-go SD model still always clears `&DC` BUSY, so it cannot reproduce a *separate* SD-write-core busy-wait — but the device-select-to-floppy hang, which is what A=sector actually triggers, IS reproduced.)
+
+**ROOT CAUSE:** `bdos_write_sector` / `bdos_read_sector` loaded **main A = sector** at the `rst 8`; the shared rwsad prelude device-selects on hk.a = that main A; `&8662 cp 1` → floppy. The serve's first per-block write is sector 1 → floppy → the FDC-poll hang. This ties together the §8a hang shape, the §8w production-shot hang (the serve then ran A=sector), and the gold path's success (HSAVE/`set.drive` presents A=2).
+
+**FIX (this PR, `src/netboot/bdos_seam.asm`):** load `A = BD_DRIVE_TRINITY` (=2) immediately before the `rst 8` in both `bdos_write_sector` and `bdos_read_sector` (after D/E, so the value the prelude reads is the drive, not a leftover sector); removed the inert §8h A'=0 pin; corrected the HWSAD register-contract comment (A MUST be 2). Guards: `TestServeRawSectorHooksPresentTrinityDrive` (static byte-guard: the single HWSAD/HRSAD `rst 8` in the **assembled production serve image** is each preceded by `ld a,2`) + `TestHWSADFaithfulDriveSelectsByMainA` (faithful behavioural: A=2 → write core + `CMD24` + clean RET; A=1 → floppy poll hang).
+
+**REMAINING — hardware retest (TAPO, i283 fallback):** emulation now reproduces both the hang (A=sector→floppy) and the fix (A=2→CMD24), but the koron-go SD model cannot exercise the real SD-write-core busy-wait, so a TAPO shot must confirm the push **completes** end-to-end on real hardware. The §8d–§8w hardware evidence predates this fix (it ran A=sector). If a *separate* write-core wedge survives the fix on hardware, the i283 `&DC`-bit-3 measurement is the fallback.
+
+Authority: this section; `bdos15a.src.txt` (`HWSAD:530`, `set.drive`); `bdos15t-beta6.annotated.dis` (`&9E16` HWSAD prelude `&9E3C/&9E3F`, `&8662` device-select `cp 1`/`cp 2`); the faithful rig `bdos_save_writes_record_test.go` (§8ad) + `bdos_hwsad_drive_contract_test.go` (this section).
+
 ## 9. Porting to fresh Z80
 
 The fork's primitives map onto existing sam-aarch64 SPI code (the SD port reuses the same busy-poll / one-byte-lag / auto-null shapes the ENC and EEPROM drivers already implement). **Mirror these:**

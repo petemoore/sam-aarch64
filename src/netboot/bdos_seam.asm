@@ -363,6 +363,14 @@ BD_HOOK_HWSAD:    equ 149                ; write raw 512-byte sector (HWSAD)
 BD_HOOK_LISTREAD: equ 161                ; card-absolute list-sector read: E=listSec, HL=dest
 BD_HOOK_LISTWRITE: equ 162               ; card-absolute list-sector write: E=listSec, HL=source
 
+; Drive number the HRSAD/HWSAD rwsad prelude device-selects on. The prelude does
+; `ld a,(hk.a)` then `call &8662`; hk.a is the MAIN A the caller held at the RST 8
+; (faithfully re-derived in i280b-b2t §8af — NOT the alternate A' the contaminated
+; §8h harness reported). &8662: cp 1 -> floppy; cp 2 -> Trinity SD. So the raw
+; sector hooks MUST present A = 2 to reach the SD write/read core. The gold BASIC
+; SAVE -> HSAVE -> set.drive path presents exactly A=2 at this same &8662.
+BD_DRIVE_TRINITY: equ 2                   ; HRSAD/HWSAD drive = Trinity SD (&8662 cp 2)
+
 ; bdos_select_record — HRECORD: select the mass-storage record (0 = floppy).
 ; In: A = record number. On real B-DOS, all subsequent HGTHD/HSAVE/HLOAD use it.
 bdos_select_record:
@@ -413,18 +421,16 @@ bdos_save_hook:
 ; and the Trinity SD driver. In the harness the HRSAD handler (i119 brick 1)
 ; intercepts the RST 8 and fills BD_READ_BUF from the CardModel.
 bdos_read_sector:
-                ; i280b-b2g: HRSAD shares the rwsad prelude with HWSAD, so it keys
-                ; the ambient device off hk.a = A' too. Pin A'=0 (leave the SD
-                ; select) for the same reason as bdos_write_sector — a working read
-                ; today only works because its call site happens to inherit a benign
-                ; A'; this makes it deterministic and immune to that regressing.
-                xor     a
-                ex      af, af'                 ; hk.a = A' = 0 (leave the SD select)
+                ; i280b-b2t (§8af): HRSAD shares the rwsad prelude with HWSAD, so it
+                ; device-selects on hk.a = the caller's MAIN A at the RST 8 (see
+                ; bdos_write_sector). Present A = 2 (Trinity SD) so the read reaches
+                ; the SD core (CMD17), not the floppy poll. Load A LAST, after D/E.
                 ld      a, (BD_READ_TRACK)
                 ld      d, a
                 ld      a, (BD_READ_SECTOR)
                 ld      e, a
                 ld      hl, BD_READ_BUF
+                ld      a, BD_DRIVE_TRINITY     ; hk.a = main A = 2 (Trinity SD)
                 rst     8
                 defb    BD_HOOK_HRSAD
                 ret
@@ -953,7 +959,9 @@ BD_DISK_PREFIX_LEN: equ 18                 ; len("trinity-sam-disks/")
 ; at (track, sector) using HWSAD (hook 149, bdos15a.src.txt:528-531).
 ;
 ; HWSAD register contract (bdos15a.src.txt:535-537, shared rwsad entry point):
-;   A  = drive number (same as HRSAD; bdos_seam uses 0 = selected record)
+;   A  = drive number (same as HRSAD); MUST be 2 (Trinity SD) — the rwsad prelude
+;        device-selects on hk.a = this main A (i280b-b2t §8af). A=1 selects floppy
+;        -> the FDC poll hang; A=2 selects Trinity SD -> the SD write core.
 ;   D  = track  (0-79)
 ;   E  = sector (1-10)
 ;   HL = source memory address (the 512 bytes to write)
@@ -980,24 +988,25 @@ bdos_write_sector:
                 ; correct — the §8k displacement was an editor-idle-harness artifact).
                 call    dbg_report_paging
                 endif
-                ; i280b-b2g: honor the B-DOS hk.a contract — the hook dispatcher
-                ; (&8319) reads the caller's ALTERNATE accumulator A' as hk.a
-                ; (&8322 `ex af,af'` / &8323 `ld (&81D9),a`), NOT main A. The rwsad
-                ; prelude's device-select (&9E3F `call &8662`) re-keys the ambient
-                ; device &780B from hk.a on every HWSAD: A'=0 LEAVES &780B as the
-                ; preceding HRECORD-select set it (=2, Trinity SD); A'=1 forces
-                ; &780B=1 (floppy) -> the un-timed FDC poll at &8406 = the hardware
-                ; hang. We load only main registers, so without this A' is an
-                ; uncontrolled inherited shadow value (the §8c "force A=2" fix set
-                ; main A, which the dispatcher never reads -> no effect, as the
-                ; hardware refutation showed). Pin A'=0 so the device stays SD.
-                xor     a
-                ex      af, af'                 ; hk.a = A' = 0 (leave the SD select)
+                ; i280b-b2t (§8af): present A = 2 (Trinity SD) to the rwsad prelude's
+                ; device-select. The prelude does `ld a,(hk.a)` then `call &8662`,
+                ; and hk.a is the caller's MAIN A at the RST 8 (faithfully re-derived
+                ; in the Continue/WTKY2 rig — the §8h/#730 "hk.a = alternate A'"
+                ; finding was a &01CB reboot-artifact, §8ae). &8662 keys the ambient
+                ; device on A: cp 1 -> floppy, cp 2 -> Trinity SD. Our prior code
+                ; left main A = BD_WRITE_SECTOR at the RST 8, so the FIRST .mgt sector
+                ; (linear 0 -> sector 1) selected A=1 = FLOPPY -> the un-timed FDC
+                ; poll = the hardware hang (faithfully reproduced: A=1 spins in the
+                ; B-DOS floppy poll, A=2 issues CMD24 and returns clean). Load A LAST,
+                ; after D/E, so the value the prelude reads is the drive, not a
+                ; leftover sector. (The gold BASIC SAVE -> HSAVE -> set.drive path
+                ; presents this same A=2 at &8662.)
                 ld      a, (BD_WRITE_TRACK)
                 ld      d, a
                 ld      a, (BD_WRITE_SECTOR)
                 ld      e, a
                 ld      hl, BD_WRITE_BUF
+                ld      a, BD_DRIVE_TRINITY     ; hk.a = main A = 2 (Trinity SD)
                 rst     8
                 defb    BD_HOOK_HWSAD
                 if defined(NETBOOT_DEBUG)
