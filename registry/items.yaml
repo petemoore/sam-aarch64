@@ -2443,7 +2443,6 @@
   description: |
     Confirm the OACK path works on real Trinity hardware: netboot client connects to a standards-compliant TFTP server (e.g. macOS tftpd), receives OACK, ACKs block 0, and receives the file. Gated on Trinity hardware access + a standards-compliant server in the test environment.
   status: OPEN
-  depends_on: [i272]
   kind: leaf
   owner: agent
   parent: i118
@@ -3264,7 +3263,6 @@
   description: |
     bdos_read_sector (HRSAD, i119) and bdos_write_sector (HWSAD, i114c) both leave A = the sector value at the rst 8, but the B-DOS hook code reads A as the drive number (bdos15a.src.txt rwsad/xsad: LD A,(hk.a)). After HRECORD-select a Trinity record presents as drive 2. The koron-go harness models the selected record via HRECORD and ignores A, so it cannot catch a wrong-drive bug. Confirm on real Trinity whether these hooks need A explicitly set (e.g. A=2 or A=record) or whether HRECORD makes the record the active context regardless of A; fix both routines symmetrically if needed.
   status: OPEN
-  depends_on: [i272]
   kind: leaf
   owner: agent
   refs: [src/netboot/bdos_seam.asm, reference/bdos/bdos15a.src.txt, i119, i114c]
@@ -3544,7 +3542,7 @@
   description: |
     Hardware-gated completion of i182 (unverifiable in emulation). Boot the i182a fetch-and-boot disk on real SAM+Trinity, serve a stamped 819200-byte .mgt, confirm it streams into the scratch record (1600 HWSAD sectors), validates, and ALHK-boots it. Entangled with auto-boot/control-return autonomy (i132/i135). The full-size valid stream is the first full-scale fetch-and-boot (not driven through the bit-banged ENC in the host harness). Needs i182a's disk.
   status: OPEN
-  depends_on: [i182a, i272]
+  depends_on: [i182a]
   kind: leaf
   owner: agent
   parent: i182
@@ -4990,6 +4988,5 @@
   description: |
     §8v: the SD-write hang requires a PERMANENT PIC wedge (the write core rides out any finite busy via its own &A820 check_busy before its first OUT); the primary sources do NOT pin a deterministic trigger for the wedge in our serve sequence — the only source-grounded permanent-wedge cause is the ENC silicon transmit-errata (Owen). So the trigger cannot be modelled faithfully (inventing it = prime-directive / rule-7 violation); it is a HARDWARE datum. Do a production / marker-minimal push (no ENC TX anywhere near the SD write — the §8t prime suspect removed) while measuring &DC bit 3 across the per-block write via a NON-network channel (&DC reads are always safe; or border/screen; or a RAM breadcrumb a post-mortem reads). Two conclusive outcomes: (a) push COMPLETES => the wedge was the debug-marker/near-write ENC TX (errata) and the fix is 'keep ENC TX clear of the SD write window' (markers are already debug-only + outside the SD CS, so a production build may already be correct); (b) still HANGS with &DC bit-3 stuck => deeper ENC/PIC contention or a TXRST-workaround bug, localizable from where bit-3 latches high. Pete/TAPO-gated (autonomy enabler i272). Authority: trinity-sd-z80-interface.md §8v + docs/plans/i280-bdos-write-trace.md.
   status: OPEN
-  depends_on: [i272]
   kind: leaf
   owner: agent
