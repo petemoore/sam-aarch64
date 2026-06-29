@@ -4832,13 +4832,15 @@
   parent: i280b-b2
 
 - id: i280b-b2d
-  title: Make the ENC TX wire-ready after serve_rearm_enc's ereset before the handshake (settle ESTAT.CLKRDY / retry the reply) so the disk-record push hand-shakes and completes
+  title: Gate serve replies on PHY link-up (drv_wait_link in srv_send_tbuf) so the WRQ handshake survives the post-ereset link-down window and the push hand-shakes
   description: |
     OPEN — now WELL-POSED (i280b-b2f's discriminator settled it, §8f). The re-arm does NOT time out (no &18 across 6 WRQ retransmits; enc_timed_out=0; serve_rearm_enc returns cleanly) — so the 'stuck &DC bus' hypothesis is dead. The failure is post-rearm TX-readiness: serve_rearm_enc's ereset (full ENC soft-reset, done to restore the SD-disturbed RX) transiently kills the ENC TX, so the WRQ_CLAIMED/handshake markers AND the handshake reply right after it never reach the wire (markers BEFORE the re-arm escape; the ENC recovers by the next serve loop). Fix: after serve_rearm_enc, make TX genuinely wire-ready before the handshake reply — bounded-wait ESTAT.CLKRDY/OST after the ereset (the driver flags CLKRDY unreliable, so a bounded settle or a TX self-check) and/or retry the handshake reply (it succeeds by the next iteration). Mirror the ENC driver primitives; keep it bounded (a stuck ENC must never wedge the serve). Confirm: the push reaches WRQ_CLAIMED -> WRQ_HANDSHAKE and curl hand-shakes (tools/hardware-shot/run-shot.sh). Doesn't reproduce in koron-go (SD model clears busy, no shared controller).
-  status: OPEN
+  status: DONE
   depends_on: [i280b-b2c, i280b-b2f]
   kind: leaf
   owner: agent
+  prs:
+    - {num: 728, role: completing}
   parent: i280b-b2
 
 - id: i280b-b2e
@@ -4861,6 +4863,15 @@
   owner: agent
   prs:
     - {num: 727, role: completing}
+  parent: i280b-b2
+
+- id: i280b-b2g
+  title: "B-DOS HWSAD per-block write hangs (HWSAD_PRE without HWSAD_POST): the original §8a hang, revealed once b2d's drv_wait_link let the push hand-shake + reach the per-block write"
+  description: |
+    OPEN. With i280b-b2d landed (the handshake now completes, §8g), the disk-record push reaches the B-DOS per-block write for the FIRST time: a TAPO shot shows DATA_BLOCK -> FLUSH_PRE -> HWSAD_PRE, then hangs (no HWSAD_POST, curl times out). This is the original §8a/§8b HWSAD hang (the i280b-b2 umbrella's first target) that the §8d/§8e/§8f handshake blocker had been masking. Per §8a the hang is in the B-DOS HWSAD hook (rst 8 / defb 149) ENTRY PRELUDE (handler &9E16: a paged-pointer page-setup driving HMPR + the &83F7 device-dispatch keyed on the ambient-device var &780B, whose floppy/Z branch is an un-timed FDC poll = the hang shape), NOT the §5/§8 write core (which traces clean in koron-go; gold CMD24 stream captured by i280a bdostrace). The A=2/&780B ambient-device theory was hardware-refuted (§8c, b2b). Next: the bdostrace-paged harness (tools/netboot-oracle/z80/cmd/bdostrace-paged) to trace the prelude end-to-end so the hang point is observable, then fix our HWSAD INVOCATION contract (reuse B-DOS entry points; don't reimplement). Doesn't reproduce in koron-go (SD model clears busy). Ends in a TAPO shot (tools/hardware-shot/run-shot.sh; success = HWSAD_POST + the push completes).
+  status: OPEN
+  kind: leaf
+  owner: agent
   parent: i280b-b2
 
 - id: i281
