@@ -8,8 +8,9 @@
 //
 //  1. client_finalize (the validate-gates-boot decision) — stream an image into a
 //     record via the REAL sink, then call client_finalize and assert it boots the
-//     record iff the image validates (size == 819200 AND BDOS stamp@232). Covers
-//     valid → boot, wrong size → reject, missing stamp → reject.
+//     record iff the image validates (size == 819200; i285 size-only — a .mgt needs
+//     no B-DOS installed on it). Covers valid → boot, wrong size → reject,
+//     stamp-less full-size → boot.
 //
 //  2. client_fetch_boot (the whole boot wrapper, CLAUDE.md §7) — RunBoot the real
 //     bootable entry end-to-end: EEPROM identity read, drv_init/link, ARP, RRQ,
@@ -119,17 +120,21 @@ func TestClientFinalizeRejectsWrongSize(t *testing.T) {
 	}
 }
 
-func TestClientFinalizeRejectsMissingStamp(t *testing.T) {
+// TestClientFinalizeBootsStamplessImage: validation is size-only (i285) — a
+// stamp-less / non-B-DOS 819,200-byte .mgt is a valid bootable record (a .mgt
+// does NOT need B-DOS installed on it; the DOS inside is irrelevant to Trinity).
+// So client_finalize must ACCEPT and boot it, exactly like a B-DOS-stamped one.
+func TestClientFinalizeBootsStamplessImage(t *testing.T) {
 	const record = 6
 	img := fbValidImage()
-	copy(img[bdos.BDOSStampOffset:bdos.BDOSStampOffset+4], []byte("XXXX")) // right size, no BDOS stamp
+	copy(img[bdos.BDOSStampOffset:bdos.BDOSStampOffset+4], []byte("XXXX")) // right size, non-BDOS DOS inside
 	mac, store := fbStreamAndFinalize(t, img, record)
 
-	if got := mac.Read(symAddr(t, mac, "CLIENT_BOOT_RESULT"), 1)[0]; got != 0 {
-		t.Errorf("CLIENT_BOOT_RESULT = %d, want 0 (missing stamp rejected)", got)
+	if got := mac.Read(symAddr(t, mac, "CLIENT_BOOT_RESULT"), 1)[0]; got != 1 {
+		t.Errorf("CLIENT_BOOT_RESULT = %d, want 1 (stamp-less full-size .mgt accepted — size-only validation)", got)
 	}
-	if boots := store.Boots(); len(boots) != 0 {
-		t.Fatalf("Boots() = %v, want [] (a stamp-less image must NOT boot)", boots)
+	if boots := store.Boots(); len(boots) != 1 || boots[0] != record {
+		t.Fatalf("Boots() = %v, want [%d] (a valid full-size .mgt boots regardless of the DOS inside)", boots, record)
 	}
 }
 
