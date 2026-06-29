@@ -32,9 +32,12 @@ actually **executes a push** to the SAM:
 1. an interpreter (`python`/`python3`/`sh`/`bash`/`perl`) invoking a pusher
    script (`trinload-push*.py|.sh`, `trinpush-serve*`, `trinpush*`), or the
    pusher script run directly (`./trinpush.py`, an absolute path, the bare name);
-2. a TFTP client — verb `tftp`/`atftp`, or any `tftp://` URL in the statement;
+2. a TFTP client — verb `tftp`/`atftp` (a bare `tftp://` URL *named* by another
+   verb — a `grep`, a `go test`, a heredoc path — is a mention, not an execution,
+   and is caught by rule 3 only when it is an actual upload);
 3. `curl`/`wget` with an upload flag (`-T`/`--upload-file`/`-d`/`--data`/
-   `--data-binary`) **and** targeting the SAM (its IP or a `tftp://` URL);
+   `--data-binary`/`--post-file`/`--body-file`) **and** targeting the SAM (its IP
+   or a `tftp://` URL);
 4. a raw socket tool (`nc`/`ncat`/`socat`) with the SAM IP or the trinload
    discovery port (`0xEDB0`/`EDB0`/`60848`) in the statement.
 
