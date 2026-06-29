@@ -41,6 +41,14 @@
 ; State (data first so every label is defined before the code referencing it).
 ; ===========================================================================
 RRS_FILL:    defs 2          ; bytes pending in BD_WRITE_BUF (0..511 between calls)
+RRS_RECORD:  defs 2          ; the 1-based claimed record the OWN-CMD24 path writes into (set by the
+                             ;   caller before the first chunk when RRS_OWN_CMD24=1; i194)
+RRS_OWN_CMD24: defs 1        ; 0 = write each sector via the B-DOS HWSAD hook (bdos_write_record),
+                             ;   the i122 client fetch-and-store path. 1 = write by ABSOLUTE card
+                             ;   LBA via our OWN self-healing CMD24 (bd_record_write_hw), the i194
+                             ;   serve disk-push path that bypasses the flaky B-DOS hooks (§8ag).
+                             ;   raw_record_sink_reset clears it to 0 (HWSAD default); the serve
+                             ;   push sets it to 1 after reset.
 RRS_LINEAR:  defs 2          ; next linear sector index to write (0-based)
 RRS_SRC:     defs 2          ; current source pointer (carried across the copy loop)
 RRS_REM:     defs 2          ; bytes of the current chunk still to consume
@@ -58,6 +66,9 @@ raw_record_sink_reset:
                 ld      (RRS_LINEAR), hl
                 ld      (RRS_TOTAL), hl
                 ld      (RRS_TOTAL + 2), hl
+                xor     a
+                ld      (RRS_OWN_CMD24), a      ; default = HWSAD path (the i122 client); the
+                                                ; serve push sets RRS_OWN_CMD24=1 after this reset
                 ret
 
 ; ===========================================================================
@@ -173,32 +184,55 @@ rrs_pad:
                 jp      rrs_flush_sector        ; tail-call: write the padded sector + advance
 
 ; ===========================================================================
-; rrs_flush_sector — write the full BD_WRITE_BUF (512 bytes) to the selected
-; record at linear sector RRS_LINEAR via bdos_write_record (one sector), then
-; advance RRS_LINEAR and reset RRS_FILL to 0. Clobbers A, BC, DE, HL.
+; rrs_flush_sector — write the full BD_WRITE_BUF (512 bytes) at linear sector
+; RRS_LINEAR, then advance RRS_LINEAR and reset RRS_FILL to 0. Two write backends,
+; selected by RRS_OWN_CMD24:
 ;
-; Reuses i114c's bdos_write_record with BD_WRITE_COUNT = 1: it decodes the linear
-; sector into (track, sector) and issues the single HWSAD — "via i114c's HWSAD
-; seam (bdos_write_record)" per the i122b brief.
+;   RRS_OWN_CMD24 == 0 (the i122 client fetch-and-store path): write via the B-DOS
+;     HWSAD hook (bdos_write_record, one sector) into the currently HRECORD-selected
+;     record — the caller selected it.
+;
+;   RRS_OWN_CMD24 == 1 (the i194 serve disk-push path): write by ABSOLUTE card LBA
+;     with our OWN self-healing CMD24 (bd_record_write_hw), bypassing the B-DOS HWSAD
+;     hook. The B-DOS hooks flakily HANG on real hardware (they rely on boot-time
+;     SPI-mode persistence the serve's ENC reset disturbs, §8ag); bd_record_write_hw
+;     re-runs sdc_init_ladder every call, so it self-heals. The target record is
+;     RRS_RECORD (the claimed free record handle_wrq armed the sink with) and the LBA
+;     is absolute (csd_base + 1600*(rec-1) + linearSec) — no B-DOS "current record"
+;     state is consulted, so HRECORD-select is unneeded for the write.
+;
+; Clobbers A, BC, DE, HL.
 ; ===========================================================================
 rrs_flush_sector:
                 if defined(NETBOOT_DEBUG)
-                ; i280b-b2: a full sector is staged and we are about to write it.
-                ; Paired with DBG_HWSAD_PRE/POST in bdos_write_sector, this pins
-                ; the per-block write hang: FLUSH_PRE->HWSAD_PRE gap = our decode
-                ; (bdos_write_record), HWSAD_PRE->HWSAD_POST gap = the B-DOS rst 8.
+                ; A full sector is staged and we are about to write it. FLUSH_PRE
+                ; brackets the write (DBG_FLUSH_PRE -> the next marker gap = the
+                ; per-sector write over the bit-banged SPI).
                 ld      a, DBG_FLUSH_PRE
                 call    dbg_marker
-                ; i280b-b2i: report LMPR/HMPR at STAGING time too — if it differs from
-                ; the HWSAD_PRE report, the data was staged into a different page than
-                ; the prelude reads back (a paging-consistency bug distinct from §8k).
-                call    dbg_report_paging
                 endif
+                ld      a, (RRS_OWN_CMD24)
+                or      a
+                jr      nz, rrs_flush_own_cmd24
+
+                ; --- HWSAD path (client): bdos_write_record, one sector ---
                 ld      hl, (RRS_LINEAR)
                 ld      (BD_WRITE_START), hl    ; write at the current linear sector
                 ld      hl, 1
                 ld      (BD_WRITE_COUNT), hl    ; exactly one sector (BD_WRITE_BUF)
                 call    bdos_write_record       ; HWSAD the sector into the selected record
+                jr      rrs_flush_advance
+
+rrs_flush_own_cmd24:
+                ; --- OWN CMD24 path (serve push): absolute-LBA write of (RRS_RECORD, linear) ---
+                ld      hl, (RRS_RECORD)        ; 1-based claimed record
+                ld      (BD_REC_WRITE_REC), hl
+                ld      hl, (RRS_LINEAR)        ; 0-based linear sector within the record
+                ld      (BD_REC_WRITE_LINEAR), hl
+                ld      hl, BD_WRITE_BUF        ; source = the 512-byte staging buffer
+                call    bd_record_write_hw      ; own CMD24 to absolute LBA of (record, linearSec)
+
+rrs_flush_advance:
                 ld      hl, (RRS_LINEAR)
                 inc     hl
                 ld      (RRS_LINEAR), hl        ; next sector

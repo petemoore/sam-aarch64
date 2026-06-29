@@ -135,8 +135,11 @@ func TestServeDebugMarkersWRQRecordPush(t *testing.T) {
 	}
 
 	// 1. Bare WRQ (disk-record class via the prefix) → entry, claimed, handshake; ACK-0.
+	// The disk-record class no longer HRECORD-selects (i194): the write is by absolute
+	// LBA via our own CMD24, so the flaky CLAIM_SELECT (HRECORD) markers are gone. The
+	// claim is now FIND (our CMD17 list reads) → CLAIMED → handshake.
 	markers, reply := driveDbg(t, mac, enc, demoWRQ("trinity-sam-disks/upload.mgt", nil))
-	wantMarkers(t, "WRQ", markers, dbgWRQEntry, dbgClaimFindPre, dbgClaimSelPre, dbgClaimSelPost, dbgWRQClaimed, dbgWRQHandshake)
+	wantMarkers(t, "WRQ", markers, dbgWRQEntry, dbgClaimFindPre, dbgWRQClaimed, dbgWRQHandshake)
 	if op := tftp.Opcode(udpPayload(t, reply)); op != tftp.OpACK {
 		t.Fatalf("WRQ reply opcode = %d, want ACK(%d)", op, tftp.OpACK)
 	}
@@ -152,11 +155,12 @@ func TestServeDebugMarkersWRQRecordPush(t *testing.T) {
 		markers, reply = driveDbg(t, mac, enc, demoData(block, img[off:end]))
 		if end-off < blksize {
 			// final short block → DATA_BLOCK, FINALIZE, then the padded-tail sector
-			// flush (FLUSH_PRE/HWSAD_PRE/HWSAD_POST), then FINALIZE_BAD (sub-record image)
-			wantMarkers(t, "final DATA", markers, dbgDataBlock, dbgFinalize, dbgFlushPre, dbgHwsadPre, dbgHwsadPost, dbgFinalizeBad)
+			// flush (FLUSH_PRE → the own-CMD24 write; no HWSAD markers on this path),
+			// then FINALIZE_BAD (sub-record image).
+			wantMarkers(t, "final DATA", markers, dbgDataBlock, dbgFinalize, dbgFlushPre, dbgFinalizeBad)
 			finalReply = reply
 		} else {
-			wantMarkers(t, "DATA", markers, dbgDataBlock, dbgFlushPre, dbgHwsadPre, dbgHwsadPost)
+			wantMarkers(t, "DATA", markers, dbgDataBlock, dbgFlushPre)
 			if op := tftp.Opcode(udpPayload(t, reply)); op != tftp.OpACK {
 				t.Fatalf("DATA %d reply opcode = %d, want ACK(%d)", block, op, tftp.OpACK)
 			}
@@ -201,7 +205,7 @@ func TestServeDebugMarkersFinalizeValid(t *testing.T) {
 
 	// WRQ handshake (sets PARSE_FILENAME for the claim, arms the disk-record sink).
 	markers, _ := driveDbg(t, mac, enc, demoWRQ("trinity-sam-disks/goodisk.mgt", nil))
-	wantMarkers(t, "valid WRQ", markers, dbgWRQEntry, dbgClaimFindPre, dbgClaimSelPre, dbgClaimSelPost, dbgWRQClaimed, dbgWRQHandshake)
+	wantMarkers(t, "valid WRQ", markers, dbgWRQEntry, dbgClaimFindPre, dbgWRQClaimed, dbgWRQHandshake)
 
 	// Stream the whole valid image through the sink at full scale.
 	img := recordValidImage()
