@@ -1095,6 +1095,49 @@ mount var-set poked, and trace where the SAVE/HSAVE path diverges (no `CMD24`); 
 same with `HWSAD`(149) for the diff. The mount + select are no longer in the way; the
 capture target is the SAVE-vs-HWSAD write step.
 
+## 8s. The §8r write blocker, localized via the HWSAD hook path: device-select aborts on hk.a=0 (i280b-b2q)
+
+Empirical, in emulation (regression guard `TestHWSADReachesWriteCore`,
+`bdos_write_core_reach_test.go`). Driving the serve's own **`HWSAD`(149)** hook through
+the §8o-armed real-ROM PTDOS dispatch, against a **genuine BASIC `RECORD 1`** select (the
+faithful claim-select state — `last.record`=4809 persists, §8r fact 3), the write path:
+
+- **Reaches** the hook dispatcher (`&8319`) → HWSAD handler (`&9E16`) → prelude (`&9E27`)
+  → device-select (`&8662`) → the `&0103` ROM bridge — end-to-end, traceable.
+- **Then DIVERGES** at device-select into the **`&8680` → `&9A8B` abort** (B-DOS's error
+  reporter "rep": `&9A8B` calls `&8369`/`&82D1`, checks the error-trap SP `(&8104)`, and —
+  `(&8104)`=0 here — builds + prints a BASIC error via the ROM char path `&025E`/`&00AC`/
+  `&000D`, then returns to the editor idle loop). **No SD command is issued; the write core
+  `&A8F4` and `CMD24` are never reached.** This is the §8r SAVE/HSAVE blocker reproduced
+  through the **hook** path, not just BASIC `SAVE` — so it is not a BASIC default-device
+  routing quirk; the divergence is inside the device-select gate itself.
+- **Root cause = hk.a.** device-select is `cp 1 / jr z` (floppy) `/ cp 2 / jr nz &8680`
+  (Trinity SD) — and **hk.a arrives as 0** (neither), so it takes the `&8680` abort. hk.a
+  is read at `&9E3C ld a,(&81D9)`; `(&81D9)` is set by the dispatcher from the **alternate
+  accumulator A'** (`&8321 exx` / `&8322 ex af,af'` / `&8323 ld (&81D9),a` — note the
+  dispatcher reads the **whole alternate set**: `(&81DA)=HL'`, `(&81DC)=DE'`, `(&81DE)=BC'`
+  too, so HWSAD's buffer/track/sector params are the ALT registers, not main). **But across
+  the external `rst 8` entry the ROM path resets the alternate set before `&8319`**, so a
+  caller's `A'` does NOT reach hk.a: the guard asserts `hk.a=0` for **both** a stub `A'=0`
+  and `A'=2`. This reframes §8b's "force A=2" refutation: §8b set **main** A (the dispatcher
+  never reads it — a proven no-op, as hardware showed); **A' is also not a usable lever
+  across this dispatch path.**
+- **The second gate** (for when hk.a does become 2): `&8677` checks the SD-claimed flag
+  `(&80AF)`; `(&80AF)`=0 also diverts to the `&8680` abort. A genuine BASIC `RECORD 1`
+  select does not leave `&80AF` set in the state this dispatch sees.
+- **`&DC` bit-3 busy is already modelled** (`enc28j60.go` `StuckBusy`/`busyUntilT`/`isBusy`;
+  `ctlStatus` ORs in `statusBusy`), so once the write core is reachable the busy-wait is
+  immediately exercisable — the b2q "model the busy" half needs no new model work, only a
+  path that reaches it.
+
+**NEXT (b2q continuation):** the write core is gated by device-select seeing **hk.a=2 AND
+`&80AF`≠0**. Neither the caller's `A'` (reset by the rst-8 path) nor a BASIC `RECORD` select
+establishes them here. Resolve how the real serve's HWSAD dispatch sets hk.a/`&80AF` — i.e.
+whether the serve must NOT route through the DOSCNT=0 external path (so A' survives), or must
+explicitly claim the SD device (set `&80AF` via the `&A0E4` setup `&8662` runs for A=2)
+before HWSAD. Then drive into `&A8F4`/`CMD24`, exercise the `StuckBusy` busy-wait, and diff
+against `HSAVE`(132). Every hypothesis still ends in a TAPO hardware retest (i271 markers).
+
 ## 9. Porting to fresh Z80
 
 The fork's primitives map onto existing sam-aarch64 SPI code (the SD port reuses the same busy-poll / one-byte-lag / auto-null shapes the ENC and EEPROM drivers already implement). **Mirror these:**
