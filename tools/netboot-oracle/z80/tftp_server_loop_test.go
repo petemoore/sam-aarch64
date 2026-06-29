@@ -17,6 +17,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"os"
+	"strconv"
 	"testing"
 
 	"github.com/petemoore/sam-aarch64/tools/netboot-oracle/frame"
@@ -283,6 +284,164 @@ func TestTFTPServerSerialSubdir(t *testing.T) {
 	}
 	if code, _, _ := tftp.ParseError(udpPayload(t, got)); code != tftp.ErrFileNotFound {
 		t.Errorf("serial-subdir reply code = %d, want 1", code)
+	}
+}
+
+// txWindow injects req (if non-nil), runs entry, and returns ALL frames the
+// driver transmitted during the call — the RFC 7440 windowed counterpart of
+// txAfter (a single window send emits up to windowsize DATA frames at once).
+func txWindow(t *testing.T, mac *z80h.Machine, enc *z80h.ENC28J60, entry string, req []byte) [][]byte {
+	t.Helper()
+	before := len(enc.TXFrames())
+	if req != nil {
+		enc.InjectRX(req)
+	}
+	if _, err := mac.Call(entry); err != nil {
+		t.Fatalf("call %s: %v", entry, err)
+	}
+	tx := enc.TXFrames()
+	out := make([][]byte, 0, len(tx)-before)
+	for _, f := range tx[before:] {
+		out = append(out, f)
+	}
+	return out
+}
+
+// eqFrames asserts two windows of frames are byte-for-byte identical.
+func eqFrames(t *testing.T, label string, got, want [][]byte) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("%s: got %d frames, want %d", label, len(got), len(want))
+	}
+	for i := range got {
+		if !bytes.Equal(got[i], want[i]) {
+			t.Errorf("%s: frame %d mismatch\n  z80 %x\n  go  %x", label, i, got[i], want[i])
+		}
+	}
+}
+
+// windowedRRQ builds an RRQ for "config.txt" requesting the given blksize and
+// windowsize (RFC 7440), to port 69 from the captured client TID.
+func windowedRRQ(blksize, winsize int) []byte {
+	return frame.BuildUDPFrame(frame.UDP{
+		DstMAC: mask.ServerMAC, SrcMAC: mask.ClientMAC,
+		SrcIP: mask.ClientIP, DstIP: mask.ServerIP,
+		SrcPort: clientTID, DstPort: 69,
+		Payload: tftp.BuildRRQ("config.txt", "octet", []tftp.Option{
+			{Name: "blksize", Value: strconv.Itoa(blksize)},
+			{Name: "tsize", Value: "0"},
+			{Name: "windowsize", Value: strconv.Itoa(winsize)},
+		}),
+	})
+}
+
+// TestTFTPServerWindowedFull drives a multi-window transfer (windowsize 3) and
+// asserts the OACK echoes the windowsize and every window of DATA frames matches
+// the Go ServerLoop authority (FirstWindow / OnACKWindow), ending on the short
+// final block's ACK.
+func TestTFTPServerWindowedFull(t *testing.T) {
+	mac := loadTFTPSrv(t)
+	const blksize, winsize = 512, 3
+	file := makeFile(6*blksize + 100) // blocks 1..6 full, block 7 short (100B)
+	ref := fillTFTPSrv(t, mac, "config.txt", file)
+	enc := z80h.NewENC28J60()
+	initTFTPSrvDriver(t, mac, enc)
+
+	rrq := windowedRRQ(blksize, winsize)
+	oack := txAfter(t, mac, enc, "tftp_handle_rrq", rrq)
+	wantOACK := ref.OnRRQ(rrq)
+	if !bytes.Equal(oack, wantOACK) {
+		t.Fatalf("windowed OACK != Go authority\n  z80 %x\n  go  %x", oack, wantOACK)
+	}
+
+	// ACK 0 -> first window {1,2,3}.
+	w1 := txWindow(t, mac, enc, "tftp_first_data", nil)
+	eqFrames(t, "first window", w1, ref.FirstWindow())
+
+	// ACK 3 -> {4,5,6}.
+	w2 := txWindow(t, mac, enc, "tftp_handle_ack", ackFrame(3))
+	eqFrames(t, "window after ACK 3", w2, ref.OnACKWindow(ackFrame(3)))
+
+	// ACK 6 -> {7} (short final block ends the window early).
+	w3 := txWindow(t, mac, enc, "tftp_handle_ack", ackFrame(6))
+	eqFrames(t, "window after ACK 6", w3, ref.OnACKWindow(ackFrame(6)))
+	if len(w3) != 1 {
+		t.Errorf("final window = %d frames, want 1 (short final stops the window)", len(w3))
+	}
+
+	// ACK 7 (the short final) -> transfer complete, nothing sent.
+	if fin := txWindow(t, mac, enc, "tftp_handle_ack", ackFrame(7)); len(fin) != 0 {
+		t.Errorf("ACK of the short final block should end the transfer, got %d frames", len(fin))
+	}
+	if got := ref.OnACKWindow(ackFrame(7)); got != nil {
+		t.Errorf("Go authority still sent frames after the final ACK")
+	}
+}
+
+// TestTFTPServerWindowedGap drives a lost-block scenario: a cumulative ACK below
+// the last block sent must rewind the window's left edge and re-send from there,
+// matching the Go authority's OnWindowAck rewind.
+func TestTFTPServerWindowedGap(t *testing.T) {
+	mac := loadTFTPSrv(t)
+	const blksize, winsize = 512, 3
+	file := makeFile(6*blksize + 100)
+	ref := fillTFTPSrv(t, mac, "config.txt", file)
+	enc := z80h.NewENC28J60()
+	initTFTPSrvDriver(t, mac, enc)
+
+	rrq := windowedRRQ(blksize, winsize)
+	if !bytes.Equal(txAfter(t, mac, enc, "tftp_handle_rrq", rrq), ref.OnRRQ(rrq)) {
+		t.Fatalf("windowed OACK mismatch")
+	}
+
+	// ACK 0 -> {1,2,3}.
+	eqFrames(t, "first window", txWindow(t, mac, enc, "tftp_first_data", nil), ref.FirstWindow())
+
+	// Blocks 2,3 lost: the client only got block 1, so it ACKs 1 (cumulative).
+	// The server rewinds winAcked to 1 and re-sends {2,3,4}.
+	wGap := txWindow(t, mac, enc, "tftp_handle_ack", ackFrame(1))
+	eqFrames(t, "rewind window after ACK 1", wGap, ref.OnACKWindow(ackFrame(1)))
+
+	// ACK 4 -> {5,6,7} (block 7 short final).
+	w := txWindow(t, mac, enc, "tftp_handle_ack", ackFrame(4))
+	eqFrames(t, "window after ACK 4", w, ref.OnACKWindow(ackFrame(4)))
+
+	// ACK 7 -> complete.
+	if fin := txWindow(t, mac, enc, "tftp_handle_ack", ackFrame(7)); len(fin) != 0 {
+		t.Errorf("final ACK should end the transfer, got %d frames", len(fin))
+	}
+	_ = ref.OnACKWindow(ackFrame(7))
+}
+
+// TestTFTPServerWindowedShortFinalMidWindow checks a short final block that falls
+// BEFORE the window is full: the window stops early at the short block, and its
+// ACK completes the transfer (matching NextWindow's break + OnWindowAck).
+func TestTFTPServerWindowedShortFinalMidWindow(t *testing.T) {
+	mac := loadTFTPSrv(t)
+	const blksize, winsize = 512, 4
+	file := makeFile(2*blksize + 100) // blocks 1,2 full, block 3 short — window of 4 stops at 3
+	ref := fillTFTPSrv(t, mac, "config.txt", file)
+	enc := z80h.NewENC28J60()
+	initTFTPSrvDriver(t, mac, enc)
+
+	rrq := windowedRRQ(blksize, winsize)
+	if !bytes.Equal(txAfter(t, mac, enc, "tftp_handle_rrq", rrq), ref.OnRRQ(rrq)) {
+		t.Fatalf("windowed OACK mismatch")
+	}
+
+	// ACK 0 -> {1,2,3} (only 3 frames though windowsize is 4: block 3 is short).
+	w1 := txWindow(t, mac, enc, "tftp_first_data", nil)
+	eqFrames(t, "first window (short final mid-window)", w1, ref.FirstWindow())
+	if len(w1) != 3 {
+		t.Errorf("first window = %d frames, want 3 (short final stops before windowsize=4)", len(w1))
+	}
+
+	// ACK 3 (the short final) -> complete.
+	if fin := txWindow(t, mac, enc, "tftp_handle_ack", ackFrame(3)); len(fin) != 0 {
+		t.Errorf("ACK of the short final block should end the transfer, got %d frames", len(fin))
+	}
+	if got := ref.OnACKWindow(ackFrame(3)); got != nil {
+		t.Errorf("Go authority sent frames after the final ACK")
 	}
 }
 
