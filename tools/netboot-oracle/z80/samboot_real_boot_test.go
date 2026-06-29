@@ -369,6 +369,120 @@ func TestRealBootBootsToBASIC(t *testing.T) {
 	}
 }
 
+// TestHWSADPagedPointerContract is the i280b-b2h (§8j/§8k) regression guard: it
+// drives the REAL B-DOS 1.5t HWSAD hook prelude (&9E1F-&9E60, resident at section
+// C; run here at its section-B alias &5E16 with B-DOS paged into section B) and
+// proves, against Colin's actual bytes, that the prelude treats hk.hl as a PAGED
+// pointer — `out (&fb)` repages SECTION C from H's top 2 bits before the SD writer
+// streams the 512 source bytes from there.
+//
+// The contract (empirically, from the run): the page switched into section C is
+// (H>>6)-1, raw, in {0,1,2} — H[7:6]==00 is the <16384 range-error path, never a
+// flat/no-switch branch. So our seam's FLAT section-C pointer (BD_WRITE_BUF=&BE42,
+// H=&BE -> page 1) repages section C to absolute page 1, DISPLACING B-DOS (its own
+// resident page) mid-handler -> the hardware write hang (§8d/§8g: HWSAD_PRE fires,
+// HWSAD_POST never does). The FIX direction this test pins: stage the source in an
+// absolute page the encoding can name (0/1/2) and pass a correctly-paged hk.hl —
+// the positive sub-case proves that then reads OUR buffer, not B-DOS.
+func TestHWSADPagedPointerContract(t *testing.T) {
+	rom, eeprom := loadRealCaptures(t)
+	mac, _ := newRealBootMachine(t, rom, eeprom)
+
+	res, err := mac.RunBootFrom(0x0000, z80h.Entry{
+		StepCap: realBootStepCap, StopPC: addrEditorIdle, StopPCSkip: 16,
+	})
+	if err != nil {
+		t.Fatalf("real boot faulted: %v", err)
+	}
+	if !res.ReachedStop {
+		t.Fatalf("boot did not reach the editor idle loop (finalPC=&%04X) — B-DOS not resident", res.PC)
+	}
+	dosPage := mac.Pager().HMPR & 0x1F
+
+	const (
+		hkA   = 0x81D9
+		hkHL  = 0x81DA
+		hkDE  = 0x81DC
+		hkBC  = 0x81DE
+		devNo = 0x780B
+		devCl = 0x8135
+
+		aliasHWSAD   = 0x9E16 - 0x4000 // &5E16
+		aliasPostOut = 0x9E60 - 0x4000 // &5E60 (the `ld (&780f),hl` right after `out (&fb),a`)
+	)
+
+	// runPrelude drives the prelude with hk.hl pre-poked and a clean HMPR (= B-DOS
+	// page), trapping at &9E60 to read the page the `out (&fb)` switched into section
+	// C. hk.a=1 makes the device-select &8662 RET cleanly. Returns -1 if the out was
+	// never reached (the H[7:6]==00 range-error path).
+	runPrelude := func(hkhl uint16) int {
+		mac.Pager().LMPR = (dosPage - 1) & 0x1F // B-DOS into section B; ROM0 stays at section A
+		mac.Pager().HMPR = dosPage              // clean start: section C = B-DOS, every probe
+		mac.Write(hkA-0x4000, []byte{1})
+		mac.WriteU16LE(hkHL-0x4000, hkhl)
+		mac.Write(hkDE-0x4000, []byte{0x02, 0x00})
+		mac.Write(hkBC-0x4000, []byte{0, 0})
+		mac.Write(devCl, []byte{0x44})
+		mac.Write(devNo, []byte{1})
+		outPage := -1
+		if _, err := mac.RunBootFrom(aliasHWSAD, z80h.Entry{
+			StepCap: 2_000_000,
+			Trace: func(pc uint16) {
+				if pc == aliasPostOut && outPage < 0 {
+					outPage = int(mac.Pager().HMPR & 0x1F)
+				}
+			},
+		}); err != nil {
+			t.Fatalf("prelude run faulted (hk.hl=&%04X): %v", hkhl, err)
+		}
+		return outPage
+	}
+
+	// The decode: page = (H>>6)-1, raw to HMPR. Each non-zero top-bit pattern
+	// repages section C and DISPLACES B-DOS (whose own page the flat pointer names).
+	for _, c := range []struct {
+		hkhl     uint16
+		wantPage int
+	}{
+		{0x7E42, 0}, // H top=01 -> page 0
+		{0xBE42, 1}, // H top=10 -> page 1  (this is our seam's BD_WRITE_BUF=&BE42)
+		{0xFE42, 2}, // H top=11 -> page 2
+	} {
+		got := runPrelude(c.hkhl)
+		if got != c.wantPage {
+			t.Errorf("hk.hl=&%04X: section C <- page %d, want page %d ((H>>6)-1)", c.hkhl, got, c.wantPage)
+		}
+		if got == int(dosPage) {
+			t.Errorf("hk.hl=&%04X: section C page %d did not change from B-DOS page %d — the repage that should hang did not happen", c.hkhl, got, dosPage)
+		}
+	}
+	if dosPage == 1 {
+		t.Fatalf("B-DOS booted into page 1, which collides with this test's assumption (the flat-&BE42 displacement) — investigate the boot paging")
+	}
+
+	// The range-error path: a section-A pointer (H[7:6]==00) never reaches the out.
+	if got := runPrelude(0x3E42); got != -1 {
+		t.Errorf("hk.hl=&3E42 (H[7:6]==00): out reached (page %d), want the &9E89 <16384 range-error path (no page-switch)", got)
+	}
+
+	// The FIX mechanism: a correctly-paged hk.hl reads OUR buffer. Stage a sentinel
+	// in absolute page 1 at the in-page offset the prelude will read (post-switch
+	// source addr for hk.hl=&BE42 is section-C &BE42 = page-1 offset &3E42), then
+	// drive the prelude and confirm section C (now page 1) holds the sentinel — i.e.
+	// the SD writer would stream OUR bytes, not B-DOS's.
+	const srcPage, inPageOff = 1, 0xBE42 - 0x8000
+	sentinel := [4]byte{0xDE, 0xAD, 0xBE, 0xEF}
+	for i, b := range sentinel {
+		mac.Pager().RAM[srcPage][inPageOff+i] = b
+	}
+	if got := runPrelude(0xBE42); got != srcPage {
+		t.Fatalf("positive: section C <- page %d, want page %d", got, srcPage)
+	}
+	if got := mac.Read(0xBE42, 4); !bytes.Equal(got, sentinel[:]) {
+		t.Errorf("positive: after paging page %d into section C, &BE42 reads % X, want the sentinel % X (a correctly-paged hk.hl must read our buffer)", srcPage, got, sentinel[:])
+	}
+}
+
 // (The earlier TestRealBootChunk1CallsZeroedStreamVar / TestRealBootInitRunsBeforeChunk1
 // tests were removed: they studied a B-DOS helper library that the EEPROM-addressing
 // bug made the boot wander into. With the device-linear fix the boot runs the

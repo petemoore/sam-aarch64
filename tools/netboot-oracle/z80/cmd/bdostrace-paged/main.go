@@ -538,6 +538,112 @@ func (m *machine) experimentShadowA() {
 	fmt.Println("     Fix: `xor a / ex af,af'` before the rst 8 pins hk.a=0 (honors the contract).")
 }
 
+// ---------------------------------------------------------------------------
+// Experiment 5: the paged-pointer hk.hl page-switch (i280b-b2h, §8j). The
+// HWSAD/HRSAD prelude (&9E1F-&9E60) treats hk.hl as a PAGED pointer: it decodes
+// the top 2 bits of H into a source page (&9E27 `sub &40; rlca; rlca` ->
+// &81DE), then at &9E5E `out (&fb),a` PAGES THAT INTO SECTION C before the SD
+// writer streams the 512 bytes from there. Our seam passes a FLAT section-C
+// address (HL = BD_WRITE_BUF = &BE42), so the prelude repages section C and
+// displaces B-DOS (page 29) mid-handler -> the hardware hang.
+//
+// This experiment drives the REAL prelude (B-DOS paged into section B so its
+// section-B aliases resolve) with each candidate hk.hl, using hk.a=1 so the
+// device-select &8662 RETs cleanly (the a=0/a=2 sub-paths wander into ROM
+// bridges the editor-idle snapshot lacks — experiment 3/4), and traps at &9E60
+// (the instruction right after the `out (&fb)`) to read the page that was
+// actually switched into section C. It empirically settles the §8j decode:
+// which HMPR page each hk.hl selects, and whether B-DOS is displaced.
+func (m *machine) experimentPagedPointer() {
+	fmt.Println("\n== experiment 5: hk.hl is a PAGED pointer — the §8j page-switch (i280b-b2h) ==")
+	fmt.Println("  Prelude &9E27: page = ((H & &C0) - &40) rlca rlca  (-> &81DE), then &9E5E")
+	fmt.Println("  `out (&fb),a` pages it into section C; the SD writer streams from there.")
+	fmt.Printf("  B-DOS is resident at section-C page %d; displacing it mid-handler = the hang.\n", m.dosPage)
+
+	const (
+		aliasHWSAD   = addrHWSAD - 0x4000 // &5E16
+		aliasPostOut = 0x9E60 - 0x4000    // &5E60: the `ld (&780f),hl` right after `out (&fb),a`
+	)
+	// runPrelude drives the HWSAD prelude with hk.hl pre-poked and a clean HMPR
+	// (= dosPage), trapping at &9E60 to read the page the `out (&fb)` switched into
+	// section C. hk.a=1 so the device-select &8662 RETs cleanly. Returns the OUT'd
+	// page (-1 if the out was never reached, e.g. the H[7:6]==00 range-error path).
+	runPrelude := func(hkhl uint16) (outPage int, steps uint64) {
+		m.pageDOSIntoSectionB()
+		m.mac.Pager().HMPR = m.dosPage // clean start: section C = B-DOS, every probe
+		m.mac.Write(hkA-0x4000, []byte{1})
+		m.mac.WriteU16LE(hkHL-0x4000, hkhl)
+		m.mac.Write(hkDE-0x4000, []byte{0x02, 0x00}) // E=sector2 D=track0
+		m.mac.Write(hkBC-0x4000, []byte{0, 0})
+		m.mac.Write(winDevCls, []byte{0x44})
+		m.mac.Write(winDevVar, []byte{1})
+		outPage = -1
+		r, _ := m.mac.RunBootFrom(aliasHWSAD, z80h.Entry{
+			StepCap: 2_000_000,
+			Trace: func(pc uint16) {
+				m.lastPC = pc
+				if pc == aliasPostOut && outPage < 0 {
+					outPage = int(m.mac.Pager().HMPR & 0x1F)
+				}
+			},
+		})
+		return outPage, r.Steps
+	}
+
+	// --- negative probes: the decode + the B-DOS displacement ----------------
+	fmt.Println("  decode: page = (H>>6)-1, OUT raw to HMPR -> section C; B-DOS is page", m.dosPage)
+	for _, p := range []struct {
+		label string
+		hkhl  uint16
+	}{
+		{"our seam (flat &BE42)", 0xBE42},
+		{"H top=01 (&7E42)", 0x7E42},
+		{"H top=10 (&BE42)", 0xBE42},
+		{"H top=11 (&FE42)", 0xFE42},
+		{"H top=00 (&3E42, <16384 range-err)", 0x3E42},
+	} {
+		outPage, steps := runPrelude(p.hkhl)
+		outStr, disp := "(out not reached)", ""
+		if outPage >= 0 {
+			outStr = fmt.Sprintf("section C <- page %d", outPage)
+			if outPage == int(m.dosPage) {
+				disp = "B-DOS INTACT"
+			} else {
+				disp = fmt.Sprintf("B-DOS DISPLACED (was %d)", m.dosPage)
+			}
+		}
+		fmt.Printf("  [%-34s] hk.hl=&%04X %-20s %s  (steps=%d)\n", p.label, p.hkhl, outStr, disp, steps)
+	}
+
+	// --- positive probe: a correctly-paged hk.hl reads OUR buffer ------------
+	// Stage a sentinel in ABSOLUTE page 1 at the in-page offset the prelude will
+	// read, then drive the prelude with hk.hl encoding (page 1 -> H[7:6]=10) +
+	// that offset. After the page-switch, section C (= page 1) at the post-set-7,h
+	// address must hold our sentinel — proving the SD writer would stream OUR
+	// bytes, not B-DOS's. Post-switch source addr = ((H&&3F)|&80):L; for hk.hl=
+	// &BE42 that is &BE42, i.e. page-1 offset &BE42-&8000 = &3E42.
+	const srcPage = 1
+	const hkhlPos = 0xBE42 // top=10 -> page 1; offset (in section C) -> &BE42
+	const inPageOff = 0xBE42 - 0x8000
+	sentinel := []byte{0xDE, 0xAD, 0xBE, 0xEF}
+	for i, b := range sentinel {
+		m.mac.Pager().RAM[srcPage][inPageOff+i] = b
+	}
+	outPage, _ := runPrelude(hkhlPos)
+	// section C now = page outPage; read the 4 bytes at &BE42 through live paging.
+	got := m.mac.Read(0xBE42, 4)
+	match := outPage == srcPage && got[0] == 0xDE && got[1] == 0xAD && got[2] == 0xBE && got[3] == 0xEF
+	fmt.Printf("  [positive: buffer in page %d, hk.hl=&%04X] section C <- page %d; &BE42 reads %02X %02X %02X %02X -> %s\n",
+		srcPage, hkhlPos, outPage, got[0], got[1], got[2], got[3],
+		map[bool]string{true: "SENTINEL (correct source!)", false: "MISMATCH"}[match])
+
+	fmt.Println("  => the hook ALWAYS repages section C from hk.hl's top 2 bits (page 0/1/2 only),")
+	fmt.Println("     reading the 512 source bytes from there; a FLAT section-C pointer names")
+	fmt.Println("     B-DOS's own page, so it is displaced -> the hang. A correctly-paged hk.hl")
+	fmt.Println("     (top 2 bits = sourcePage+1, low 14 = offset) reads our buffer — IF the")
+	fmt.Println("     buffer is in absolute page 0/1/2. See trinity-sd-z80-interface.md §8k.")
+}
+
 func fmtPCs(ring []uint16, ri int) string {
 	out := ""
 	for i := 0; i < len(ring); i++ {
@@ -557,6 +663,7 @@ func main() {
 	m.experimentDeviceSelect()
 	m.experimentHandlerSymmetry()
 	m.experimentShadowA()
+	m.experimentPagedPointer()
 
 	fmt.Println("\n== GOLD CONTRACT (see docs/notes/trinity-sd-z80-interface.md §8b) ==")
 	fmt.Println("  A successful HWSAD write needs the ambient device armed as Trinity SD:")

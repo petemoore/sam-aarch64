@@ -24,6 +24,15 @@ The captured ROM + EEPROM at `~/sam-archive/samboot-capture/{rom.bin,eeprom.bin}
 go run ./cmd/bdostrace-paged
 ```
 
-It boots to B-DOS idle, then runs three experiments (rst-8 dispatch faithfulness;
-the &8662 device-select → &780B; HWSAD-vs-HRSAD gate symmetry) and prints the gold
-contract. No flags.
+It boots to B-DOS idle, then runs five experiments and prints the gold contract.
+No flags:
+
+1. rst-8 dispatch faithfulness;
+2. the `&8662` device-select → `&780B`;
+3. HWSAD-vs-HRSAD gate symmetry;
+4. the `hk.a`=A' shadow-accumulator device discriminator (§8h);
+5. **the paged-pointer `hk.hl` page-switch (§8j/§8k, i280b-b2h)** — drives the real
+   prelude with each candidate `hk.hl`, trapping at `&9E60` to read the page the
+   `out (&fb)` switched into section C: the flat `&BE42` displaces B-DOS, and a
+   correctly-paged `hk.hl` reads our own buffer. The `SKIP_PRIVATE_TESTS`-gated
+   `TestHWSADPagedPointerContract` (`samboot_real_boot_test.go`) asserts the same.

@@ -4877,10 +4877,22 @@
   parent: i280b-b2
 
 - id: i280b-b2h
-  title: "Data-phase SD-hook hang: any B-DOS SD rst-8 hook (HWSAD/HRECORD) wedges in the data phase after serve_rearm_enc's ereset; the same hook works at claim time (§8i)"
+  title: "Root-cause CONFIRMED in emulation (§8j/§8k): HWSAD pages section C from hk.hl[15:14]∈{0,1,2}, displacing B-DOS; our flat &BE42 is unservable by the hook"
   description: |
-    OPEN. Re-localized from i280b-b2g. Two TAPO shots (docs/notes/trinity-sd-z80-interface.md §8h/§8i): (1) the hk.a=A' contract fix (pin A'=0) did NOT stop the hang — still HWSAD_PRE without HWSAD_POST. (2) re-HRECORD-selecting immediately before the write hangs EARLIER, at FLUSH_PRE before HWSAD_PRE — i.e. the re-select (a DIFFERENT SD hook) also wedges, while the identical HRECORD succeeds at claim time (CLAIM_SELECT_POST fires every shot). So the hang is NOT HWSAD-specific: any B-DOS SD rst-8 hook invoked in the data phase wedges. The differentiator is the context between claim and data phases: serve_rearm_enc's ENC ereset (a full soft-reset of the shared one-PIC ENC/SD Trinity controller). Resurfaces the §8d shared-bus framing, sharpened to 'the first data-phase SD hook wedges'; b2d's drv_wait_link fixed the ENC-TX handshake after ereset but NOT the SD side. Next: re-init/quiesce the SD side of the shared controller after serve_rearm_enc's ereset, before the first data-phase SD hook (apply the A'=0 fix to the re-select probe to remove that confound), then re-shoot (TAPO self-serve; success = HWSAD_POST + push completes). Confound to control: the §8i re-select probe ran HRECORD with a stale A'.
+    DONE. §8j (static analysis) is now RUNNING-PROOF against Colin's real B-DOS 1.5t: cmd/bdostrace-paged experiment 5 + the SKIP_PRIVATE_TESTS-gated regression TestHWSADPagedPointerContract boot the captured ROM/EEPROM to B-DOS-resident idle and drive the REAL HWSAD prelude (&9E1F-&9E60). MEASURED decode: page=(H>>6)-1 written RAW to HMPR, in {0,1,2} only (&8662/&9C6A leave &81DE untouched); H[7:6]==00 = the &9E89 <16384 range-error path (NO flat/no-switch branch, so §8j option-b does not exist); source then streamed from section C at ((H&3F)|80):L. Our seam's flat HL=&BE42 -> page 1 -> section C repaged to absolute page 1, DISPLACING B-DOS (its resident page) mid-handler = the §8d/§8g hang. The positive sub-case CONFIRMS the fix mechanism: a sentinel staged in absolute page 1 + hk.hl=&BE42 is read back from section C -> a correctly-paged hk.hl reads OUR buffer. Contract: hk.hl=((srcPage+1)<<14)|sectionC-offset, source must be in absolute page 0/1/2. The actual seam fix (low-page staging) is split to i280b-b2i. Full detail: docs/notes/trinity-sd-z80-interface.md §8k.
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 731, role: completing}
+  parent: i280b-b2
+
+- id: i280b-b2i
+  title: "Implement the HWSAD low-page staging fix (§8k): copy each sector into an absolute page 0/1/2 scratch + pass a paged hk.hl; pin the serve's runtime LMPR/HMPR page map first"
+  description: |
+    OPEN. The §8j/§8k root cause is CONFIRMED in emulation (i280b-b2h): the HWSAD/HRSAD prelude (&9E1F-&9E60) pages section C from hk.hl's top 2 bits (page=(H>>6)-1, raw, in {0,1,2}; H[7:6]==00 = <16384 range error) then streams the 512 source bytes from section C. Our seam's flat HL=BD_WRITE_BUF=&BE42 (H=&BE->page1) repages section C to absolute page 1, displacing B-DOS mid-handler = the hang. The encoding can only name absolute pages 0/1/2, but the serve runs in a high page P (trinload push), so BD_WRITE_BUF's page is unnameable. FIX: copy each 512-byte sector into an absolute-page-0/1/2 scratch immediately before the rst 8, then pass hk.hl=((srcPage+1)<<14)|sectionC-framed-offset. Clean reuse-B-DOS candidate: B-DOS's own res.buf (&7913, page 1). PREREQUISITE (correctness-critical, shared SD card): pin the serve's runtime LMPR/HMPR page map - which absolute page section B holds at serve time, and whether res.buf/another low region is safe transiently without corrupting B-DOS/trinload/screen - by researching the serve boot paging or instrumenting it, BEFORE coding/shooting. Emulation-checkable in cmd/bdostrace-paged exp 5 + TestHWSADPagedPointerContract (the positive sub-case shows a correctly-paged hk.hl reads our buffer). Then TAPO shot: success = HWSAD_PRE -> HWSAD_POST + push completes.
   status: OPEN
+  depends_on: [i280b-b2h]
   kind: leaf
   owner: agent
   parent: i280b-b2

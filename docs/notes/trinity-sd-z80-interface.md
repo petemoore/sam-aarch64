@@ -608,6 +608,54 @@ observable in the `bdostrace-paged` harness (drive HWSAD with a section-C `hk.hl
 the `OUT (&FB)` repage B-DOS away — the wander §8b already saw), so the fix is
 emulation-checkable before a TAPO shot (success = `HWSAD_PRE → HWSAD_POST` + push completes).
 
+## 8k. §8j CONFIRMED in emulation against Colin's bytes — the decode + the page-0/1/2 constraint (i280b-b2h)
+
+§8j was static analysis. This is the **running proof** against Colin's real B-DOS 1.5t:
+`cmd/bdostrace-paged` experiment 5 + the `SKIP_PRIVATE_TESTS`-gated regression
+`TestHWSADPagedPointerContract` (`samboot_real_boot_test.go`) boot the captured ROM/EEPROM to
+the B-DOS-resident idle, then drive the **real** HWSAD prelude (`&9E1F-&9E60`, run at its
+section-B alias `&5E16` with B-DOS paged into section B) with each candidate `hk.hl`,
+`hk.a`=1 (so the device-select `&8662` RETs cleanly), trapping at `&9E60` to read the page the
+`out (&fb)` actually switched into section C.
+
+**The decode, measured (not derived):**
+- `page = (H>>6) − 1`, written **raw** to HMPR (port `&FB`). It is **not** combined with any
+  base page — `&8662` and `&9C6A` (the two intervening calls) leave `&81DE` untouched. So the
+  page is one of **0, 1, 2** only: `H[7:6]`=`01`→0, `10`→1, `11`→2.
+  - `hk.hl=&7E42 → section C ← page 0`; `&BE42 → page 1`; `&FE42 → page 2`.
+- `H[7:6]==00` (a `<16384` address) takes the `&9E89` **range-error** path — the `out (&fb)`
+  is never reached. There is **no flat / no-switch branch** (so §8j option (b) — "stage where
+  the prelude reads it flat" — does **not exist**; a section-A pointer is rejected, not read
+  in place).
+- After the switch the SD writer streams the 512 source bytes **from section C** at
+  `((H & &3F) | &80):L` (the `set 7,h` at `&9E59` frames the offset into `&8000-&BFFF`).
+
+**Our seam's bug, confirmed:** `BD_WRITE_BUF = &BE42` (`H=&BE`) → page 1 → section C is
+repaged to **absolute page 1**, **displacing B-DOS** (its own resident page, 29 in the boot
+snapshot) mid-handler — exactly the §8d/§8g hardware hang (`HWSAD_PRE` fires, `HWSAD_POST`
+never does). The test asserts the switch happens AND that page ≠ B-DOS's page for all three
+non-zero patterns.
+
+**The fix mechanism, also confirmed (the positive sub-case):** stage a sentinel in **absolute
+page 1** at the in-page offset the prelude reads (for `hk.hl=&BE42` that is section-C `&BE42` =
+page-1 offset `&3E42`), drive the prelude, and section C (now page 1) reads the **sentinel** —
+i.e. a correctly-paged `hk.hl` makes the SD writer stream **our** buffer, not B-DOS. So the
+contract is: **`hk.hl = ((sourcePage + 1) << 14) | (sectionC-framed 14-bit offset)`**, and
+**the source must live in absolute page 0, 1, or 2** (the only pages the encoding can name).
+
+**The remaining design problem (the actual seam fix, split to i280b-b2i).** The serve runs in
+high memory (trinload pushes it to a high page `P`; `BD_WRITE_BUF` is in page `P`, not 0/1/2),
+so the encoding **cannot name our buffer's page**. The fix must **copy each 512-byte sector
+into an absolute page 0/1/2 scratch** immediately before the `rst 8`, then pass the paged
+`hk.hl` for that scratch. The clean "reuse B-DOS" candidate is **B-DOS's own sector buffer
+`res.buf` (&7913, in section B → page 1 when LMPR maps page 1 there)** — the buffer B-DOS's SD
+path is built around. The open prerequisite before coding/shooting: **the serve's runtime
+LMPR/HMPR page map** — which absolute page section B holds at serve time, and whether `res.buf`
+(or another low-page region) is safe to use transiently without corrupting B-DOS/trinload/the
+screen. A wrong page = a wasted shot on a **shared** SD card, so this is pinned down (research
+the serve boot paging, or instrument it) before the write is attempted. The §8h `A'=0` fix
+(#730) stays (real, independent); the page-switch fires regardless of `A'`.
+
 ## 9. Porting to fresh Z80
 
 The fork's primitives map onto existing sam-aarch64 SPI code (the SD port reuses the same busy-poll / one-byte-lag / auto-null shapes the ENC and EEPROM drivers already implement). **Mirror these:**
