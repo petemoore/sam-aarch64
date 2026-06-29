@@ -32,18 +32,23 @@ import (
 // ---------------------------------------------------------------------------
 
 // TestBDOSValidateDiskRecord asserts the Z80 bdos_validate_disk_record agrees
-// with the Go authority bdos.ValidateDiskRecord across the four cases that
-// matter: valid image, wrong size, missing stamp, wrong stamp bytes.
+// with the Go authority bdos.ValidateDiskRecord on the SIZE-ONLY contract: a
+// Trinity record is exactly RecordSize bytes, and that is the whole check. The
+// in-image "BDOS"@232 stamp is irrelevant — a pushed .mgt does NOT need B-DOS
+// installed on it (the DOS inside is one level deeper than Trinity's record
+// container; Pete, 2026-06-21 + 2026-06-29). The old stamp gate wrongly rejected
+// every bootable non-B-DOS .mgt (including all of ours).
 func TestBDOSValidateDiskRecord(t *testing.T) {
 	// validSector is a 512-byte first sector with the BDOS stamp at offset 232.
 	validSector := make([]byte, 512)
 	copy(validSector[bdos.BDOSStampOffset:], []byte("BDOS"))
 
-	// badStampSector has a 4-byte field at offset 232 that is not "BDOS".
+	// badStampSector has a 4-byte field at offset 232 that is not "BDOS"
+	// (some other DOS formatted inside the .mgt — irrelevant to Trinity).
 	badStampSector := make([]byte, 512)
 	copy(badStampSector[bdos.BDOSStampOffset:], []byte("XXXX"))
 
-	// zeroSector has no stamp at all (all zeros at offset 232).
+	// zeroSector has no stamp at all (the real-world case — e.g. cj.mgt).
 	zeroSector := make([]byte, 512)
 
 	cases := []struct {
@@ -53,37 +58,37 @@ func TestBDOSValidateDiskRecord(t *testing.T) {
 		wantValid byte    // expected BD_REC_VALID result (1 = valid, 0 = reject)
 	}{
 		{
-			name:      "valid: size==819200 and stamp==BDOS",
+			name:      "valid: size==819200, B-DOS-stamped",
 			sizeLE:    le32(bdos.RecordSize),
 			sector:    validSector,
 			wantValid: 1,
 		},
 		{
-			name:      "wrong size (too small): stamp present but size mismatch",
+			name:      "valid: size==819200, NO stamp (the real-world .mgt case)",
+			sizeLE:    le32(bdos.RecordSize),
+			sector:    zeroSector,
+			wantValid: 1,
+		},
+		{
+			name:      "valid: size==819200, non-BDOS stamp (other DOS inside)",
+			sizeLE:    le32(bdos.RecordSize),
+			sector:    badStampSector,
+			wantValid: 1,
+		},
+		{
+			name:      "wrong size (too small): rejected regardless of stamp",
 			sizeLE:    le32(bdos.RecordSize - 1),
 			sector:    validSector,
 			wantValid: 0,
 		},
 		{
-			name:      "wrong size (too large): stamp present but size mismatch",
+			name:      "wrong size (too large): rejected regardless of stamp",
 			sizeLE:    le32(bdos.RecordSize + 1),
 			sector:    validSector,
 			wantValid: 0,
 		},
 		{
-			name:      "missing stamp: size correct but no BDOS at +232",
-			sizeLE:    le32(bdos.RecordSize),
-			sector:    zeroSector,
-			wantValid: 0,
-		},
-		{
-			name:      "wrong stamp bytes: size correct but stamp != BDOS",
-			sizeLE:    le32(bdos.RecordSize),
-			sector:    badStampSector,
-			wantValid: 0,
-		},
-		{
-			name:      "zero size: both checks fail",
+			name:      "zero size: rejected",
 			sizeLE:    le32(0),
 			sector:    zeroSector,
 			wantValid: 0,

@@ -8,15 +8,16 @@
 //     flat-file archive, never bootable.
 //   - DiskRecord — names with the "trinity-sam-disks/" prefix; stored as a
 //     raw Trinity SD record.  Before committing, the server validates that the
-//     image has size exactly RecordSize AND the BDOS stamp at byte 232, and
-//     rejects on mismatch — corrupt disk-records cannot accumulate.
+//     image has size exactly RecordSize, and rejects on mismatch — corrupt
+//     disk-records cannot accumulate.  The "trinity-sam-disks/" prefix is the
+//     intent declaration; size is the structural check.  Which DOS (if any) is
+//     formatted INSIDE the .mgt is one level deeper and irrelevant to Trinity.
 //
 // This is the host-verifiable authority for the Z80 bdos_validate_disk_record
 // routine (src/netboot/bdos_seam.asm).
 package bdos
 
 import (
-	"errors"
 	"fmt"
 )
 
@@ -63,22 +64,22 @@ func Classify(name string) (class StorageClass, internalName string) {
 // structural contract:
 //
 //   - size == RecordSize (exactly 819,200 bytes)
-//   - firstSector[232:236] == "BDOS" (the stamp bdos_inspect_record reads)
 //
-// Returns nil on success, or a descriptive error identifying the failure so
-// the rejection reason is clear.  firstSector must be at least 236 bytes long.
+// Size is the whole contract: a Trinity record is exactly 819,200 bytes, and any
+// full SAM disk image (B-DOS, SAMDOS, a game, our build-disk output) is a valid
+// bootable record — it does NOT need B-DOS installed on it. The "BDOS"@232 stamp
+// is B-DOS's own catalog/format signature (InspectRecord / bdos_inspect_record
+// still read it to IDENTIFY B-DOS disks for the overwrite-safety show-name gate),
+// NOT a boot or selection requirement: booting a record executes the disk's own
+// boot sector and never checks +232. Validating the stamp here wrongly rejected
+// every bootable non-B-DOS-formatted disk (including all of ours). (Pete,
+// 2026-06-21 + 2026-06-29.)
+//
+// Returns nil on success, or a descriptive error identifying the failure.
 func ValidateDiskRecord(size int, firstSector []byte) error {
 	if size != RecordSize {
 		return fmt.Errorf("disk record: wrong size %d, want exactly %d (80 tracks × 10 sectors × 512 bytes)",
 			size, RecordSize)
-	}
-	if len(firstSector) < BDOSStampOffset+4 {
-		return fmt.Errorf("disk record: first sector too short (%d bytes), need at least %d to read BDOS stamp",
-			len(firstSector), BDOSStampOffset+4)
-	}
-	stamp := firstSector[BDOSStampOffset : BDOSStampOffset+4]
-	if stamp[0] != 'B' || stamp[1] != 'D' || stamp[2] != 'O' || stamp[3] != 'S' {
-		return errors.New("disk record: BDOS stamp absent at byte 232 (not a B-DOS-formatted record)")
 	}
 	return nil
 }
