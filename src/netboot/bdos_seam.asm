@@ -973,6 +973,12 @@ bdos_write_sector:
                 if defined(NETBOOT_DEBUG)
                 ld      a, DBG_HWSAD_PRE
                 call    dbg_marker
+                ; i280b-b2i: report the runtime LMPR/HMPR at the write moment. §8k
+                ; proved the HWSAD prelude pages (H>>6)-1 into section C; whether our
+                ; flat HL=BD_WRITE_BUF=&BE42 names the buffer's real page depends on
+                ; HMPR here (the serve is pushed to page 1, so &BE42 may already be
+                ; correct — the §8k displacement was an editor-idle-harness artifact).
+                call    dbg_report_paging
                 endif
                 ; i280b-b2g: honor the B-DOS hk.a contract — the hook dispatcher
                 ; (&8319) reads the caller's ALTERNATE accumulator A' as hk.a

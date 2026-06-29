@@ -49,6 +49,13 @@ DBG_FINALIZE:       equ &30           ; final block: entering wd_finalize (flush
 DBG_FINALIZE_VALID: equ &31           ; record validated + claimed -> final ACK
 DBG_FINALIZE_BAD:   equ &32           ; invalid image -> ERROR(3)
 DBG_DONE_CTRL:      equ &40           ; "tftp.done" control received -> return to trinload
+; i280b-b2i: runtime-paging value reports. Each is a TAG marker immediately followed
+; by a SECOND marker whose code byte IS the register value (read as the UNKNOWN(&XX)
+; that follows the tag). They pin the serve's real LMPR/HMPR at the HWSAD write — the
+; decisive unknown for the §8k paged-pointer fix (is BD_WRITE_BUF's page nameable by
+; the (H>>6)-1 encoding at write time, or is the prelude paging a different page in?).
+DBG_HMPR_NEXT:      equ &50           ; the NEXT marker's code byte = HMPR (in a,(&fb)) at this point
+DBG_LMPR_NEXT:      equ &51           ; the NEXT marker's code byte = LMPR (in a,(&fa)) at this point
 
 dbg_marker:
                 push    af
@@ -108,6 +115,26 @@ dbg_marker:
                 pop     hl
                 pop     de
                 pop     bc
+                pop     af
+                ret
+
+; dbg_report_paging — emit the runtime LMPR/HMPR as two tag+value marker pairs
+; (i280b-b2i). PRESERVES ALL REGISTERS (each dbg_marker call does), so it can be
+; dropped at any handler boundary like dbg_marker itself. Sequence on the wire:
+;   HMPR_NEXT(&50), <HMPR byte>, LMPR_NEXT(&51), <LMPR byte>.
+; The SD/ENC one-PIC constraint is the same as dbg_marker: never call while an SD
+; chip-select is asserted; both call sites (HWSAD_PRE, FLUSH_PRE) are outside the
+; SD transaction.
+dbg_report_paging:
+                push    af
+                ld      a, DBG_HMPR_NEXT
+                call    dbg_marker
+                in      a, (&fb)                 ; HMPR (section C/D page)
+                call    dbg_marker
+                ld      a, DBG_LMPR_NEXT
+                call    dbg_marker
+                in      a, (&fa)                 ; LMPR (section A/B page)
+                call    dbg_marker
                 pop     af
                 ret
 

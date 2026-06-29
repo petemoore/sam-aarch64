@@ -643,6 +643,12 @@ i.e. a correctly-paged `hk.hl` makes the SD writer stream **our** buffer, not B-
 contract is: **`hk.hl = ((sourcePage + 1) << 14) | (sectionC-framed 14-bit offset)`**, and
 **the source must live in absolute page 0, 1, or 2** (the only pages the encoding can name).
 
+**⚠️ CORRECTION (§8l): the premise of this paragraph is WRONG and the low-page-staging fix it
+proposes is REFUTED by hardware.** trinload pushes the serve to **page 1** (not a high page), so
+`BD_WRITE_BUF=&BE42` is **already in page 1** and `hk.hl=&BE42` already names it correctly (HMPR=1
+at the write, measured). The "displacement" below is an editor-idle-**harness** artifact, not the
+serve's behaviour. Read §8l; the text below is retained only as the (mistaken) reasoning §8l corrects.
+
 **The remaining design problem (the actual seam fix, split to i280b-b2i).** The serve runs in
 high memory (trinload pushes it to a high page `P`; `BD_WRITE_BUF` is in page `P`, not 0/1/2),
 so the encoding **cannot name our buffer's page**. The fix must **copy each 512-byte sector
@@ -655,6 +661,52 @@ LMPR/HMPR page map** — which absolute page section B holds at serve time, and 
 screen. A wrong page = a wasted shot on a **shared** SD card, so this is pinned down (research
 the serve boot paging, or instrument it) before the write is attempted. The §8h `A'=0` fix
 (#730) stays (real, independent); the page-switch fires regardless of `A'`.
+
+## 8l. Hardware measurement REFUTES the §8k low-page-staging fix — the serve runs at HMPR=1, so &BE42 already names the buffer's page; the hang is DOWNSTREAM of the page-setup (i280b-b2i/b2j)
+
+§8k derived a fix (stage the source in an absolute page 0/1/2 + pass a paged `hk.hl`) from
+the premise that *"the serve runs in a high page P; `BD_WRITE_BUF` is in page P, not 0/1/2,
+so the encoding cannot name our buffer's page."* **That premise is factually wrong, and a
+hardware measurement refutes the whole fix direction.**
+
+**The measurement (TAPO self-serve, i280b-b2i instrumentation).** The debug serve now reports
+its live LMPR/HMPR as tag+value markers (`dbg_report_paging`, `DBG_HMPR_NEXT`/`DBG_LMPR_NEXT`)
+at **both** the staging point (`FLUSH_PRE`) and the write (`HWSAD_PRE`). A shot read, at **both**
+points, identically:
+- **HMPR = `&01`** → section C (`&8000-&BFFF`) = absolute **page 1**, section D = page 2.
+- **LMPR = `&1F`**.
+- Same end-state as §8d/§8g: `… DATA_BLOCK → FLUSH_PRE → HWSAD_PRE`, **no `HWSAD_POST`** (hangs in the `rst 8`).
+
+**Why this refutes §8k.** trinload pushes the serve to **page 1** (`trinpush-serve.py --page`
+default 1; `out (HMPR),1 ; jp &8000`, `trinload.asm:234-238`), so `BD_WRITE_BUF = &BE42` (section
+C) **is in absolute page 1** — confirmed live (HMPR=1 at staging *and* write). Our `hk.hl = &BE42`
+(`H=&BE`) decodes to `page = (H>>6)-1 = 1`, so the prelude's `out (&fb),1` pages **page 1** into
+section C — but HMPR is **already 1**, so it is a **no-op**: the buffer stays at `&BE42` and the SD
+writer streams **our** bytes correctly. **There is no wrong-page read and no displacement.** The
+§8k "displacement" was an artifact of the editor-idle **harness**, where B-DOS sits at page 29 in
+section C (so `out (&fb),1` there pages B-DOS away) — *not* the serve's runtime map, where section
+C is the serve's own page 1. So staging into a low page is **unnecessary**: the addressing is
+already correct.
+
+**What the hang is NOT (now cleared):** not the paged-pointer/`hk.hl` contract (§8k — addressing
+is correct on the serve), not `hk.a`/A' alone (§8h `A'=0` fix is in this binary, still hangs — as
+§8i already showed), not the page-switch displacing B-DOS (HMPR=1 ⇒ no-op). The earlier refutations
+stand: not `ereset` damaging the SD side (§8j), not DI/EI (§8j).
+
+**Where the hang IS (the live hypothesis for i280b-b2i):** downstream of the page-setup, in the
+device dispatch / SD write core reached by the `rst 8`. With `&780B` armed Trinity by the claim's
+HRECORD-select (CLAIM_SELECT_POST fired) and A'=0 leaving it, the write should take the SD path
+(`&A8F4`), not the FDC poll — so the prime suspects are (a) the **ambient device `&780B` not still
+2 at the data-phase write** (something between the claim and the write resets it — re-confirm by
+reporting `&780B` at `HWSAD_PRE`, the same way this shot reported HMPR/LMPR), or (b) the real
+**SD CMD24 write core busy-wait on hardware** (the `&DC` bit-3 poll that the koron-go SD model
+cannot reproduce because it always clears busy, §8a), i.e. the ENC/SD **one-PIC shared-bus** state
+left by `serve_rearm_enc` before the data-phase SD transaction (the §8d framing, for the *write*
+core rather than the claim handshake b2d fixed). Next instrumentation: report `&780B` (and the
+`&DC` busy bit) at `HWSAD_PRE`, and a marker *inside* the write core's busy-wait, to split (a) vs
+(b).
+
+This measurement is i280b-b2j (DONE); the re-localized fix is i280b-b2i (reframed OPEN).
 
 ## 9. Porting to fresh Z80
 
