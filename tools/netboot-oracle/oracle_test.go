@@ -350,15 +350,14 @@ func TestRRQBuilderMatchesClientOptionSet(t *testing.T) {
 		{Name: "blksize", Value: "1428"},
 		{Name: "tsize", Value: "0"},
 		{Name: "timeout", Value: "2"},
+		// windowsize=8 requests RFC 7440 windowed delivery; the Z80 receiver
+		// (netboot_client.asm cl_windowed, i120b-b3) handles it and stays
+		// lock-step when the server's OACK omits windowsize.
+		{Name: "windowsize", Value: "8"},
 	} {
 		if v, ok := got.Option(want.Name); !ok || v != want.Value {
 			t.Errorf("RRQ option %s = %q (ok=%v), want %q", want.Name, v, ok, want.Value)
 		}
-	}
-	// windowsize is deliberately NOT requested (i118): a lock-step client must
-	// not ask for RFC 7440 windowed delivery it cannot handle.
-	if v, ok := got.Option("windowsize"); ok {
-		t.Errorf("RRQ should not request windowsize, got %q", v)
 	}
 
 	// A captured RRQ must parse to octet/tsize=0 with a 1024 or 1468 blksize.
