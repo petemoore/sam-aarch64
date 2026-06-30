@@ -1245,6 +1245,10 @@ check-no-silent-skips:
 check-hosttest-carveouts:
 	bash tools/check-hosttest-carveouts.sh
 
+.PHONY: check-trinity-authority
+check-trinity-authority:
+	bash tools/check-trinity-authority.sh
+
 .PHONY: registry registry-sync-check registry-gen tables-gen enctab test-encoder ci-encoder
 
 # registry-gen — build the registry validate/gen CLI.  Operates on

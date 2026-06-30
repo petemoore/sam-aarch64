@@ -1,5 +1,10 @@
 package z80
 
+// Trinity-HW provenance (i273): this model is DERIVED FROM the SAM/Colin
+// authority recorded in tools/trinity-authority-ledger.txt; it is never itself
+// the authority for real Trinity hardware behaviour (CLAUDE.md rule 8 /
+// feedback_port_diff_authority_first).
+//
 // sdcard.go — host-side emulation of the SD card on the Quazar Trinity SPI bus
 // (the third device, after the ENC28J60 in enc28j60.go and the flash EEPROM in
 // eeprom.go). It models enough of the SD-SPI command state machine to run the

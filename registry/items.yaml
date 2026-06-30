@@ -4713,9 +4713,11 @@
   title: "Systemic: Z80/Colin SAM code is the authority for Trinity HW (EEPROM/SD/Ethernet); the Go model must be DERIVED from it, never treated as authority"
   description: |
     Stop-the-rot-at-source for the recurring class. PATTERN: a Go model gets treated as 'the authority' for real Trinity hardware behaviour, so emulator-green ships a hardware bug. Instances: i270 (CMD24 write matched to sdcard.go, our raw-SD emulator, not Colin's hardware-proven bdos15t — the Trinity SD is microcontroller-mediated); i145g (all-zeros CSD = a dropped leading &FF flush); i249/i250/i251 (serve fixes #3/#5/#6 emulation-gaps caught late). RULE: for ANY Trinity integration (EEPROM, SD card, ENC28J60 Ethernet) the AUTHORITY is the working Z80/Colin SAM code (Colin B-DOS 1.5t SD/EEPROM driver; the proven ENC driver) — the Go model is DERIVED FROM and VERIFIED AGAINST it, never the reverse. A Go-model comment claiming to BE the authority for HW behaviour is the anti-pattern. Codify as a CLAUDE.md rule + ideally a provenance check/lint flagging Trinity-HW code that cites the Go model as authority instead of the SAM/Colin source. First concrete instance = i270's fix. Likely expanded by the retrospective item.
-  status: OPEN
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 758, role: completing}
 
 - id: i274
   title: "Retrospective: analyse the recurring hardware-fidelity failure pattern across all incidents and propose source-level prevention (rules/hooks/skills/prompts)"

@@ -1,0 +1,40 @@
+# Trinity-hardware authority ledger (i273)
+#
+# The recurring rot (i270, i145g, i249/i250/i251): a Go model gets treated as
+# "the authority" for real Trinity hardware behaviour, so emulator-green ships a
+# hardware bug. The rule (CLAUDE.md "Development discipline" rule 8;
+# feedback_port_diff_authority_first): for ANY Trinity integration — the EEPROM,
+# the SD card, the ENC28J60 Ethernet, the B-DOS storage seam — the AUTHORITY is
+# the working Z80/Colin SAM code (Colin Piggot's B-DOS 1.5t SD/EEPROM driver, the
+# vendored Simon Owen ENC driver, our bdos_seam hooks). The Go model is DERIVED
+# FROM and VERIFIED AGAINST it, never the reverse.
+#
+# This ledger makes that derivation explicit and checkable. Each line maps a
+# Trinity-hardware Go MODEL file to its in-repo SAM/Colin authority source. The
+# lint (tools/check-trinity-authority.sh, `make check-trinity-authority`,
+# enforced in the staticcheck CI job) requires that:
+#   - every listed model file exists and carries the in-source provenance marker
+#     "Trinity-HW provenance (i273)" (the model itself disclaims being the
+#     authority and points here);
+#   - every listed authority path exists in the repo;
+#   - no file carries the provenance marker without a ledger entry (and vice
+#     versa) — so a NEW Trinity-hardware model cannot be added without declaring
+#     the SAM/Colin authority it is derived from.
+#
+# Format: <go-model-file> <in-repo-authority-path> [free-text note]
+# Blank lines and #-comments are ignored.
+#
+# NOT in this ledger (a deliberate scope boundary): the pure protocol/packet Go
+# code (frame/, dhcp/, tftp/, tcp/, http/, tls/, serve/, server/, smoke/, bdos/
+# field maths) — that IS the Go authority the Z80 is PORTED TO (the opposite
+# relationship; see feedback_go_is_encoding_authority). Likewise harness.go
+# (SAM paging seam — SAM Technical Manual) and tstates.go (Zilog Z80 timing) are
+# not Trinity peripherals and have non-Colin authorities. printrec.go models the
+# SAM ROM print restart, not Trinity hardware.
+
+tools/netboot-oracle/z80/enc28j60.go            src/netboot/encdrv.asm                    Simon Owen / simonowen/trinload ENC driver + ENC28J60 datasheet DS39662E
+tools/netboot-oracle/z80/sdcard.go              docs/notes/trinity-sd-z80-interface.md    i193 port authority; ~/sam-archive/bdos/analysis/bdos15t-beta6.annotated.dis &A623 (private) is the ground truth
+tools/netboot-oracle/z80/eeprom.go              src/netboot/eeprom.asm                     Colin Piggot's vendored lib (simonowen/trinload)
+tools/netboot-oracle/z80/bdos_store.go          src/netboot/bdos_seam.asm                  the real B-DOS RST 8 hook bodies (HRECORD/HSAVE/HRSAD)
+tools/netboot-oracle/trinityfw/trinityfw.go     src/netboot/trinity_identity_stamp.asm     trinity_read_stamp — the byte-layout contract both sides share
+tools/netboot-oracle/samboot/samboot.go         src/netboot/samboot_config.asm             samboot_read_config — the SAMBOOT BIOS config chunk byte-layout contract
