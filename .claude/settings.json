@@ -1,4 +1,18 @@
 {
+  "permissions": {
+    "allow": [
+      "Bash(sudo tcpdump *)",
+      "Bash(sudo arping *)",
+      "Bash(~/bin/tapo.sh *)",
+      "Bash(tapo.sh *)",
+      "Bash(DEPLOY_CHECKED=1 python3 tools/trinload-push/trinpush-serve.py *)",
+      "Bash(DEPLOY_CHECKED=1 python3 tools/trinload-push/trinload-push.py *)",
+      "Bash(DEPLOY_CHECKED=1 tools/trinload-push/trinpush-serve.py *)",
+      "Bash(DEPLOY_CHECKED=1 tools/trinload-push/trinload-push.py *)",
+      "Bash(curl --max-time * tftp://192.168.2.75/*)",
+      "Bash(curl -T * tftp://192.168.2.75/*)"
+    ]
+  },
   "hooks": {
     "PreToolUse": [
       {
