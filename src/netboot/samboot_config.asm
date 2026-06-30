@@ -48,27 +48,19 @@
 ; hardware write is NOT modelled (reads only) and stays the i135c hardware path.
 ; Emulation-verified is not hardware-verified (CLAUDE.md §5).
 
-                ; The combined-bootblock build (samboot_bootblock.asm) supplies its
-                ; own org &415E (the bootblock free space) and includes this file as
-                ; a sub-routine library, so this standalone org must not fire there —
-                ; mirroring bdos_seam.asm's NETBOOT_STANDALONE org guard.
-                if defined(SAMBOOT_BOOTBLOCK)==0
+                ; Standalone assembly origin (the host harness invokes
+                ; samboot_read_config by symbol; nothing CALLs &8000).
                 org     &8000
-                endif
 
 SAMBOOT_CFG_VERSION:  equ 1                       ; chunk+0 format version
 SAMBOOT_CFG_MODE_NONE: equ 0                      ; chunk+1: no auto-boot
 SAMBOOT_CFG_MODE_BOOT: equ 1                      ; chunk+1: auto-boot the record
 
-                ; The host harness invokes samboot_read_config by symbol and never
-                ; CALLs &8000. A bootable/standalone use would jp a real main here;
-                ; there is none in this file (the reader is a leaf the bootblock /
-                ; i135d calls), so &8000 just falls through into the reader, which
-                ; is harmless under the harness (it calls the symbol directly).
-                ; The bootblock build enters at inject/inject_decision and never
-                ; falls into &8000, so it needs no jp shim here (and saves the bytes).
-                ; `*` is logical AND for 0/1 conditions (pyz80's if has no `&&`/`and`).
-                if (defined(NETBOOT_HOSTTEST)==0)*(defined(SAMBOOT_BOOTBLOCK)==0)
+                ; samboot_read_config is a leaf called by symbol (the host harness
+                ; and the i135d forked bootloader both enter it directly), so &8000
+                ; just falls through into the reader. The bootable build still wants
+                ; a jp shim at &8000; the host harness calls the symbol, so skip it.
+                if defined(NETBOOT_HOSTTEST)==0
                 jp      samboot_read_config
                 endif
 
