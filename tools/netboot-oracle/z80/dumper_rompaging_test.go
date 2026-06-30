@@ -41,10 +41,11 @@ import (
 )
 
 const (
-	// The REAL dumper build (no NETBOOT_HOSTTEST) — the one trinload pushes, with
-	// dumper_read_rom0/rom1 + dumper_main compiled in. `make netboot-dumper-trinload`.
-	dumperTLBin = "../../../build/netboot_dumper_trinload.bin"
-	dumperTLMap = "../../../build/netboot_dumper_trinload.map"
+	// The dumper build — the one trinload pushes, with dumper_read_rom0/rom1 +
+	// dumper_main compiled in. Since i231b-b4e there is a single build (no
+	// NETBOOT_HOSTTEST carve-out); `make netboot-dumper`.
+	dumperTLBin = "../../../build/netboot_dumper.bin"
+	dumperTLMap = "../../../build/netboot_dumper.map"
 
 	// trinload's X packet does `out (HMPR),P; jp &8000`, so the dumper runs at
 	// section C with HMPR = the push page P. For the i87a capture P was 1
@@ -70,7 +71,7 @@ func distinctFill(seed int) []byte {
 func loadDumperPaged(t *testing.T, lmpr uint8) *z80h.Machine {
 	t.Helper()
 	if _, err := os.Stat(dumperTLBin); err != nil {
-		t.Fatalf("real dumper not built (%s); run `make netboot-dumper-trinload`", dumperTLBin)
+		t.Fatalf("real dumper not built (%s); run `make netboot-dumper`", dumperTLBin)
 	}
 	mac, err := z80h.LoadPaged(dumperTLBin, dumperTLMap, lmpr, dumperPushPage)
 	if err != nil {

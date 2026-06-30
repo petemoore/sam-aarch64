@@ -8,7 +8,7 @@ import sys
 from trinpush import LOAD_ORG, push_and_run
 
 SAM = sys.argv[1] if len(sys.argv) > 1 else "192.168.2.75"
-PATH = sys.argv[2] if len(sys.argv) > 2 else "build/netboot_dumper_trinload.bin"
+PATH = sys.argv[2] if len(sys.argv) > 2 else "build/netboot_dumper.bin"
 PAGE = int(sys.argv[3]) if len(sys.argv) > 3 else 1
 ADDR = int(sys.argv[4], 0) if len(sys.argv) > 4 else LOAD_ORG
 

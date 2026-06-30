@@ -27,8 +27,8 @@ guard fires on *executing* a pusher (so `trinpush-serve.py …` is gated whether
 ## `trinload-push.py` — push any binary
 
 ```sh
-make netboot-dumper-trinload      # or any netboot *_trinload.bin (org &8000)
-tools/trinload-push/trinload-push.py 192.168.2.75 build/netboot_dumper_trinload.bin 1 0x8000
+make netboot-dumper               # or any trinload-pushable netboot .bin (org &8000)
+tools/trinload-push/trinload-push.py 192.168.2.75 build/netboot_dumper.bin 1 0x8000
 # then pull what the program serves, e.g.:  curl -o rom1.bin tftp://192.168.2.75/rom1.bin
 ```
 
