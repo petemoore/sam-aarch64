@@ -169,6 +169,13 @@ type SDCard struct {
 	// (big-endian: arg bytes [1..4]); it keys store for the data phase that follows.
 	addr uint32
 
+	// writtenSectors records the block address of every committed CMD24 write, in
+	// order. Unlike store (which also holds SeedSector pre-loads), this is writes
+	// ONLY — the data-safety view a record-directed-write test needs: it asserts the
+	// pushed sectors landed in the selected record's LBA range and NOWHERE else,
+	// without the seeded directory/list sectors confounding the count.
+	writtenSectors []uint32
+
 	// phase is the current sector data-phase state (phaseIdle outside a CMD17/24
 	// data phase). writeBuf accumulates the CMD24 payload; writeIdx counts captured
 	// data bytes; crcLeft counts the trailing CRC bytes still to swallow; busyLeft
@@ -270,6 +277,33 @@ func (s *SDCard) CapturedBlocksBelow(addr uint32) int {
 		}
 	}
 	return n
+}
+
+// WrittenSectors returns the block addresses of every committed CMD24 write, in the
+// order they landed (SeedSector pre-loads are NOT included). This is the precise
+// data-safety view for a record-directed write: assert every entry falls in the
+// selected record's LBA range and that nothing landed outside it.
+func (s *SDCard) WrittenSectors() []uint32 {
+	out := make([]uint32, len(s.writtenSectors))
+	copy(out, s.writtenSectors)
+	return out
+}
+
+// WrittenSectorsOutsideRecord returns the addresses of CMD24 writes that landed
+// OUTSIDE record's own LBA range [csdBase+1600*(record-1), csdBase+1600*record) —
+// the data-safety violation list. Empty means every write stayed inside the chosen
+// record (the safety invariant: never touch a record we did not select).
+func (s *SDCard) WrittenSectorsOutsideRecord(csdBase uint32, record int) []uint32 {
+	const sectorsPerRecord = 1600
+	lo := csdBase + sectorsPerRecord*(uint32(record)-1)
+	hi := csdBase + sectorsPerRecord*uint32(record)
+	var out []uint32
+	for _, a := range s.writtenSectors {
+		if a < lo || a >= hi {
+			out = append(out, a)
+		}
+	}
+	return out
 }
 
 // CSDForV2 builds a 16-byte CSD v2.0 register (SDHC/SDXC) for the given 22-bit
@@ -509,6 +543,7 @@ func (s *SDCard) outDataPhase(v uint8) {
 			sec := make([]byte, sdSectorSz)
 			copy(sec, s.writeBuf)
 			s.store[s.addr] = sec
+			s.writtenSectors = append(s.writtenSectors, s.addr)
 			s.crcLeft = 2 // 2 trailing dummy CRC bytes (&A881/&A88B dec a; out)
 			s.phase = phaseWriteCRC
 		}

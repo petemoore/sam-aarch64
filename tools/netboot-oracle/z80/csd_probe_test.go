@@ -388,16 +388,20 @@ func TestCSDProbeRereadsOnRRQ(t *testing.T) {
 	}
 }
 
-// TestCSDProbeRXDisarmedBySDRead is the i249 negative control: the white-box proof
-// that the emulator now CATCHES the "serve-dies-after-SD" class (hardware fix #3). An
-// SD transaction (csd_read_into_stage) on the shared one-PIC Trinity controller
-// disturbs the ENC28J60's persistent RX state; drv_read never restores it. So a frame
-// injected AFTER an SD read, WITHOUT an intervening enc_rx_reestablish, must NOT be
-// delivered — and after the &28 ENC reset that enc_rx_reestablish issues, the SAME
-// frame must arrive byte-exact. Reverting the model's rxDisarmed gate (enc28j60.go
-// materialiseRX) makes the middle assertion fail — the i244 revert-the-fix-fails
-// shape that turns a missing re-arm into a build-time catch (CLAUDE.md rule 7).
-func TestCSDProbeRXDisarmedBySDRead(t *testing.T) {
+// TestCSDProbeRXSurvivesSDRead is the i293 authority-grounded control: an ordinary SD
+// transaction does NOT disarm the ENC28J60's autonomous RX. The &DC byte only mux-
+// selects which SPI peripheral the Z80 talks to; the ENC's ECON1.RXEN (set once by
+// drv_init) keeps the RX FIFO filling independently of the mux — ENC28J60 datasheet
+// §7.2 + simonowen/trinload encdrv.asm (drv_read NEVER re-enables RX; only &28 ereset
+// disturbs it, at init/exit only; eon/eoff/SD-select are harmless mux toggles). So a
+// frame injected AFTER an SD read, with NO intervening re-arm, MUST still be delivered.
+//
+// This corrects the earlier model (and this test) that asserted "an SD read disarms RX
+// -> serve dies after the first SD read." That was a guess about a failure mode, not
+// grounded in the datasheet/driver; it over-penalised a correct no-re-arm program (and
+// drove a spurious per-block enc_rx_reestablish). CLAUDE.md rule 8: the SAM/Colin code
+// + the datasheet are the authority; the Go model is derived from them. (i293.)
+func TestCSDProbeRXSurvivesSDRead(t *testing.T) {
 	csd := z80h.CSDForV2(0x001D59)
 	mac := loadCSDProbe(t)
 	fillCSDProbeConfig(t, mac)
@@ -425,28 +429,29 @@ func TestCSDProbeRXDisarmedBySDRead(t *testing.T) {
 		return mac.Read(pkt, int(res.BC))
 	}
 
-	// (1) Baseline — RX armed by drv_init (no SD read yet): the frame is received.
+	// (1) Baseline — RX armed by drv_init: the frame is received.
 	enc.InjectRX(frameToSAM)
 	if got := readFrame(); !bytes.Equal(got, frameToSAM) {
 		t.Fatalf("baseline drv_read = %x, want the injected frame %x (RX armed by drv_init)", got, frameToSAM)
 	}
 
-	// (2) Disturb — an SD transaction disarms the ENC RX path. A frame injected now
-	//     is invisible to drv_read: the serve-dies-after-SD failure, in emulation.
+	// (2) After an SD read, with NO re-arm: the frame is STILL delivered. The SD
+	//     transaction did not touch the ENC's autonomous RX (the i293 authority).
 	if _, err := mac.Call("csd_read_into_stage"); err != nil {
 		t.Fatalf("csd_read_into_stage: %v", err)
 	}
 	enc.InjectRX(frameToSAM)
-	if got := readFrame(); got != nil {
-		t.Fatalf("after an SD read WITHOUT a re-arm, drv_read = %x, want NOTHING "+
-			"(the SD transaction disarmed RX — this is the serve-dies-after-SD class)", got)
+	if got := readFrame(); !bytes.Equal(got, frameToSAM) {
+		t.Fatalf("after an SD read WITH NO re-arm, drv_read = %x, want the frame %x "+
+			"(an SD transaction must NOT disarm the ENC's autonomous RX — datasheet §7.2 + encdrv.asm)", got, frameToSAM)
 	}
 
-	// (3) Re-arm — enc_rx_reestablish (the &28 ENC reset) restores RX, and the SAME
-	//     queued frame now arrives byte-exact. This is the re-arm a serving program
-	//     MUST run after any SD read (serve_main:1399-1402, probe_main:482-485).
+	// (3) A genuine &28 ENC reset (enc_rx_reestablish) re-arms RX and a frame still
+	//     arrives byte-exact — the reset is the one op that disturbs RX, and it restores
+	//     it. (drv_init / drv_exit use it; a serving program need NOT call it per SD op.)
 	reArmENCRX(t, mac)
+	enc.InjectRX(frameToSAM)
 	if got := readFrame(); !bytes.Equal(got, frameToSAM) {
-		t.Fatalf("after enc_rx_reestablish, drv_read = %x, want the frame %x (the re-arm must restore RX)", got, frameToSAM)
+		t.Fatalf("after enc_rx_reestablish (&28 reset), drv_read = %x, want the frame %x (the reset must leave RX armed)", got, frameToSAM)
 	}
 }

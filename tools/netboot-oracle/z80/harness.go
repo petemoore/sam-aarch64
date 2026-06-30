@@ -543,6 +543,25 @@ func (mac *Machine) Sym(name string) (uint16, error) {
 	return addr, nil
 }
 
+// LoadSymbols merges a pyz80 mapfile's symbols into the machine's symbol table, so
+// Sym() resolves them. Used when a .bin is poked into an already-constructed machine
+// (e.g. a trinload-pushed program loaded into a RAM page of a real-ROM boot rig) and
+// its symbols must be callable by name without rebuilding the Machine. Existing entries
+// with the same name are overwritten.
+func (mac *Machine) LoadSymbols(mapPath string) error {
+	syms, err := parseMap(mapPath)
+	if err != nil {
+		return err
+	}
+	if mac.symbols == nil {
+		mac.symbols = map[string]uint16{}
+	}
+	for k, v := range syms {
+		mac.symbols[k] = v
+	}
+	return nil
+}
+
 // Write copies bytes into memory at addr (e.g. to fill a routine's parameter
 // block before calling it).
 func (mac *Machine) Write(addr uint16, data []byte) {
