@@ -39,11 +39,9 @@ DUMPER:         equ 1                          ; arm netboot_serve.asm's rrq_hit
 
                 ; Entry: trinload's X packet does `out (HMPR),P; jp &8000`, landing
                 ; here. The host harness invokes routines by symbol and never CALLs
-                ; &8000, and probe_main is excluded from the host-test build, so this
-                ; jp is the hardware/trinload entry only.
-                if defined(NETBOOT_HOSTTEST)==0
+                ; &8000, so this jp is the hardware/trinload entry; the harness runs
+                ; probe_main itself via csd_probe_main_test.go.
                 jp      probe_main
-                endif
 
 ; The serve state machine + every helper + CONFIG/STORE/SRC_TABLE. With DUMPER
 ; defined it does NOT emit its own org/boot-jp/serve_main and DOES `call
@@ -419,13 +417,12 @@ csd_rds_done:
 csd_timeout_msg: defm   "SD BUSY TIMEOUT!"      ; exactly 16 bytes (CSD_BYTES)
 
 ; ===========================================================================
-; Bootable / trinload entry (excluded from the host harness build). probe_main
-; reads the SAM's MAC/IP from the "Trinity Network " flash chunk, provisions the
-; csd.bin STORE/SRC_TABLE, reads the CSD once into STAGE, inits the ENC28J60, then
-; loops serve_serve_once with an Esc-to-RET exit so it can be re-pushed. Mirrors
-; dumper_main.
+; Bootable / trinload entry. probe_main reads the SAM's MAC/IP from the "Trinity
+; Network " flash chunk, provisions the csd.bin STORE/SRC_TABLE, reads the CSD
+; once into STAGE, inits the ENC28J60, then loops serve_serve_once with an
+; Esc-to-RET exit so it can be re-pushed. Mirrors dumper_main. The harness runs it
+; end-to-end via csd_probe_main_test.go.
 ; ===========================================================================
-                if defined(NETBOOT_HOSTTEST)==0
 
 probe_main:
                 di
@@ -546,11 +543,9 @@ probe_provision:
 pm_chunk_name:    defm "Trinity Network "     ; the flash chunk holding MAC+IP
 
                 ; tr_terminate (i228): the hardware-only error paths end via it, not a
-                ; raw di;halt. Included only in the trinload build (probe_main's home);
-                ; build_udp_frame (its only external dep) is already pulled in above.
+                ; raw di;halt. probe_main's home; build_udp_frame (its only external
+                ; dep) is already pulled in above.
                 include "test_report.asm"
-
-                endif  ; !NETBOOT_HOSTTEST
 
 ; ===========================================================================
 ; csd.bin STORE + SRC_TABLE templates (mirror dumper's). Both are needed in the
