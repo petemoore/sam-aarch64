@@ -104,4 +104,54 @@ north star; #3, #5, and #6 are now all closed:
 (Fix #1's emulation gap — the missing-flush / one-byte-read-lag class — is
 covered by **i245**, the one-byte-lag model.)
 
+## Trinload wedge & uptime (i278)
+
+Two related symptoms were observed pushing programs over trinload (2026-06-26):
+(1) a wedged serve program (the i270 WRQ hang) left trinload non-responsive to a
+re-push — discovery got no `!` reply; recovery needed a manual reset; (2)
+trinload can appear "not responding even though running". i278 audited both in
+emulation and against the trinload source.
+
+**The wedge class is the #4 clean-exit gap.** trinload (`src/netboot/trinload.asm`,
+vendored verbatim from simonowen/trinload @ a4b7af7) is **not interrupt-driven**:
+its `read_loop` (`:88`) only runs when the CPU is *in* it. trinload pushes its own
+`start` as the return address before `jp (hl)` into a pushed program (`try_exec`,
+`:230`), so a program that RETs cleanly hands control back to `start`, which
+re-runs `drv_init` and re-enters `read_loop` — trinload self-heals the ENC and
+stays re-pushable on *every* clean return. A program that **never returns** (a
+bare `di; halt`, an infinite loop, a hung serve loop) holds the CPU forever:
+`read_loop` never runs again, so a later `?` discovery goes unanswered and the SAM
+looks dead. trinload cannot pre-empt this (no timer/NMI listener), and it is
+vendored verbatim so we do not patch it — **the fix is the pushed program's
+clean exit (#4 `tr_terminate`), not trinload.** The wedge candidates are therefore
+**exactly the #4-missing programs**: `netboot_server.asm` (bare `di; halt` ×2,
+`:1096`/`:1101`), `http_main.asm` (bare `halt` ×2, `:538`/`:544`, bootable build),
+`smoke_test.asm` (bare `halt` ×2, `:249`/`:254`) — the DO-NOT-DEPLOY list above.
+`serve` and `dumper` return via `tr_terminate` and do **not** wedge.
+
+**Modelled in the harness (i278).** `tools/netboot-oracle/z80/trinload_test.go`:
+- `TestTrinloadWedgedByNonReturningProgram` — pushes `jr $` (a self-loop, the
+  stand-in for any non-returning exit), then a second `?`; asserts exactly **one**
+  `!` reply (pre-execute answered, post-execute unanswered = wedge) and that
+  control never returns to `start`.
+- `TestTrinloadRespondsToRediscoveryAfterCleanReturn` — the positive control:
+  pushes `ret`, then a second `?`; asserts **two** `!` replies (trinload re-entered
+  `read_loop` and is still re-pushable). This is the property a #4 clean-exit
+  program must satisfy.
+
+**Natural timeout: there is none in trinload.** `read_loop` is a pure
+event-driven poll — no counter, timer, watchdog, or uptime degrade; the only
+non-packet exit is Esc → `drv_exit` (`:91`). So trinload does not "time out" or
+degrade after hours of its own accord. The "not responding even though running"
+symptom is **not** a software timeout — it is either (a) a wedged pushed program
+(above), or (b) the ENC28J60 RX path going deaf at the hardware level during a
+long idle (PHY link, RX-buffer state) — *not* trinload code, and outside the flat
+host harness. Because a clean program return re-runs `drv_init`, the only path to
+trinload-internal ENC deafness is a program that wedges before returning.
+
+**Recovery requirement (documented outcome).** A wedged SAM, or hardware-level ENC
+deafness, is recovered only by **reset / power-cycle** (i266 / TAPO `tapo.sh`) or
+Esc-exit-and-restart at the SAM. There is no trinload-side fix; the durable fix is
+ensuring every trinload-pushed program has a #4 clean exit (`tr_terminate`).
+
 See the registry (`build/registry ready`) for the live ids and ranks.

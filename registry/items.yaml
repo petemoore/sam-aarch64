@@ -4762,9 +4762,11 @@
   title: "trinload reliability: audit (in emulation) which pushed programs leave trinload/the SAM wedged, and check for a natural timeout that degrades it after hours"
   description: |
     Observed 2026-06-26: (1) a wedged serve program (the i270 WRQ hang) left trinload non-responsive to a re-push — discovery got no '!' reply — because the stuck program holds the CPU so trinload is not listening; recovery needed a manual reset. (2) Separately, trinload can appear 'not responding even though running'. INVESTIGATE: (a) EMULATION AUDIT — which trinload-pushed programs can leave trinload/the SAM in a bad state (no clean return to trinload's listen loop) so a later push fails? Cross-check the clean-exit (#4 tr_terminate) coverage in hardware-readiness-audit.md; model the wedge in the harness. (b) NATURAL TIMEOUT — does trinload stop serving / degrade after long uptime (hours)? Determine empirically + from src/netboot/trinload.asm (any watchdog/timeout/counter). Outcome: either a fix (programs always return cleanly; trinload has no degrade) or a documented recovery requirement (i266/TAPO power-cycle). Relates to i266.
-  status: OPEN
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 760, role: completing}
 
 - id: i279
   title: "registry: make priority/ordering SELF-EXPLANATORY so agents don't reverse-engineer the source (prioritize --to-top has no visible effect on 'ready', unexplained)"
