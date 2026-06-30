@@ -3712,7 +3712,7 @@
   description: |
     The i121 payoff on real hardware, autonomous: 'start trinload -> push the serve program (push-serve.py) -> tftp put each .mgt disk image (validated size==819200, streamed into a free record + claimed) -> tftp put tftp.done -> return to trinload', then read a stored record back (servable-raw) and byte-compare to confirm the store. Unblocked once the production CSD read lands (i145b, so the server finds free records) and the full experiment is emulation-proven (i145d). Agent-actionable: trinload runs on the SAM (192.168.2.75) over the LAN from the Pi; push via tools/trinload-push/push-serve.py + curl tftp://; the 19 build/*.mgt are valid + staged (/tmp/push-all-disks.sh batches them). NO Pete needed for the push+store+readback; booting a pushed record to watch it run is a downstream nicety (autonomous via i135 auto-boot, or a Pete-present spot-check) and NOT a blocker for this item.
   status: OPEN
-  depends_on: [i145a, i145b-b1, i145c, i145d, i145e, i121d, i195, i141, i198, i266, i270a, i280b-b2b, i280b-b2c, i280b-b2d, i280b-b2e, q62, i289]
+  depends_on: [i145a, i145b-b1, i145c, i145d, i145e, i121d, i195, i141, i198, i266, i280b-b2b, i280b-b2c, i280b-b2d, i280b-b2e, i289, i293]
   kind: leaf
   owner: agent
 
@@ -4720,7 +4720,7 @@
 - id: i270
   title: "Hardware finding: serve TFTP WRQ (write) handshake hangs on silicon while RRQ (read) works — root-cause the never-tested SD-write/HSAVE path"
   description: |
-    HARDWARE FINDING + ROOT CAUSE (2026-06-26, real SAM). SYMPTOM: serve TFTP WRQ (write) hangs on silicon; RRQ (read) works. tcpdump (host-filtered): RRQ for a missing name gets an ephemeral-port reply (~10ms not-found); WRQ gets ZERO reply (no OACK/ACK/error), SAM stays ARP-reachable -> it RECEIVES the WRQ but hangs before the first handshake reply. ROOT CAUSE (diff vs authority, feedback_port_diff_authority_first): our CMD24 write bd_list_write_hw (src/netboot/sd_csd.asm ~:460-540) was matched to sdcard.go (our RAW-SD Go EMULATOR; its own :427 comment calls sdcard.go 'the authority'), NOT to Colin's hardware-proven B-DOS 1.5t write. The read/CSD path + SPI primitives ARE diffed against Colin (sd_csd.asm:9-29; why RRQ works). Colin's write (bdos15t-beta6.annotated.dis: &A81F sd.cmd-with-address + &A86B write tail; ~/sam-archive/bdos/analysis/) shows the Trinity SD is MICROCONTROLLER-mediated: select OUT(&DC),&3F = AUTO-NULL (uC supplies dummies in response/data phases), write busy-wait up to 65536 reads. OURS: per-byte sdc_out, no auto-null, 256-iter busy-poll -> on silicon the write never completes, wedges the SD/ENC state, the WRQ handler never emits its OACK = the captured silence. FIX (emulation-first loop, 3 parts): (1) port bd_list_write_hw from Colin's &A81F/&A86B (auto-null framing + 65536 busy-wait + data-response), cite it like the read path; (2) feed the corrected behaviour back to the Go authority (sdcard.go / netboot-oracle SD model) so it models the uC auto-null + write timing faithfully; (3) add a harness regression that FAILS on the old wrong write (the i249/i250/i251 pattern) so emulation catches this class forever. Verify via a UDP/TFTP net-debug channel (RRQ proves the SAM TXes UDP) read by the agent, not RST &10 screen. A wedged serve needs i266/TAPO to recover (tftp.done is itself a WRQ, also hangs). Gates i194.
+    HARDWARE FINDING (2026-06-26, real SAM): serve TFTP WRQ (write) hangs on silicon while RRQ (read) works. tcpdump: RRQ for a missing name gets an ephemeral-port not-found reply (~10ms); WRQ gets ZERO reply, SAM stays ARP-reachable -> it RECEIVES the WRQ but hangs before the first handshake reply. SETTLED root cause (i292 cleanup; memory feedback_trinity_sd_write_settled_truths): NOT flaky B-DOS hooks (that was a false conclusion defended across sessions) and NOT a need to reimplement Colin's write. Two real causes were found and are settled: (1) the A=drive-select bug (our serve left main A = sector number, so the first .mgt sector selected the floppy -> un-timed FDC poll = hang) — fixed by A=2 for HWSAD/HRSAD, hardware-confirmed (i280, settled truth A9; trinity-sd-z80-interface.md §8a); (2) our own per-block full ENC ereset disturbing the shared-microcontroller SD state between writes (A3) — removed by the B-DOS-direct fix i293 (zero re-arm). The lasting discipline from this finding (CLAUDE.md rule 8): diff Trinity-HW code against Colin's B-DOS / the Trinity docs FIRST, never against the Go emulator. Open children: i270b/i270c keep the Go SD-write model honest vs the authority. The genuine remaining hardware open question is the in-context HRECORD rst-8 crash (D1, under i293).
   status: OPEN
   kind: umbrella
   owner: agent
@@ -4728,9 +4728,9 @@
 - id: i270a
   title: Diff bd_list_write_hw against Colin's FORK PATCHES (1.5t Trinity SD-write additions) and verify on real SAM hardware
   description: |
-    Diff our CMD24 write bd_list_write_hw (src/netboot/sd_csd.asm) EXACTLY against Colin's FORK ADDITIONS — his 1.5t Trinity SD-driver PATCHES, NOT the whole B-DOS: ~/sam-archive/bdos/analysis/region-diffs.txt (the 1.5a->1.5t diff), ANALYSIS.md, draft-bdos-trinity-fork-analysis.md, and bdos15t-beta6.annotated.dis (the SD region: sd.out &A7C5, sd.cmd-with-address &A81F, write tail &A86B, deselect &A8D7). Port faithfully: the Trinity SD is MICROCONTROLLER-mediated — OUT(&DC),&3F auto-null select (uC supplies dummies in data phases), write busy-wait up to 65536 reads, the real data-response framing — vs our per-byte OUT / no auto-null / 256-iter poll. Cite Colin's source like the read path does. VERIFY ON REAL SAM HARDWARE (192.168.2.75): WRQ completes, SAM emits its OACK, a pushed disk stores to a free record + reads back byte-identical. Hardware-prove this BEFORE feeding the emulator (i270b). Gates i194.
-  status: OPEN
-  depends_on: [i280b-b2b, i280b-b2c, i280b-b2d, i280b-b2e, i280b-b2f, i280b-b2g, i280b-b2h, i280b-b2i, q62]
+    WONTFIX (i292 purge, Pete decision 4): do NOT port Colin's SD write. This item was 'diff bd_list_write_hw against Colin's 1.5t Trinity SD-write fork patches and port faithfully (auto-null framing, 65536 busy-wait) + hardware-verify'. It is dropped because the SETTLED understanding is that B-DOS's own write hooks are sound and need no reimplementation (cleanup-plan A2/B1; memory feedback_trinity_sd_write_settled_truths) — the write-hang was our own per-block ENC ereset (A3), fixed by the B-DOS-direct path i293, not by reimplementing the write. PR #713 (the Colin-port draft) is to be CLOSED. The genuine A=drive-select fix lives in i280 (trinity-sd-z80-interface.md §8a, settled truth A9, hardware-confirmed); the genuine open hardware question (the in-context HRECORD rst-8 crash) is D1 under i293.
+  status: WONTFIX
+  depends_on: [i280b-b2b, i280b-b2c, i280b-b2d, i280b-b2e, i280b-b2f, i280b-b2g, i280b-b2h, i280b-b2i]
   kind: leaf
   owner: agent
   parent: i270
@@ -4740,7 +4740,6 @@
   description: |
     AFTER i270a works on real hardware, update the Go EMULATOR model of SD-card WRITES to faithfully reproduce the real Trinity uC-mediated behaviour learned on hardware (auto-null select, the real busy-wait + data-response framing). Today sdcard.go models a RAW SD card and was wrongly treated as the authority (i273); it must now be DERIVED FROM the hardware-proven behaviour. AUDIT ALL Go emulators that model SD — the netboot-oracle sdcard.go, AND check for any other Go SD/Trinity emulator (the comprehensive-emulation i126 surface) — and update each so they model the WRITE path correctly. Depends on i270a (hardware-proven first, per Pete: get it working on real SAM before feeding back to Go). Feeds i270c.
   status: OPEN
-  depends_on: [i270a]
   kind: leaf
   owner: agent
   parent: i270
@@ -4790,7 +4789,6 @@
   description: |
     An agent reviews ALL recurring hardware-fidelity + workflow 'things that went wrong', finds the PATTERN, and advises how to STOP THE ROT AT SOURCE (CLAUDE.md rules, hooks, skills, command gates, prompt/handover updates, registry policy) to remove the class. CATALOG (each grounded in an incident; most have items): (1) Go-model-treated-as-authority for Trinity HW -> i273 + i270 (CMD24 write), i145g (CSD flush), i249/250/251 (serve fixes caught late). (2) registry CLI silent failure -> i275. (3) registry desc-limit hit -> i276. (4) trinpush not runnable without 'python3 ...' -> i277. (5) asking 'is trinload up?' instead of probing (ARP). (6) not logging failure over the network -> i271. (7) agent-invisible status (border colour / RST &10 screen) -> i271. (8) not trying the Trinity/hardware path first. (9) trinload wedged-after-a-bad-program / degrade-after-hours -> i278. (10) agents CONFUSED BY THE REGISTRY TOOL (esp. the opaque priority model) reverse-engineer its SOURCE -> i279 (+ i275). OUTPUT: a PRIORITISED recommendation set, each -> a follow-up item or rule/hook/skill change. Read-only analysis; no code change here. Encompasses i273 + the emulation-first discipline.
   status: OPEN
-  depends_on: [q62]
   kind: leaf
   owner: agent
 
@@ -5104,9 +5102,9 @@
 - id: i284
   title: Push the CJ's Elephant playable disk (cjs-sam-remake boot_m2b.mgt) to the SAM over Trinity TFTP — the real-world end-to-end demo of the now-working SD write
   description: |
-    Pete's real-world validation/demo of the SD write fix: push an actual playable game disk (cj.mgt = ~/git/cjs-sam-remake boot_m2b.mgt, the CJ's Elephant Antics SAM remake, a SEPARATE Pete project) to a free Trinity SD record over the serve WRQ path, then BOOT it on the SAM (Pete's goal: write-then-boot = full autonomy). The Mac copy is gzipped (819200 B uncompressed). Validation is now SIZE-ONLY (i285), so cj.mgt (full 819200, no BDOS stamp) is accepted. STATUS 2026-06-29: the A=2 write fix (i280) + size-only validation (i285) are in; emulation push is green; but the real-hardware cj.mgt push HANGS (curl exit 28) for BOTH production and debug serve — debug localizes it to the claim's HRECORD (CLAIM_SELECT_PRE, no CLAIM_SELECT_POST). This is the deep §8d/§8m/§8w shared-PIC / SPI-persistence class (hardware-only, flaky: the §8af synthetic-payload shot's claim succeeded, the full 1600-block push hangs) — NOT the A=drive issue (HRECORD contract is A=0 per the 1.5t disasm). Also: an idle serve (delayed curl) exits to BASIC (emulation shows serve_main loops forever on idle, so hardware-specific — likely trinload's drv_exit handoff). NEXT: needs hardware iteration (likely Pete + scope per §8x) on the claim-path shared-bus hang; the write+validation halves are done.
+    Pete's real-world validation/demo: push an actual playable game disk (cj.mgt = ~/git/cjs-sam-remake boot_m2b.mgt, the CJ's Elephant Antics SAM remake, a SEPARATE Pete project, 819200 B) to a free Trinity SD record over the serve WRQ path, then BOOT it on the SAM (write-then-boot = full autonomy). Validation is SIZE-ONLY (i285), so cj.mgt is accepted (no BDOS stamp needed; +232 is not a boot/select requirement — settled, memory feedback_trinity_sd_write_settled_truths). The A=drive-select write fix (i280, A=2 for HWSAD/HRSAD) is in and hardware-confirmed. The decisive remaining work is i293 (the B-DOS-direct cj.mgt push: kill the per-block ENC ereset, no own-CMD24 reimplementation) — this item depends on i293. GENUINELY OPEN (do NOT re-frame as the killed 'flaky hooks' claim): the in-context HRECORD rst-8 crash root cause (D1 — HRECORD is clean in isolation + under serve LMPR &1F paging; the crash is at HRECORD's rst 8, NOT a first SD read), and the .mgt->record sector ordering (D3, track-major vs side-major). Once i293 lands the write, BOOT via SAMBOOT autoboot (i264b) or a pushed boot-record.
   status: OPEN
-  depends_on: [q62, i289]
+  depends_on: [i289, i293]
   kind: leaf
   owner: agent
 
@@ -5121,11 +5119,10 @@
     - {num: 750, role: completing}
 
 - id: i286
-  title: "q62 option (a) EMULATION-FIRST: serve disk-record write via our OWN self-healing CMD24 by absolute LBA, bypassing the flaky B-DOS HWSAD/HRECORD/HRSAD hooks"
+  title: "SUPERSEDED own-CMD24 disk-record write (absolute-LBA, bypassing the B-DOS hooks) — built on the false flaky-hooks premise; replaced by i293"
   description: |
-    Implement q62 option (a) emulation-first (§8ah): bd_record_write_hw (sd_csd.asm) writes each record-data sector by ABSOLUTE card LBA (csd_base + 1600*(rec-1) + linearSec) via our own self-healing CMD24, reusing the extracted bd_cmd24_write_core that bd_list_write_hw shares; the serve disk-push sink (raw_record_sink RRS_OWN_CMD24=1) + handle_wrq drop the flaky HRECORD select (write is by absolute LBA) and wd_finalize drops the HRSAD read-back (size-only validation, i285); the claim NAME entry + free-record find stay on our own self-healing bd_list_write_hw/bd_list_read_hw. The B-DOS hook routines remain in the tree (client + other paths/tests use them). Emulation-verified: sd_record_write_test.go unit-tests the record->LBA math vs the §6/§7 authority + data-safety (writes stay in the claimed record's range only); netboot_serve_wrq_record_test.go + netboot_serve_dbg_test.go assert the SD-model captures (not the HWSAD hook) + the new marker sequence. Hardware push stays Pete-gated (reimplemented write to a shared physical card) under i194/i284; does NOT answer q62 (Pete's decision + the hardware confirmation remain).
+    SUPERSEDED / being discarded (i292 purge, Pete decision 4). This was the own-CMD24 reimplementation: bd_record_write_hw (sd_csd.asm) writing each record-data sector by ABSOLUTE card LBA (csd_base + 1600*(rec-1) + linearSec) via our own self-healing CMD24, bypassing the B-DOS HWSAD/HRECORD/HRSAD hooks. It was built on the FALSE 'flaky B-DOS hooks -> reimplement' premise (cleanup-plan B1; memory feedback_trinity_sd_write_settled_truths): the hooks are sound; the real write-hang culprit was OUR OWN per-block full ENC ereset (A3), which i293 removes. The B-DOS-direct fix (i293) replaces this; the own-CMD24 code (PR #752) + the #713 Colin-port are being removed, recoverable from git history if i293 fails (decision 4). Kept DONE as a historical record of the merged-then-superseded reimplementation.
   status: DONE
-  depends_on: [q62]
   kind: leaf
   owner: agent
   prs:
@@ -5145,7 +5142,7 @@
 - id: i288
   title: Emulate the ENC28J60 ereset + lighter re-arm options faithfully per the datasheet (so re-arm-after-SD recovery is testable in emulation)
   description: |
-    Today the emulator's rxDisarmed (set on any SD op, cleared ONLY by the ENC reset) encodes the i249 cure (full ereset) as the ONLY re-arm — the very assumption we are questioning (§8aj). To test lighter re-arms (re-enable ECON1.RXEN / re-point ERXRDPT / re-select ENC, NO chip soft-reset) in emulation rather than only on hardware, model the ENC28J60 System Reset Command (SRC, &DC %00101000) + the RX-engine state per the datasheet: what an SD transaction actually disturbs in the µC<->ENC SPI framing, and what the MINIMAL recovery is. Then rxDisarmed can be cleared by the faithful minimal re-arm, not just a full reset. Authority: ENC28J60 datasheet §11.2 (SRC) + §7 (RX); trinity docs (the shared-µC SPI framing); §8aj. Gates i289 (the no-reimplement pivot) — emulation-first.
+    Emulate the ENC28J60 ereset + the lighter re-arm options faithfully per the datasheet, so re-arm-after-SD recovery is testable in emulation rather than only on hardware. Model the ENC28J60 System Reset Command (SRC, OUT(&DC),%00101000) + the RX-engine state per the datasheet: what an SD transaction actually disturbs in the shared-microcontroller<->ENC SPI framing, and what the MINIMAL recovery is. This serves the SETTLED understanding (cleanup-plan A3/D2, memory feedback_trinity_sd_write_settled_truths): the per-block FULL ENC ereset was the self-inflicted write-hang culprit and is being removed (i293, zero re-arm — the ENC RX engine is autonomous). The emulator currently encodes the full ereset as the ONLY re-arm (rxDisarmed set on any SD op, cleared only by the full reset); model the faithful minimal/zero re-arm so the drain-rule + no-re-arm path is verifiable in emulation. Authority: ENC28J60 datasheet (SRC + RX); the Trinity docs (shared-uC SPI framing); the SAM/Colin code per CLAUDE.md rule 8.
   status: OPEN
   kind: leaf
   owner: agent
@@ -5191,5 +5188,13 @@
   description: |
     The FIX (do-or-die, Pete 2026-06-30). Make cj.mgt write to a free Trinity record + boot, via a SMALL ~200-instruction routine: trinload-proven network receive + a couple of B-DOS write hook calls (HRECORD select A=0/HL=rec#, then HWSAD A=2 per 512B sector), with NO per-block ENC ereset (zero re-arm; the ENC RX engine is autonomous; D2 settled by Pete), NO own-CMD24 reimplementation, NO per-sector init-ladder. METHOD: establish the facts (trinload net code, the B-DOS hook calling convention, the record->LBA layout) then ONE-SHOT the implementation. EMULATION-FIRST: verify end-to-end in emulation and FIX the emulator (sdcard.go shared-microcontroller/drain-rule fidelity, derived from the Trinity docs + Colin's B-DOS per rule 8) wherever it cannot verify; then hardware-confirm via TAPO. Removing the heavy machinery (the 'monster' Pete flagged) is inherent. Old reimplementation (#752/#713) recoverable from git history IFF this fails (decision 4). ACCEPTANCE: ~trinload-sized, no heavy machinery, emulation-verified. Resolves i290=DELETE.
   status: IN_PROGRESS
+  kind: leaf
+  owner: agent
+
+- id: i294
+  title: "Determine the real .mgt->record sector ordering on hardware (track-major vs side-major)"
+  description: |
+    Determine the real .mgt->Trinity-record sector ordering on hardware: track-major (as a raw .mgt image is laid out, sides interleaved) vs side-major (linear = side*800 + 10*track + sector-1). This is GENUINELY OPEN (cleanup-plan D3, memory feedback_trinity_sd_write_settled_truths) — it is neither asserted as the cj.mgt-push fix NOR debunked; lifted here as a clean item so it is not lost when the q63/'+232+side-major required to boot' hallucination framing is dropped. The shipping code (the disk push) is TRACK-MAJOR: it writes .mgt bytes to sequential record LBAs. If the card actually addresses record sectors side-major, a raw copy would align the directory but not the file data, so a pushed record could be non-bootable. Investigate with samdisk 3.8.12 (NOT the 4.0-alpha on this host) against a known-good record; cross-check with B-DOS's record->sector mapping (trinity-sd-z80-interface.md §7, conv.de at &A151) and Colin's B-DOS disasm. Authority for hardware behaviour: the SAM/Colin code + a hardware capture, never the Go emulator (CLAUDE.md rule 8). Relates to i293/i194/i284 (a correct pushed-record layout).
+  status: OPEN
   kind: leaf
   owner: agent
