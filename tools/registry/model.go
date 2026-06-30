@@ -28,6 +28,20 @@ type PRRef struct {
 	Role PRRole `yaml:"role" json:"role"`
 }
 
+// AddPR attaches a PR reference, upserting on (Num, Role): if an identical
+// {num, role} pair is already present it is a no-op. This keeps the PR-attach
+// paths idempotent (i282) — calling set-pr --pr N then set-status --pr N (or
+// either twice) with the same PR must not accumulate a duplicate {num, role}
+// entry in prs[].
+func (it *Item) AddPR(num int, role PRRole) {
+	for _, p := range it.PRs {
+		if p.Num == num && p.Role == role {
+			return
+		}
+	}
+	it.PRs = append(it.PRs, PRRef{Num: num, Role: role})
+}
+
 // Item is one row from registry/items.yaml.
 // Spec §"Schema (per item record)".
 type Item struct {

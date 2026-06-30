@@ -526,6 +526,55 @@ func TestSetPR_Followup(t *testing.T) {
 	}
 }
 
+// TestSetPR_Idempotent is the i282 regression: attaching the SAME completing PR
+// twice — set-pr --pr N then set-status --pr N (the natural "attach the PR, then
+// flip to DONE" sequence) — must leave exactly ONE {num, role} entry, not a
+// duplicate pair (observed accumulating on i280b-b2b / PR #724, hand-deduped).
+func TestSetPR_Idempotent(t *testing.T) {
+	paths := setupMutatorFixture(t)
+
+	// set-pr attaches the completing PR; set-status --pr re-attaches the same one.
+	runSetPR([]string{"--id", "i1b", "--pr", "724", "--role", "completing"}, paths)
+	runSetStatus([]string{"--id", "i1b", "--status", "DONE", "--pr", "724"}, paths)
+
+	assertValidFromPaths(t, paths)
+
+	reg := loadRegFromPaths(t, paths)
+	var i1b *Item
+	for i := range reg.Items {
+		if reg.Items[i].ID == "i1b" {
+			i1b = &reg.Items[i]
+		}
+	}
+	if i1b == nil {
+		t.Fatal("i1b not found")
+	}
+	n := 0
+	for _, pr := range i1b.PRs {
+		if pr.Num == 724 && pr.Role == RoleCompleting {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Errorf("i1b.PRs: completing PR #724 present %d times, want exactly 1 (upsert); got %v", n, i1b.PRs)
+	}
+}
+
+// TestAddPR_DedupesOnNumAndRole unit-tests the upsert directly: same (num, role)
+// is a no-op; the same num with a DIFFERENT role is a distinct, kept entry.
+func TestAddPR_DedupesOnNumAndRole(t *testing.T) {
+	it := &Item{ID: "i1"}
+	it.AddPR(50, RoleCompleting)
+	it.AddPR(50, RoleCompleting) // duplicate -> no-op
+	if len(it.PRs) != 1 {
+		t.Fatalf("after two identical AddPR, len(PRs)=%d want 1; got %v", len(it.PRs), it.PRs)
+	}
+	it.AddPR(50, RoleFollowup) // same num, different role -> distinct
+	if len(it.PRs) != 2 {
+		t.Fatalf("after adding a different role, len(PRs)=%d want 2; got %v", len(it.PRs), it.PRs)
+	}
+}
+
 // --- dep add / rm ---
 
 // TestDepAdd_ValidEdge checks that dep add attaches a depends_on edge and validate stays green.
