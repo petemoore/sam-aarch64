@@ -55,12 +55,10 @@
                 org     &8000
 
                 ; The boot entry (CALL 32768) must be the first instruction at
-                ; &8000. netboot_main is defined later (under NETBOOT_HOSTTEST==0);
-                ; the host harness invokes routines by symbol and never CALLs
-                ; 32768, so this jp is bootable-only.
-                if defined(NETBOOT_HOSTTEST)==0
+                ; &8000. The host harness invokes routines by symbol (it never
+                ; CALLs 32768), so this jp is the hardware boot entry — but the
+                ; harness still runs netboot_main (netboot_serve_boot_test.go).
                 jp      netboot_main
-                endif
 
 ; ===========================================================================
 ; Frame field offsets in the received frame (the §1.2 offset contract; RX_
@@ -995,10 +993,10 @@ str_tsize:        defm "tsize"
                   defb 0
 
 ; ===========================================================================
-; Real-hardware bootable entry (excluded from the host harness build, which has
-; no EEPROM / real silicon / B-DOS store). CALL 32768 lands here on boot.
+; The bootable entry. CALL 32768 lands here on boot. It runs in the host harness
+; too — netboot_serve_boot_test.go drives netboot_main against the modelled
+; EEPROM + ENC + B-DOS store.
 ; ===========================================================================
-                if defined(NETBOOT_HOSTTEST)==0
 
 ; netboot_main — read the SAM's MAC + IP from the Trinity EEPROM "Trinity Network"
 ; chunk, fill the CONFIG block, init the ENC28J60, then loop forever serving the
@@ -1106,8 +1104,6 @@ nb_lease_vals:    defb 0, 0, &1c, &20         ; lease 7200
                   defb 0, 0, &0e, &10         ; T1 3600
                   defb 0, 0, &18, &9c          ; T2 6300
 
-                endif  ; !NETBOOT_HOSTTEST
-
 ; ===========================================================================
 ; CONFIG + shared state. The harness writes CONFIG_* + the store + the source
 ; directly; on the bootable build netboot_main fills CONFIG from the EEPROM + the
@@ -1160,6 +1156,4 @@ RXBUF:            defs 1518              ; the single received-frame buffer
                 include "tftp_build.asm"
                 include "tftp_parse.asm"
                 include "encdrv.asm"
-                if defined(NETBOOT_HOSTTEST)==0
                 include "eeprom.asm"
-                endif

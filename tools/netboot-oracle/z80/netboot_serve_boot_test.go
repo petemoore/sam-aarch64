@@ -9,22 +9,25 @@
 // and client_main (TestClientBootReachesFirstTX) in netboot_boot_test.go.
 //
 // TestServeBootFromEEPROM — the serve-files demo server boot wrapper:
-//   serve_main reads the "Trinity Network " EEPROM chunk (MAC+IP), fills CONFIG,
-//   calls provision_demo (bakes hello.txt / readme.txt into STORE+SRC_TABLE), inits
-//   the ENC28J60, then loops forever as a reactive server. The test injects an ARP
-//   request and a bare TFTP RRQ for hello.txt; both replies must byte-match the Go
-//   authorities (smoke.Responder for ARP, serve.Responder for the TFTP DATA frame).
+//
+//	serve_main reads the "Trinity Network " EEPROM chunk (MAC+IP), fills CONFIG,
+//	calls provision_demo (bakes hello.txt / readme.txt into STORE+SRC_TABLE), inits
+//	the ENC28J60, then loops forever as a reactive server. The test injects an ARP
+//	request and a bare TFTP RRQ for hello.txt; both replies must byte-match the Go
+//	authorities (smoke.Responder for ARP, serve.Responder for the TFTP DATA frame).
 //
 // TestServerBootFromEEPROM — the integrated netboot server boot wrapper:
-//   netboot_main reads the same EEPROM chunk, fills the full CONFIG block (MAC, IP,
-//   DHCP pool, lease, TIDs), inits the ENC28J60, then loops forever. The test injects
-//   an ARP request; the reply must byte-match smoke.NewResponder (the ARP sub-path is
-//   exercised identically in TestSmokeBootRunsFromEEPROM and is the reactive minimum
-//   that proves the boot wrapper ran through EEPROM read + drv_init successfully).
 //
-// Emulation-verified is not hardware-verified (CLAUDE.md §5). The NETBOOT_HOSTTEST
-// guards are NOT deleted — they are correct build-variant switches; this PR adds
-// emulation coverage, not a removal of the guards.
+//	netboot_main reads the same EEPROM chunk, fills the full CONFIG block (MAC, IP,
+//	DHCP pool, lease, TIDs), inits the ENC28J60, then loops forever. The test injects
+//	an ARP request; the reply must byte-match smoke.NewResponder (the ARP sub-path is
+//	exercised identically in TestSmokeBootRunsFromEEPROM and is the reactive minimum
+//	that proves the boot wrapper ran through EEPROM read + drv_init successfully).
+//
+// Emulation-verified is not hardware-verified (CLAUDE.md §5). netboot_main's
+// NETBOOT_HOSTTEST==0 carve-out has since been removed (i231b-b4d) — it is now in
+// the single netboot_server build this test loads. serve_main is still gated in
+// netboot_serve.asm (those carve-outs are tracked under i231b-b4b).
 package z80_test
 
 import (
@@ -42,8 +45,8 @@ import (
 const (
 	serveBootBin  = "../../../build/netboot_serve_boot.bin"
 	serveBootMap  = "../../../build/netboot_serve_boot.map"
-	serverBootBin = "../../../build/netboot_server_boot.bin"
-	serverBootMap = "../../../build/netboot_server_boot.map"
+	serverBootBin = "../../../build/netboot_server.bin"
+	serverBootMap = "../../../build/netboot_server.map"
 
 	// serveBootTID is the fixed transfer source TID that serve_main hard-codes
 	// into CONFIG_SERVERTID (src/netboot/netboot_serve.asm serve_main; also the
@@ -214,7 +217,7 @@ func TestServeBootComputesBDRecordsFromCSD(t *testing.T) {
 func TestServerBootFromEEPROM(t *testing.T) {
 	mac, err := z80h.LoadBoot(serverBootBin, serverBootMap, romBaseBoot)
 	if err != nil {
-		t.Fatalf("server boot binary not built (%v); run `make netboot-server-boot`", err)
+		t.Fatalf("server boot binary not built (%v); run `make netboot-server`", err)
 	}
 	enc := z80h.NewENC28J60()
 	enc.ProgramTrinityNetwork(mask.ServerMAC, mask.ServerIP)
