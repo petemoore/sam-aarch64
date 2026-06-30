@@ -942,17 +942,17 @@ netboot-csd-probe: $(BUILD)/csd_probe.bin $(BUILD)/csd_probe.map
 # netboot-samboot-config (i176) — the SAMBOOT BIOS config reader: a leaf routine
 # (samboot_read_config) that reads the editable default-boot-record config from a
 # named Trinity EEPROM chunk ("SAMBOOT Config  ") and returns the auto-boot
-# decision, reusing eeprom.asm find_index + read_chunk verbatim. Built with
-# NETBOOT_HOSTTEST so the harness calls samboot_read_config directly;
-# samboot_config_test.go programs the encoded config into the emulated EEPROM under
-# the chunk name and asserts the reader decodes it back (A/HL contract). The
-# on-hardware EEPROM WRITE (flashing the chunk) is the i135c path, out of scope.
-# The host editor that produces the chunk bytes is tools/netboot-oracle/cmd/
-# samboot-config (covered by `go test ./...`). Charter: docs/specs/samboot.md §4.
+# decision, reusing eeprom.asm find_index + read_chunk verbatim. One flag-free
+# build (no NETBOOT_HOSTTEST carve-out, i231b-b4f): the harness calls
+# samboot_read_config by symbol; samboot_config_test.go programs the encoded config
+# into the emulated EEPROM under the chunk name and asserts the reader decodes it
+# back (A/HL contract). The on-hardware EEPROM WRITE (flashing the chunk) is the
+# i135c path, out of scope. The host editor that produces the chunk bytes is
+# tools/netboot-oracle/cmd/samboot-config (covered by `go test ./...`). Charter:
+# docs/specs/samboot.md §4.
 $(BUILD)/samboot_config.bin $(BUILD)/samboot_config.map: src/netboot/samboot_config.asm src/netboot/eeprom.asm
 	@mkdir -p $(BUILD)
-	pyz80 -D NETBOOT_HOSTTEST=1 \
-	    --obj=$(BUILD)/samboot_config.bin \
+	pyz80 --obj=$(BUILD)/samboot_config.bin \
 	    --mapfile=$(BUILD)/samboot_config.map \
 	    src/netboot/samboot_config.asm
 

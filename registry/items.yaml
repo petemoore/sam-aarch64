@@ -4279,9 +4279,22 @@
   title: "netboot_dumper.asm carve-outs eliminated (3 sites): unify the host-test + trinload dumper builds into one full binary"
   description: |
     Removed the 3 NETBOOT_HOSTTEST==0 carve-outs in src/netboot/netboot_dumper.asm (the jp dumper_main trinload entry, the dumper_read_rom0/rom1 ROM-paging block, and the dumper_main + test_report.asm block). Same remove-if-overgated shape as smoke (i231b-b4a) / csd_probe (i231b-b4c): both carved-out halves were ALREADY exercised in emulation via the non-HOSTTEST trinload build — the ROM-paging by dumper_rompaging_test.go (paged harness, CallEntry dumper_read_rom0/rom1) and serve_serve_once/eeprom by dumper_test.go (flat harness, by-symbol). The only debt was the redundant flat-host binary (netboot_dumper.bin HOSTTEST, dumper_main+ROM-paging stripped to inert stubs) beside the full netboot_dumper_trinload.bin. Collapsed both into ONE netboot_dumper.bin (the full build) used by every test; deleted the host-only inert-stub double. Ledger 23->20 / 6->5 files.
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 766, role: completing}
+  parent: i231b-b4
+
+- id: i231b-b4f
+  title: "samboot_config.asm carve-out eliminated (1 site): make the jp samboot_read_config shim unconditional"
+  description: |
+    Removed the single NETBOOT_HOSTTEST==0 carve-out in src/netboot/samboot_config.asm — the jp samboot_read_config shim at &8000. The shim is wanted by the no-flag forked-bootloader build (i135d enters at &8000) and is harmless in the in-repo standalone build (samboot_config_test.go calls samboot_read_config by symbol and never executes &8000). Same trivial remove-if-overgated shape as the dumper's jp dumper_main (i231b-b4e). Made it unconditional; eeprom.asm is flag-agnostic so the now-inert -D NETBOOT_HOSTTEST=1 is dropped from the standalone Makefile rule. Ledger 20->19 / 5->4 files.
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 767, role: completing}
   parent: i231b-b4
 
 - id: i232
