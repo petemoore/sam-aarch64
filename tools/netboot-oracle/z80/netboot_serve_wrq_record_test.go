@@ -1,25 +1,28 @@
 // netboot_serve_wrq_record_test.go — i121f: host-verification of the serve unit's
 // WRQ "disk-record push" path (src/netboot/netboot_serve.asm handle_wrq +
 // handle_data + wd_finalize). A pushed .mgt disk image is streamed over TFTP WRQ
-// into a free Trinity record (raw 512-byte sectors via the i122 raw_record_sink),
-// validated as a Trinity disk record on the final block (size == 819,200 AND the
-// BDOS stamp@232), and answered with the final ACK on success or ERROR(3) on a bad
-// image. No free record → ERROR(3, "no free record") and nothing armed.
+// into a free Trinity record: the serve HRECORD-selects the claimed record and
+// writes each 512-byte sector with the B-DOS HWSAD hook (raw_record_sink, the same
+// path the i122 client uses), validates the record on the final block (SIZE-ONLY:
+// size == 819,200 — a .mgt needs no B-DOS installed on it), and answers with the
+// final ACK on success or ERROR(3) on a bad image. No free record → ERROR(3, "no
+// free record") and nothing armed.
 //
 // These tests load the serve BOOT binary (netboot_serve_boot.bin — the only build
 // carrying the bdos_seam.asm RST 8 hooks + raw_record_sink.asm, behind
 // NETBOOT_HOSTTEST==0) and drive the REAL serve_serve_once dispatcher + the real
-// HWSAD dispatch under AttachBDOS, so BDOSStore.SectorWrites() captures the
-// writes. The frame replies + sector writes + BD_REC_VALID are asserted against
-// the serve.Responder Go authority (Config.DiskRecordPush), which routes the body
-// through the same bdos.RawSink + bdos.ValidateDiskRecord.
+// HWSAD dispatch under AttachBDOS, so BDOSStore.SectorWrites() captures the writes
+// (each carries the HRECORD-selected record + linear sector + 512 bytes). The frame
+// replies + sector writes + BD_REC_VALID are asserted against the serve.Responder Go
+// authority (Config.DiskRecordPush), which routes the body through the same
+// bdos.RawSink + bdos.ValidateDiskRecord.
 //
-// List-sector reads and writes use real SPI CMD17/CMD24 (NETBOOT_REAL_LISTREAD=1):
-// the SD model (sdcard.go) has list sectors seeded at card-absolute LBAs so CMD17
-// reads return the expected record-list sectors, and CMD24 writes are captured via
-// SDCard.CapturedSector. The HWSAD (record data write) hook still goes through
-// BDOSStore.SectorWrites, and the HRECORD hook (bdos_select_record) still uses
-// BDOSStore.Selected — only list-sector I/O moved to real SPI.
+// List-sector reads and the record-list CLAIM write use real SPI CMD17/CMD24
+// (NETBOOT_REAL_LISTREAD=1): the SD model (sdcard.go) has list sectors seeded at
+// card-absolute LBAs so CMD17 reads return the expected record-list sectors, and the
+// claim's CMD24 list-write is captured via SDCard.CapturedSector. The record DATA
+// write goes through the B-DOS HWSAD hook (BDOSStore.SectorWrites), and the HRECORD
+// hook (bdos_select_record) sets BDOSStore.Selected.
 //
 // Two tiers, mirroring netboot_fetch_boot_test.go's split (the vendored ENC SPI is
 // bit-banged, so a full 819,200-byte image over the wire is impractically many
@@ -159,8 +162,11 @@ func loadServeRecordPushBin(t *testing.T, bin, mapf string, records, freeRecord 
 	return mac, enc, store, sd, goRef
 }
 
-// recordValidImage builds a RecordSize (819,200-byte) image with the BDOS stamp at
-// offset 232 (so sector 0 validates) and a position-dependent fill elsewhere.
+// recordValidImage builds a RecordSize (819,200-byte) image with a position-dependent
+// fill. Validation is size-only, so any 819,200-byte image is valid; the "BDOS" bytes
+// at offset 232 are just part of the fill (not a validation requirement). Tests that
+// assert size-only acceptance overwrite those 4 bytes to prove a non-B-DOS .mgt still
+// validates.
 func recordValidImage() []byte {
 	img := make([]byte, bdos.RecordSize)
 	for i := range img {
@@ -170,63 +176,47 @@ func recordValidImage() []byte {
 	return img
 }
 
-// assertRecordSectors checks the OWN-CMD24 record write (i194 / §8ag): the serve
-// push now writes each sector by absolute card LBA via bd_record_write_hw (NOT the
-// B-DOS HWSAD hook), so the data lands in the SD card model's backing store at
-// LBA = csd_base + 1600*(record-1) + linearSec. This asserts every linear sector
-// 0..N-1 of the claimed record holds the zero-padded image bytes, AND — the
-// shared-resource DATA-SAFETY invariant — that the push touched ONLY that record's
-// own block range plus the legitimate record-list area (sectors < csd_base): no
-// captured block falls in any OTHER record's range.
-func assertRecordSectors(t *testing.T, sd *z80h.SDCard, mac *z80h.Machine, img []byte, record int) {
+// assertRecordSectors checks the B-DOS-direct record write: the serve push
+// HRECORD-selects the claimed record and writes each 512-byte sector via the B-DOS
+// HWSAD hook (raw_record_sink, the same path the i122 client uses), so each write is
+// captured in BDOSStore.SectorWrites() with Record == the selected record and an
+// ascending LinearSec. This asserts every linear sector 0..N-1 holds the zero-padded
+// image bytes, AND — the shared-resource DATA-SAFETY invariant — that EVERY captured
+// HWSAD write targeted the claimed record and no other (HWSAD can only write the
+// HRECORD-selected record, so a foreign-record write is impossible by construction;
+// this asserts it).
+func assertRecordSectors(t *testing.T, store *z80h.BDOSStore, img []byte, record int) {
 	t.Helper()
-	csdBase := uint32(readU16LE(mac, symAddr(t, mac, "csd_base")))
-	if csdBase == 0 {
-		t.Fatalf("csd_base = 0 — csd_set_bd_records did not run before the push")
-	}
 	wantSectors := (len(img) + bdos.SectorSize - 1) / bdos.SectorSize
+	writes := store.SectorWrites()
 
-	// Every linear sector of the claimed record holds the right bytes.
+	// DATA SAFETY: every captured HWSAD write targeted the claimed record (never
+	// another user's record — the shared-resource invariant).
+	for i, w := range writes {
+		if w.Record != record {
+			t.Fatalf("DATA SAFETY: HWSAD write %d targeted record %d, want %d — the push wrote OUTSIDE the claimed record",
+				i, w.Record, record)
+		}
+	}
+	// Exactly wantSectors writes landed (no extra, no missing).
+	if len(writes) != wantSectors {
+		t.Fatalf("record %d holds %d HWSAD writes, want %d (a stray/missing write)", record, len(writes), wantSectors)
+	}
+
+	// Every linear sector 0..N-1 holds the right zero-padded bytes (writes arrive in
+	// linear order, sector i at LinearSec i).
 	var got []byte
 	for i := 0; i < wantSectors; i++ {
-		sec, ok := sd.RecordDataSector(csdBase, record, i)
-		if !ok {
-			t.Fatalf("record %d linear sector %d not written (own-CMD24 push missed it)", record, i)
+		w := writes[i]
+		if w.LinearSec != i {
+			t.Fatalf("HWSAD write %d has LinearSec %d, want %d (sectors must stream in linear order)", i, w.LinearSec, i)
 		}
-		got = append(got, sec...)
+		got = append(got, w.Data[:]...)
 	}
 	want := make([]byte, wantSectors*bdos.SectorSize)
 	copy(want, img) // tail of the final sector stays zero (the finish zero-pad)
 	if !bytes.Equal(got, want) {
-		t.Fatalf("own-CMD24 streamed-into-record bytes != the zero-padded image (%d bytes)", len(got))
-	}
-
-	// Exactly wantSectors blocks landed in the claimed record's range (no extra,
-	// no stray).
-	if n := sd.CapturedRecordBlockCount(csdBase, record); n != wantSectors {
-		t.Fatalf("record %d range holds %d captured blocks, want %d (a stray/missing write)", record, n, wantSectors)
-	}
-
-	// DATA SAFETY: no captured block falls in any record's range EXCEPT the claimed
-	// one (blocks < csd_base are the legitimate boot/record-list area, written by
-	// the claim's own CMD24 + the test's seeded list sectors).
-	assertNoForeignRecordWrites(t, sd, csdBase, record)
-}
-
-// assertNoForeignRecordWrites fails if the SD store holds any captured block in a
-// record DATA range (>= csd_base) other than the claimed record's own range — the
-// shared-resource invariant that the own-CMD24 push never writes another user's
-// disk. Blocks below csd_base (the boot block + record list) are exempt: the claim
-// legitimately writes a list sector there.
-func assertNoForeignRecordWrites(t *testing.T, sd *z80h.SDCard, csdBase uint32, record int) {
-	t.Helper()
-	// Total captured blocks at or above csd_base must all be in the claimed record's
-	// range; below csd_base is the boot/list area (allowed).
-	inRange := sd.CapturedRecordBlockCount(csdBase, record)
-	dataBlocks := sd.CapturedBlockCount() - sd.CapturedBlocksBelow(csdBase)
-	if dataBlocks != inRange {
-		t.Fatalf("DATA SAFETY: %d captured data blocks but only %d are in record %d's range — the push wrote OUTSIDE the claimed record",
-			dataBlocks, inRange, record)
+		t.Fatalf("HWSAD streamed-into-record bytes != the zero-padded image (%d bytes)", len(got))
 	}
 }
 
@@ -239,7 +229,7 @@ func assertNoForeignRecordWrites(t *testing.T, sd *z80h.SDCard, csdBase uint32, 
 // reply is asserted byte-for-byte against the Go authority.
 func TestServeWRQRecordPushWireRouting(t *testing.T) {
 	const records, freeRecord = 8, 4
-	mac, enc, _, sd, goRef := loadServeRecordPush(t, records, freeRecord)
+	mac, enc, store, _, goRef := loadServeRecordPush(t, records, freeRecord)
 
 	// A small image: two full 512-byte blocks + a short final tail → three DATA
 	// blocks, ending on a short one (and far under the ENC RX ring's frame budget).
@@ -274,26 +264,28 @@ func TestServeWRQRecordPushWireRouting(t *testing.T) {
 		block++
 	}
 
-	// The body streamed into the claimed record via the OWN-CMD24 path, sector by
-	// sector (absolute card LBA, not the HWSAD hook). Asserts the SD model captured
-	// every record-data block with the right bytes + the data-safety invariant.
-	assertRecordSectors(t, sd, mac, img, freeRecord)
+	// The body streamed into the claimed record via the B-DOS HWSAD hook, sector by
+	// sector (the HRECORD-selected record). Asserts the BDOSStore captured every
+	// record-data sector with the right bytes + the data-safety invariant.
+	assertRecordSectors(t, store, img, freeRecord)
 
 	// Authority-vs-Z80: the Go RawSink (driven by the same WRQ DATA stream through
 	// goRef.OnFrame above) emitted the identical per-sector (linear, bytes). The
-	// Z80 side now lands them at absolute LBAs; read them back per-linear from the
-	// SD model and compare to the Go authority's RawSink output.
-	csdBase := uint32(readU16LE(mac, symAddr(t, mac, "csd_base")))
+	// Z80 side writes them via HWSAD into the selected record; compare the captured
+	// HWSAD writes to the Go authority's RawSink output, in order.
 	goWrites, goTotal, goDone, goValid := goRef.WRQPushOutcome()
 	if !goDone {
 		t.Fatal("Go authority did not mark the disk-record push complete")
 	}
+	z80Writes := store.SectorWrites()
+	if len(z80Writes) != len(goWrites) {
+		t.Fatalf("Z80 wrote %d sectors, Go authority %d", len(z80Writes), len(goWrites))
+	}
 	for i := range goWrites {
-		sec, ok := sd.RecordDataSector(csdBase, freeRecord, goWrites[i].LinearSec)
-		if !ok {
-			t.Fatalf("sector[%d] (linear %d) not captured by the own-CMD24 push", i, goWrites[i].LinearSec)
+		if z80Writes[i].LinearSec != goWrites[i].LinearSec {
+			t.Errorf("sector[%d] LinearSec: z80 %d, Go %d", i, z80Writes[i].LinearSec, goWrites[i].LinearSec)
 		}
-		if !bytes.Equal(sec, goWrites[i].Data[:]) {
+		if !bytes.Equal(z80Writes[i].Data[:], goWrites[i].Data[:]) {
 			t.Errorf("sector[%d] bytes != Go authority", i)
 		}
 	}
@@ -432,7 +424,7 @@ func TestServeWRQFlatFileNoFree(t *testing.T) {
 // touched — the shared-resource invariant). The reply matches the Go authority.
 func TestServeWRQRecordPushNoFreeRecord(t *testing.T) {
 	const records, freeRecord = 4, 0 // 0 = no free slot; all 4 named
-	mac, enc, _, sd, goRef := loadServeRecordPush(t, records, freeRecord)
+	mac, enc, store, _, goRef := loadServeRecordPush(t, records, freeRecord)
 
 	wrq := demoWRQ("trinity-sam-disks/upload.mgt", nil)
 	got := serveDemo(t, mac, enc, wrq)
@@ -453,9 +445,8 @@ func TestServeWRQRecordPushNoFreeRecord(t *testing.T) {
 	if r := serveDemo(t, mac, enc, demoData(1, makeFile(512))); r != nil {
 		t.Errorf("a DATA block after a no-free WRQ drew a reply: %x", r)
 	}
-	csdBase := uint32(readU16LE(mac, symAddr(t, mac, "csd_base")))
-	if dataBlocks := sd.CapturedBlockCount() - sd.CapturedBlocksBelow(csdBase); dataBlocks != 0 {
-		t.Fatalf("captured %d record-data blocks, want 0 (nothing written when no record is free)", dataBlocks)
+	if w := store.SectorWrites(); len(w) != 0 {
+		t.Fatalf("captured %d HWSAD writes, want 0 (nothing written when no record is free)", len(w))
 	}
 }
 
@@ -467,9 +458,9 @@ func TestServeWRQRecordPushNoFreeRecord(t *testing.T) {
 // 819,200-byte / 1600-sector scale; the wire routing into wd_finalize is covered by
 // TestServeWRQRecordPushWireRouting. The pattern mirrors netboot_fetch_boot_test's
 // fbStreamAndFinalize (stream via the sink, then call the finalize entry).
-func streamFullRecordAndFinalize(t *testing.T, img []byte, record int) (*z80h.Machine, *z80h.SDCard, []byte) {
+func streamFullRecordAndFinalize(t *testing.T, img []byte, record int) (*z80h.Machine, *z80h.BDOSStore, []byte) {
 	t.Helper()
-	mac, enc, _, sd, _ := loadServeRecordPush(t, 8, record)
+	mac, enc, store, _, _ := loadServeRecordPush(t, 8, record)
 
 	// Arm a push exactly the way handle_wrq does on a bare WRQ + a successful claim:
 	// drive the WRQ handshake through the real dispatch (on the already-inited ENC)
@@ -508,7 +499,7 @@ func streamFullRecordAndFinalize(t *testing.T, img []byte, record int) (*z80h.Ma
 	if len(tx) != before+1 {
 		t.Fatalf("wd_finalize transmitted %d frames, want 1", len(tx)-before)
 	}
-	return mac, sd, tx[len(tx)-1]
+	return mac, store, tx[len(tx)-1]
 }
 
 // TestServeWRQRecordPushValidatesFull drives the full-record validate-gates-reply
@@ -519,13 +510,13 @@ func streamFullRecordAndFinalize(t *testing.T, img []byte, record int) (*z80h.Ma
 func TestServeWRQRecordPushValidatesFull(t *testing.T) {
 	t.Run("valid 819200-byte image → ACK", func(t *testing.T) {
 		const record = 4
-		mac, sd, final := streamFullRecordAndFinalize(t, recordValidImage(), record)
+		mac, store, final := streamFullRecordAndFinalize(t, recordValidImage(), record)
 
 		if v := mac.Read(symAddr(t, mac, "BD_REC_VALID"), 1)[0]; v != 1 {
 			t.Errorf("BD_REC_VALID = %d, want 1 (a valid 819200-byte BDOS image)", v)
 		}
 		// All 1600 sectors of the image landed in the claimed record.
-		assertRecordSectors(t, sd, mac, recordValidImage(), record)
+		assertRecordSectors(t, store, recordValidImage(), record)
 
 		pay := udpPayload(t, final)
 		if tftp.Opcode(pay) != tftp.OpACK {
@@ -551,12 +542,12 @@ func TestServeWRQRecordPushValidatesFull(t *testing.T) {
 		const record = 4
 		img := recordValidImage()
 		copy(img[bdos.BDOSStampOffset:bdos.BDOSStampOffset+4], []byte("XXXX")) // right size, non-BDOS DOS inside
-		mac, sd, final := streamFullRecordAndFinalize(t, img, record)
+		mac, store, final := streamFullRecordAndFinalize(t, img, record)
 
 		if v := mac.Read(symAddr(t, mac, "BD_REC_VALID"), 1)[0]; v != 1 {
 			t.Errorf("BD_REC_VALID = %d, want 1 (size-only validation: the DOS inside the .mgt is irrelevant)", v)
 		}
-		assertRecordSectors(t, sd, mac, img, record)
+		assertRecordSectors(t, store, img, record)
 		pay := udpPayload(t, final)
 		if tftp.Opcode(pay) != tftp.OpACK {
 			t.Fatalf("final reply opcode = %d, want ACK(%d) for a valid full-size .mgt — got %x", tftp.Opcode(pay), tftp.OpACK, pay)
@@ -599,7 +590,7 @@ func assertErrorDiskFull(t *testing.T, frame []byte) {
 // point here is ring-wrap fidelity, not the validation reply.
 func TestServeWRQRecordPushWireRingWrap(t *testing.T) {
 	const records, freeRecord = 8, 4
-	mac, enc, _, sd, goRef := loadServeRecordPush(t, records, freeRecord)
+	mac, enc, store, _, goRef := loadServeRecordPush(t, records, freeRecord)
 
 	// 60 full 512-byte blocks (~5.1 ring wraps) + a short 200-byte tail block to
 	// end the transfer. 60 blocks >> the ~35 needed for 3 wraps, with margin.
@@ -631,22 +622,24 @@ func TestServeWRQRecordPushWireRingWrap(t *testing.T) {
 		block++
 	}
 
-	// The body streamed into the claimed record via the own-CMD24 path, sector by
+	// The body streamed into the claimed record via the B-DOS HWSAD hook, sector by
 	// sector, intact across every wrap. A wrap-misread anywhere would corrupt one of
 	// these sectors.
-	assertRecordSectors(t, sd, mac, img, freeRecord)
+	assertRecordSectors(t, store, img, freeRecord)
 
 	// Authority cross-check: the Go RawSink (driven by the same DATA stream) emitted
-	// the identical per-sector bytes — read each back from the SD model by linear
-	// sector and compare; the wire path matches the reference across every wrap.
-	csdBase := uint32(readU16LE(mac, symAddr(t, mac, "csd_base")))
+	// the identical per-sector bytes — compare the captured HWSAD writes in order; the
+	// wire path matches the reference across every wrap.
 	goWrites, goTotal, goDone, _ := goRef.WRQPushOutcome()
 	if !goDone {
 		t.Fatal("Go authority did not mark the disk-record push complete")
 	}
+	z80Writes := store.SectorWrites()
+	if len(z80Writes) != len(goWrites) {
+		t.Fatalf("Z80 wrote %d sectors, Go authority %d", len(z80Writes), len(goWrites))
+	}
 	for i := range goWrites {
-		sec, ok := sd.RecordDataSector(csdBase, freeRecord, goWrites[i].LinearSec)
-		if !ok || !bytes.Equal(sec, goWrites[i].Data[:]) {
+		if z80Writes[i].LinearSec != goWrites[i].LinearSec || !bytes.Equal(z80Writes[i].Data[:], goWrites[i].Data[:]) {
 			t.Fatalf("sector[%d] != Go authority (a ring-wrap misread)", i)
 		}
 	}
@@ -810,7 +803,7 @@ func runFullPush(t *testing.T, mac *z80h.Machine, enc *z80h.ENC28J60, goRef *ser
 func TestServeWRQRecordPushClaimsDifferentRecords(t *testing.T) {
 	const records = 8
 	free := []int{3, 4} // records 3 then 4 are the two free slots, in order
-	mac, enc, _, sd, _, goRef := loadServeRecordPushFree(t, records, free)
+	mac, enc, store, sd, _, goRef := loadServeRecordPushFree(t, records, free)
 
 	// First push: a distinct valid image with a filename whose 10-char B-DOS name is
 	// "firstdisk" (the dotted .mgt suffix dropped, "trinity-sam-disks/" prefix stripped).
@@ -873,22 +866,27 @@ func TestServeWRQRecordPushClaimsDifferentRecords(t *testing.T) {
 		t.Errorf("push 2 claim name = %q, want %q (16-char record-name field)", name2, "seconddiskimage")
 	}
 
-	// The two images landed in DIFFERENT records (own-CMD24 absolute-LBA writes):
-	// 1600 data blocks in record 3's range AND 1600 in record 4's range, and the
-	// records' bytes are the two distinct images — no overwrite of either.
-	csdBase := uint32(readU16LE(mac, symAddr(t, mac, "csd_base")))
+	// The two images landed in DIFFERENT records (B-DOS HWSAD into the HRECORD-
+	// selected record): 1600 HWSAD writes targeting record 3 AND 1600 targeting
+	// record 4, and the records' first sectors carry the two distinct images — no
+	// overwrite of either. The accumulated SectorWrites() span both pushes; partition
+	// by the target record each write recorded.
 	const sectorsPerImage = 1600
-	if n := sd.CapturedRecordBlockCount(csdBase, 3); n != sectorsPerImage {
-		t.Fatalf("record 3 holds %d data blocks, want %d (push 1)", n, sectorsPerImage)
+	writesByRecord := map[int][]z80h.SectorWrite{}
+	for _, w := range store.SectorWrites() {
+		writesByRecord[w.Record] = append(writesByRecord[w.Record], w)
 	}
-	if n := sd.CapturedRecordBlockCount(csdBase, 4); n != sectorsPerImage {
-		t.Fatalf("record 4 holds %d data blocks, want %d (push 2 — a DIFFERENT record, no overwrite)", n, sectorsPerImage)
+	if n := len(writesByRecord[3]); n != sectorsPerImage {
+		t.Fatalf("record 3 holds %d HWSAD writes, want %d (push 1)", n, sectorsPerImage)
 	}
-	// Spot-check the first sector of each record carries its own image's bytes.
-	if sec, ok := sd.RecordDataSector(csdBase, 3, 0); !ok || !bytes.Equal(sec, img1[:bdos.SectorSize]) {
+	if n := len(writesByRecord[4]); n != sectorsPerImage {
+		t.Fatalf("record 4 holds %d HWSAD writes, want %d (push 2 — a DIFFERENT record, no overwrite)", n, sectorsPerImage)
+	}
+	// Spot-check the first sector (LinearSec 0) of each record carries its own image.
+	if w := writesByRecord[3][0]; w.LinearSec != 0 || !bytes.Equal(w.Data[:], img1[:bdos.SectorSize]) {
 		t.Fatalf("record 3 sector 0 != image 1 (push 1 landed in the wrong record)")
 	}
-	if sec, ok := sd.RecordDataSector(csdBase, 4, 0); !ok || !bytes.Equal(sec, img2[:bdos.SectorSize]) {
+	if w := writesByRecord[4][0]; w.LinearSec != 0 || !bytes.Equal(w.Data[:], img2[:bdos.SectorSize]) {
 		t.Fatalf("record 4 sector 0 != image 2 (push 2 overwrote record 3 or missed)")
 	}
 
@@ -914,7 +912,7 @@ func TestServeWRQRecordPushClaimsDifferentRecords(t *testing.T) {
 func TestServeWRQRecordPushClaimOnlyOnValid(t *testing.T) {
 	const records = 8
 	free := []int{5} // a single free slot; both pushes target it
-	mac, enc, _, sd, _, goRef := loadServeRecordPushFree(t, records, free)
+	mac, enc, store, sd, _, goRef := loadServeRecordPushFree(t, records, free)
 
 	// Push 1: an INVALID image (one sector short → wrong size). It streams into the
 	// claimed record 5, fails validation, and must NOT claim (no CMD24 list-write).
@@ -951,21 +949,25 @@ func TestServeWRQRecordPushClaimOnlyOnValid(t *testing.T) {
 	}
 
 	// Both pushes targeted record 5 (the bad push left it free, the valid push
-	// reused it). The own-CMD24 writes land at record 5's absolute LBAs; the valid
-	// push overwrote the bad push's partial data in the same range, so record 5 now
-	// holds the valid image. DATA SAFETY: no OTHER record's range was ever touched.
-	csdBase := uint32(readU16LE(mac, symAddr(t, mac, "csd_base")))
-	if n := sd.CapturedRecordBlockCount(csdBase, 5); n == 0 {
-		t.Fatalf("record 5 holds no data blocks (both pushes targeted it)")
+	// reused it). The HWSAD writes target record 5; the valid push re-wrote the bad
+	// push's partial sectors of the same record, and the LAST write at LinearSec 0 is
+	// the valid image's first sector. DATA SAFETY: EVERY HWSAD write targeted record 5
+	// (HWSAD can only write the HRECORD-selected record — no other was ever touched).
+	writes := store.SectorWrites()
+	if len(writes) == 0 {
+		t.Fatalf("record 5 holds no HWSAD writes (both pushes targeted it)")
 	}
-	if sec, ok := sd.RecordDataSector(csdBase, 5, 0); !ok || !bytes.Equal(sec, good[:bdos.SectorSize]) {
+	var lastSec0 *z80h.SectorWrite
+	for i := range writes {
+		if writes[i].Record != 5 {
+			t.Fatalf("DATA SAFETY: an HWSAD write targeted record %d, want only record 5", writes[i].Record)
+		}
+		if writes[i].LinearSec == 0 {
+			lastSec0 = &writes[i]
+		}
+	}
+	if lastSec0 == nil || !bytes.Equal(lastSec0.Data[:], good[:bdos.SectorSize]) {
 		t.Fatalf("record 5 sector 0 != the valid image (the reuse did not land in record 5)")
-	}
-	// Every captured data block (>= csd_base) is in record 5's range — neither push
-	// wrote any other record.
-	dataBlocks := sd.CapturedBlockCount() - sd.CapturedBlocksBelow(csdBase)
-	if inRange := sd.CapturedRecordBlockCount(csdBase, 5); dataBlocks != inRange {
-		t.Fatalf("DATA SAFETY: %d data blocks captured but only %d in record 5's range", dataBlocks, inRange)
 	}
 
 	// Authority cross-check: the Go authority claimed exactly once, record 5.
@@ -1013,7 +1015,7 @@ func TestServeWRQRecordPushStrategy(t *testing.T) {
 
 	// assertSinglePush drives one valid push and asserts it claimed `wantRecord` and
 	// streamed every sector into it. goRef is driven in lockstep for the cross-check.
-	assertSinglePush := func(t *testing.T, mac *z80h.Machine, enc *z80h.ENC28J60, sd *z80h.SDCard, goRef *serve.Responder, wantRecord int) {
+	assertSinglePush := func(t *testing.T, mac *z80h.Machine, enc *z80h.ENC28J60, store *z80h.BDOSStore, sd *z80h.SDCard, goRef *serve.Responder, wantRecord int) {
 		t.Helper()
 		img := recordValidImage()
 		final := runFullPush(t, mac, enc, goRef, "trinity-sam-disks/disk.mgt", img)
@@ -1029,15 +1031,16 @@ func TestServeWRQRecordPushStrategy(t *testing.T) {
 		if claimEntry[0]&0x7F == 0 {
 			t.Errorf("claimed record %d reads FREE (entry[0]=%#x), want NAMED", wantRecord, claimEntry[0])
 		}
-		// The own-CMD24 push wrote 1600 data blocks into wantRecord's range and no
-		// other record's (the data-safety invariant + the strategy chose wantRecord).
-		csdBase := uint32(readU16LE(mac, symAddr(t, mac, "csd_base")))
-		if n := sd.CapturedRecordBlockCount(csdBase, wantRecord); n != 1600 {
-			t.Fatalf("record %d holds %d data blocks, want 1600 (one full-record push)", wantRecord, n)
+		// The B-DOS HWSAD push wrote 1600 sectors into wantRecord and no other record
+		// (the data-safety invariant + the strategy chose wantRecord).
+		writes := store.SectorWrites()
+		if len(writes) != 1600 {
+			t.Fatalf("captured %d HWSAD writes, want 1600 (one full-record push)", len(writes))
 		}
-		dataBlocks := sd.CapturedBlockCount() - sd.CapturedBlocksBelow(csdBase)
-		if dataBlocks != 1600 {
-			t.Fatalf("DATA SAFETY: %d data blocks captured, want 1600 all in record %d's range", dataBlocks, wantRecord)
+		for i, w := range writes {
+			if w.Record != wantRecord {
+				t.Fatalf("DATA SAFETY: HWSAD write %d targeted record %d, want %d", i, w.Record, wantRecord)
+			}
 		}
 		// Authority cross-check: the Go authority claimed the same record.
 		claims := goRef.Claims()
@@ -1062,24 +1065,24 @@ func TestServeWRQRecordPushStrategy(t *testing.T) {
 	})
 
 	t.Run("highest-free (strategy 0) → record 4", func(t *testing.T) {
-		mac, enc, _, sd, _, _ := loadServeRecordPushFree(t, records, free)
+		mac, enc, store, sd, _, _ := loadServeRecordPushFree(t, records, free)
 		patchStrategy(t, mac, uint8(serve.StrategyHighestFree), 0)
 		goRef := goRefWithStrategy(serve.StrategyHighestFree, 0, free)
-		assertSinglePush(t, mac, enc, sd, goRef, 4)
+		assertSinglePush(t, mac, enc, store, sd, goRef, 4)
 	})
 
 	t.Run("lowest-free (strategy 1) → record 3", func(t *testing.T) {
-		mac, enc, _, sd, _, _ := loadServeRecordPushFree(t, records, free)
+		mac, enc, store, sd, _, _ := loadServeRecordPushFree(t, records, free)
 		patchStrategy(t, mac, uint8(serve.StrategyLowestFree), 0)
 		goRef := goRefWithStrategy(serve.StrategyLowestFree, 0, free)
-		assertSinglePush(t, mac, enc, sd, goRef, 3)
+		assertSinglePush(t, mac, enc, store, sd, goRef, 3)
 	})
 
 	t.Run("explicit (strategy 2) free record 4 → record 4", func(t *testing.T) {
-		mac, enc, _, sd, _, _ := loadServeRecordPushFree(t, records, free)
+		mac, enc, store, sd, _, _ := loadServeRecordPushFree(t, records, free)
 		patchStrategy(t, mac, uint8(serve.StrategyExplicit), 4)
 		goRef := goRefWithStrategy(serve.StrategyExplicit, 4, free)
-		assertSinglePush(t, mac, enc, sd, goRef, 4)
+		assertSinglePush(t, mac, enc, store, sd, goRef, 4)
 	})
 }
 
@@ -1090,7 +1093,7 @@ func TestServeWRQRecordPushStrategy(t *testing.T) {
 func TestServeWRQRecordPushStrategyExplicitTaken(t *testing.T) {
 	const records = 8
 	free := []int{3, 4} // record 7 is NOT free (named)
-	mac, enc, _, sd, _, _ := loadServeRecordPushFree(t, records, free)
+	mac, enc, store, _, _, _ := loadServeRecordPushFree(t, records, free)
 	patchStrategy(t, mac, uint8(serve.StrategyExplicit), 7) // explicit a named record
 	goRef := goRefWithStrategy(serve.StrategyExplicit, 7, free)
 
@@ -1109,9 +1112,8 @@ func TestServeWRQRecordPushStrategyExplicitTaken(t *testing.T) {
 	if active := mac.Read(symAddr(t, mac, "WRQ_RECV_ACTIVE"), 1)[0]; active != 0 {
 		t.Errorf("WRQ_RECV_ACTIVE = %d, want 0 (no receiver armed when the explicit record is taken)", active)
 	}
-	csdBase := uint32(readU16LE(mac, symAddr(t, mac, "csd_base")))
-	if dataBlocks := sd.CapturedBlockCount() - sd.CapturedBlocksBelow(csdBase); dataBlocks != 0 {
-		t.Fatalf("captured %d record-data blocks, want 0 (the named explicit record is never touched)", dataBlocks)
+	if w := store.SectorWrites(); len(w) != 0 {
+		t.Fatalf("captured %d HWSAD writes, want 0 (the named explicit record is never touched)", len(w))
 	}
 }
 
@@ -1200,8 +1202,8 @@ func TestServeE2EComputedBDRecordsRecordPush(t *testing.T) {
 
 	wrq := demoWRQ("trinity-sam-disks/upload.mgt", nil)
 	eqFrame(t, "WRQ -> ACK-0", serveDemo(t, mac, enc, wrq), goRef.OnFrame(wrq))
-	// The disk-record push no longer HRECORD-selects (it writes by absolute LBA);
-	// the claimed record is recorded in WRQ_RECORD (the sink's RRS_RECORD source).
+	// The disk-record push HRECORD-selects the claimed record (each sector is HWSAD'd
+	// into it); the claimed record is recorded in WRQ_RECORD.
 	if rec := int(mac.Read(symAddr(t, mac, "WRQ_RECORD"), 1)[0]); rec != wantRecord {
 		t.Fatalf("claimed WRQ_RECORD = %d, want %d (the highest free record found via the COMPUTED BD_RECORDS=%d)",
 			rec, wantRecord, got)
@@ -1238,7 +1240,7 @@ func TestServeE2EComputedBDRecordsRecordPush(t *testing.T) {
 	if v := mac.Read(symAddr(t, mac, "BD_REC_VALID"), 1)[0]; v != 1 {
 		t.Errorf("BD_REC_VALID = %d, want 1 (a valid 819200-byte BDOS image)", v)
 	}
-	assertRecordSectors(t, sd, mac, img, wantRecord)
+	assertRecordSectors(t, store, img, wantRecord)
 	pay := udpPayload(t, final)
 	if tftp.Opcode(pay) != tftp.OpACK {
 		t.Fatalf("final reply opcode = %d, want ACK — got %x", tftp.Opcode(pay), pay)
@@ -1275,7 +1277,7 @@ func TestServeE2EComputedBDRecordsRecordPush(t *testing.T) {
 // the RET still reaches trinload (it does not strand the SAM on the way out).
 func TestServeDiskPushTrinloadDeployable(t *testing.T) {
 	const records, freeRecord = 8, 4
-	mac, enc, _, sd, goRef := loadServeRecordPush(t, records, freeRecord)
+	mac, enc, store, _, goRef := loadServeRecordPush(t, records, freeRecord)
 
 	// A small multi-block image: two full 512-byte blocks + a short tail → three DATA
 	// blocks ending short. (The full-record validate→ACK decision is proven by
@@ -1306,10 +1308,10 @@ func TestServeDiskPushTrinloadDeployable(t *testing.T) {
 		block++
 	}
 
-	// The body landed in the CLAIMED FREE record (record 4) via the own-CMD24 path,
+	// The body landed in the CLAIMED FREE record (record 4) via the B-DOS HWSAD hook,
 	// sector by sector — the disk-record push the deployable exists to do. The
 	// data-safety check inside assertRecordSectors proves no other record was touched.
-	assertRecordSectors(t, sd, mac, img, freeRecord)
+	assertRecordSectors(t, store, img, freeRecord)
 
 	// 3. The i194 CLEAN EXIT: drive sv_exit_to_trinload (the single RET-to-trinload
 	// point both serve exits jump to). CallEntry pushes the HALT trap as the return
@@ -1352,7 +1354,7 @@ func TestServeDiskPushTrinloadDeployable(t *testing.T) {
 		t.Error("neither sv_q_settled nor sv_q_settle was visited — the post-deselect settle did not run")
 	}
 	wantSectors := (len(img) + bdos.SectorSize - 1) / bdos.SectorSize
-	t.Logf("i194 deployable OK: pushed %d-byte .mgt → %d sectors into FREE record %d via own CMD24; "+
+	t.Logf("i194 deployable OK: pushed %d-byte .mgt → %d sectors into FREE record %d via B-DOS HWSAD; "+
 		"sv_exit_to_trinload quiesced &DC + RET to trinload in %d steps (clean exit DESIGNED, hardware-unverified)",
 		len(img), wantSectors, freeRecord, res.Steps)
 }

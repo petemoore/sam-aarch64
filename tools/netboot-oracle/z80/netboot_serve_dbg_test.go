@@ -135,16 +135,17 @@ func TestServeDebugMarkersWRQRecordPush(t *testing.T) {
 	}
 
 	// 1. Bare WRQ (disk-record class via the prefix) → entry, claimed, handshake; ACK-0.
-	// The disk-record class no longer HRECORD-selects (i194): the write is by absolute
-	// LBA via our own CMD24, so the flaky CLAIM_SELECT (HRECORD) markers are gone. The
-	// claim is now FIND (our CMD17 list reads) → CLAIMED → handshake.
+	// The claim is FIND (our CMD17 list reads) → the HRECORD-select of the claimed
+	// record (no dedicated marker) → CLAIMED → handshake.
 	markers, reply := driveDbg(t, mac, enc, demoWRQ("trinity-sam-disks/upload.mgt", nil))
 	wantMarkers(t, "WRQ", markers, dbgWRQEntry, dbgClaimFindPre, dbgWRQClaimed, dbgWRQHandshake)
 	if op := tftp.Opcode(udpPayload(t, reply)); op != tftp.OpACK {
 		t.Fatalf("WRQ reply opcode = %d, want ACK(%d)", op, tftp.OpACK)
 	}
 
-	// 2. DATA blocks: one DATA_BLOCK marker each; the final short block also finalizes.
+	// 2. DATA blocks: each full sector is written via the B-DOS HWSAD hook, so the
+	// per-block markers are DATA_BLOCK → FLUSH_PRE → HWSAD_PRE → HWSAD_POST. The final
+	// short block additionally finalizes.
 	block := uint16(1)
 	var finalReply []byte
 	for off := 0; off < len(img); off += blksize {
@@ -155,12 +156,13 @@ func TestServeDebugMarkersWRQRecordPush(t *testing.T) {
 		markers, reply = driveDbg(t, mac, enc, demoData(block, img[off:end]))
 		if end-off < blksize {
 			// final short block → DATA_BLOCK, FINALIZE, then the padded-tail sector
-			// flush (FLUSH_PRE → the own-CMD24 write; no HWSAD markers on this path),
-			// then FINALIZE_BAD (sub-record image).
-			wantMarkers(t, "final DATA", markers, dbgDataBlock, dbgFinalize, dbgFlushPre, dbgFinalizeBad)
+			// flush via the HWSAD hook (FLUSH_PRE → HWSAD_PRE → HWSAD_POST), then
+			// FINALIZE_BAD (sub-record image).
+			wantMarkers(t, "final DATA", markers,
+				dbgDataBlock, dbgFinalize, dbgFlushPre, dbgHwsadPre, dbgHwsadPost, dbgFinalizeBad)
 			finalReply = reply
 		} else {
-			wantMarkers(t, "DATA", markers, dbgDataBlock, dbgFlushPre)
+			wantMarkers(t, "DATA", markers, dbgDataBlock, dbgFlushPre, dbgHwsadPre, dbgHwsadPost)
 			if op := tftp.Opcode(udpPayload(t, reply)); op != tftp.OpACK {
 				t.Fatalf("DATA %d reply opcode = %d, want ACK(%d)", block, op, tftp.OpACK)
 			}

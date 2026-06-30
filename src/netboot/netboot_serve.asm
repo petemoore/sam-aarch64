@@ -377,10 +377,11 @@ rrq_oack:
 ;
 ; The WRQ filename's "trinity-sam-disks/" prefix picks the storage class (manifest
 ; design §6.5; bdos_strip_disk_prefix is the bdos.Classify port):
-;   - prefixed -> DiskRecord (i121f): claim a FREE Trinity record before the handshake
-;     and stream the pushed .mgt straight into it (raw 512-byte sectors, the i122 store
-;     machinery), validated on the final block as an exactly-819200-byte "BDOS"-stamped
-;     disk image (wd_finalize).
+;   - prefixed -> DiskRecord (i121f): claim + HRECORD-select a FREE Trinity record
+;     before the handshake and stream the pushed .mgt straight into it, writing each
+;     512-byte sector with the B-DOS HWSAD hook (raw_record_sink, the same path the
+;     i122 client uses), validated on the final block as an exactly-819200-byte disk
+;     image (size-only — a .mgt needs no B-DOS installed on it; wd_finalize).
 ;   - NOT prefixed -> FlatFile (i121c, the DEFAULT): flat-accumulate into WRQ_STAGING
 ;     and HSAVE the whole file into the claimed record on the final block
 ;     (wd_finalize_flat) — no size validation; a flat file is any size up to the
@@ -482,35 +483,26 @@ wrq_class_done:
                 call    build_error            ; packet at TBUF, BC = length
                 jp      srv_send_tbuf
 wrq_claimed:
+                ; HRECORD-select the claimed record (BOTH classes write through the
+                ; B-DOS "current record"): the disk-record class HWSADs each sector into
+                ; it (raw_record_sink, same as the i122 client), and the flat-file class
+                ; HSAVEs the staged file into it. WRQ_RECORD was set by wrq_claim_record.
+                ld      a, (WRQ_RECORD)
+                call    bdos_select_record     ; HRECORD-select it
                 ; arm the per-block payload sink for the classified storage class:
                 ;   flat-file  -> WRQ_SINK_MODE=0, flat-accumulate into WRQ_STAGING
                 ;                 (HSAVE'd whole by wd_finalize_flat on the final block).
                 ;   disk-record -> reset the raw sink + WRQ_SINK_MODE=1, stream each
-                ;                 block into the record's sectors (wd_finalize validates).
+                ;                 block into the selected record via HWSAD (wd_finalize
+                ;                 flushes + validates).
                 ld      a, (WRQ_FLAT_MODE)
                 or      a
                 jr      nz, wrq_arm_flat
-                call    raw_record_sink_reset  ; RRS_FILL/LINEAR/TOTAL = 0, RRS_OWN_CMD24 = 0
-                ; Arm the sink for the OWN-CMD24 absolute-LBA write (i194 / §8ag):
-                ; rrs_flush_sector writes each sector by absolute card LBA of
-                ; (RRS_RECORD, linearSec) via our own self-healing CMD24, bypassing the
-                ; flaky B-DOS HWSAD hook. WRQ_RECORD was set by wrq_claim_record.
-                ld      a, (WRQ_RECORD)
-                ld      l, a
-                ld      h, 0
-                ld      (RRS_RECORD), hl
+                call    raw_record_sink_reset  ; RRS_FILL/LINEAR/TOTAL = 0
                 ld      a, 1
-                ld      (RRS_OWN_CMD24), a     ; use bd_record_write_hw, not HWSAD
-                ld      (WRQ_SINK_MODE), a     ; handle_data streams into the record
+                ld      (WRQ_SINK_MODE), a     ; handle_data streams into the record (HWSAD)
                 jr      wrq_armed
 wrq_arm_flat:
-                ; The flat-file class commits with HSAVE (wd_finalize_flat), which
-                ; targets the B-DOS "current record" — so this path DOES HRECORD-select
-                ; the claimed record. (Only the disk-record class, above, drops the
-                ; select: it writes by absolute LBA via our own CMD24, §8ag.) WRQ_RECORD
-                ; is the claimed free record from wrq_claim_record.
-                ld      a, (WRQ_RECORD)
-                call    bdos_select_record     ; HRECORD-select it (HSAVE targets it)
                 xor     a
                 ld      (WRQ_SINK_MODE), a     ; handle_data flat-accumulates into WRQ_STAGING
 wrq_armed:
@@ -572,10 +564,10 @@ wrq_arm_receiver:
 
                 if (defined(NETBOOT_HOSTTEST)==0) * (defined(DUMPER)==0)
 ; serve_rearm_enc — re-arm the ENC28J60 RX path after an SD transaction on the
-; shared one-PIC Trinity controller (i244). The WRQ disk-record push drives SD I/O
-; (the free-record finder's CMD17 list reads, the per-block HWSAD sink writes, the
-; finalize HRSAD read + CMD17/CMD24 claim); each disturbs the ENC's persistent RX
-; state (RXEN, ring pointers, MAC/PHY), and drv_read restores only per-call
+; shared one-PIC Trinity controller (i244). The WRQ push drives SD I/O (the
+; free-record finder's CMD17 list reads, the record select, the per-block HWSAD sink
+; writes, the finalize CMD24 claim); each disturbs the ENC's persistent RX state
+; (RXEN, ring pointers, MAC/PHY), and drv_read restores only per-call
 ; select/bank — never that once-only arming. enc_rx_reestablish (encdrv.asm) is
 ; drv_init's RX-arm body MINUS chk_trinity (which would fail right after the &38
 ; SD-init — i242), so it restores serving without re-probing the settling PIC.
@@ -606,26 +598,25 @@ serve_rearm_enc:
                 endif
                 ret
 
-; wrq_claim_record — claim a FREE Trinity record for the push. Pick the record per
+; wrq_claim_record — find a FREE Trinity record for the push. Pick the record per
 ; the configured placement STRATEGY (bdos_find_record_for_strategy reads
 ; SERVE_CFG_STRATEGY: highest-free by default — manifest design §4 s3 / decision 4;
-; lowest-free or an explicit record when patched) and HRECORD-select it. The pick
-; never touches a named record (free ⇔ the record-list name byte is 0). BD_RECORDS
-; (the card record count) is the CSD-derived value (hardware-gated i145; the
-; emulation E2E injects it) — 0 records ⇒ none free. The per-class sink arm (raw sink
-; for DiskRecord, flat accumulate for FlatFile) is the CALLER's job (handle_wrq), so
-; both storage classes share this find+select.
+; lowest-free or an explicit record when patched). The pick never touches a named
+; record (free ⇔ the record-list name byte is 0). BD_RECORDS (the card record count)
+; is the CSD-derived value (hardware-gated i145; the emulation E2E injects it) —
+; 0 records ⇒ none free. HRECORD-selecting the picked record + arming the per-class
+; sink is the CALLER's job (handle_wrq / wrq_claimed).
 ;
-; Out: CY set + WRQ_RECORD set + the record selected, if a record was placed; CY
-;      clear if none is available (no free record, or the explicit record is named).
-; Mirrors client_fetch_boot's select.
+; Out: CY set + WRQ_RECORD set to the picked record, if one was found; CY clear if
+;      none is available (no free record, or the explicit record is named).
 wrq_claim_record:
                 if defined(NETBOOT_DEBUG)
-                ; i280b-b2: split the claim into its two SD steps so a hardware shot
-                ; pins which hangs. FIND_PRE→SELECT_PRE gap = bdos_find_record_for_strategy
-                ; (our CMD17 list reads); SELECT_PRE→SELECT_POST gap = bdos_select_record
-                ; (the B-DOS HRECORD hook). Both are at SD-transaction boundaries (no CS
-                ; asserted), the sanctioned dbg_marker call sites.
+                ; i280b-b2: mark the find step so a hardware shot pins a hang. FIND_PRE
+                ; precedes bdos_find_record_for_strategy (our CMD17 list reads); the
+                ; subsequent bdos_select_record (the B-DOS HRECORD hook) runs in the
+                ; caller (wrq_claimed) just before the DBG_WRQ_CLAIMED marker. Both are
+                ; at SD-transaction boundaries (no CS asserted), the sanctioned
+                ; dbg_marker call sites.
                 ld      a, DBG_CLAIM_FIND_PRE
                 call    dbg_marker
                 endif
@@ -636,15 +627,11 @@ wrq_claim_record:
                 or      b
                 jr      z, wrq_no_free         ; BD_FREE_RECORD == 0: nothing free
                 ld      a, (BD_FREE_RECORD)    ; low byte = the record number (>=1)
-                ld      (WRQ_RECORD), a
-                ; NO HRECORD-select (i194 / §8ag): the per-sector write is now our own
-                ; bd_record_write_hw by ABSOLUTE card LBA (csd_base + 1600*(rec-1) +
-                ; linearSec), which consults no B-DOS "current record" state — so the
-                ; flaky B-DOS HRECORD hook (which HANGS on hardware, the claim's
-                ; CLAIM_SELECT_PRE-with-no-POST signature) is dropped. WRQ_RECORD
-                ; (set above) is the record the sink writes into; the claim's NAME
-                ; entry is still written via bdos_claim_record (our own self-healing
-                ; bd_list_write_hw) in wd_finalize.
+                ld      (WRQ_RECORD), a        ; the free record; the caller (wrq_claimed)
+                                               ; HRECORD-selects it, then HWSADs / HSAVEs
+                                               ; into it. Its NAME entry is written via
+                                               ; bdos_claim_record (bd_list_write_hw) in
+                                               ; wd_finalize / wd_finalize_flat.
                 scf
                 ret
 wrq_no_free:
@@ -991,8 +978,8 @@ wd_send_ack:
                 ; Re-arm the ENC before the ACK TX (i244). In the bootable push path
                 ; each accepted DATA block was streamed into the record via HWSAD (an SD
                 ; transaction on the shared one-PIC Trinity controller), and the final
-                ; block additionally ran wd_finalize's HRSAD read + CMD17/CMD24 claim —
-                ; every one disturbs the ENC's persistent RX state, which drv_read never
+                ; block additionally ran wd_finalize's CMD24 record-list claim — every
+                ; one disturbs the ENC's persistent RX state, which drv_read never
                 ; restores. enc_rx_reestablish re-arms it so the next serve-loop drv_read
                 ; + this ACK's drv_write work. (DE holds the block to ACK; preserved
                 ; across the re-arm.) Bootable-only: the HOSTTEST flat-accumulate path
@@ -1016,10 +1003,11 @@ wd_send_ack:
 
                 if (defined(NETBOOT_HOSTTEST)==0) * (defined(DUMPER)==0)
 ; wd_finalize — the disk-record push commit (i121f): the short final block has
-; arrived and the whole image is streamed into the claimed record. Flush the sink's
-; final partial sector, validate the result as a Trinity disk record (size == 819200
-; from RRS_TOTAL AND the "BDOS" stamp@232 read back via HRSAD), then reply: the
-; final ACK on a valid image (TFTP success), or ERROR(3, "invalid disk record")
+; arrived and the whole image is streamed into the HRECORD-selected record (each
+; 512-byte sector written via the B-DOS HWSAD hook, raw_record_sink). Flush the
+; sink's final partial sector, validate the result as a Trinity disk record (SIZE-ONLY:
+; size == 819200 from RRS_TOTAL — a .mgt needs no B-DOS installed on it), then reply:
+; the final ACK on a valid image (TFTP success), or ERROR(3, "invalid disk record")
 ; instead of the ACK on a bad one — so a stock `tftp put` client surfaces the
 ; rejection on its last block. This is the §6.5 "validate before committing, reject
 ; on mismatch" intent in TFTP-push form. Mirrors netboot_client.asm client_finalize
@@ -1038,10 +1026,8 @@ wd_finalize:
                 ld      (BD_REC_SIZE + 2), hl
 
                 ; Validation is SIZE-ONLY (i285): a .mgt needs no B-DOS installed on
-                ; it, so there is no sector-0 stamp to read back. The own-CMD24 write
-                ; path (i194) has no B-DOS "current record" state to read through
-                ; either — so NO HRSAD read-back is issued here (it was the flaky
-                ; B-DOS hook §8ag, and validation no longer needs sector 0).
+                ; it, so there is no sector-0 stamp to read back — no HRSAD read-back is
+                ; issued here, validation reads only RRS_TOTAL (the streamed size).
                 call    bdos_validate_disk_record  ; -> BD_REC_VALID (1 = valid)
                 ld      a, (BD_REC_VALID)
                 or      a
@@ -1073,8 +1059,8 @@ wd_finalize:
 
 wd_invalid:
                 ; invalid image: ERROR(3, "invalid disk record") in place of the ACK.
-                ; wd_finalize's HRSAD read (+ no claim on the reject path) disturbed the
-                ; ENC; re-arm before the ERROR reply's TX (i244), same as wd_send_ack.
+                ; The per-block HWSAD writes (+ no claim on the reject path) disturbed
+                ; the ENC; re-arm before the ERROR reply's TX (i244), same as wd_send_ack.
                 call    serve_rearm_enc
                 if defined(NETBOOT_DEBUG)
                 ld      a, DBG_FINALIZE_BAD
