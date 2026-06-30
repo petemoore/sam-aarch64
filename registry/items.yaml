@@ -4225,13 +4225,33 @@
   parent: i231b
 
 - id: i231b-b4
-  title: Eliminate the remaining 31 carve-outs (bdos_seam RST8 dispatch + multi-site files)
+  title: "Eliminate the harder carve-outs (post-i231b first pass), per file/cluster"
   description: |
-    The harder carve-outs awaiting elimination after the i231b first pass (ledger now 31 sites / 9 files): bdos_seam.asm (1, the RST8/B-DOS-hook dispatch HGTHD/HSAVE/HRSAD/HRECORD — needs harness modeling or SimCoupe, class B), netboot_serve.asm (11), netboot_client.asm (5), netboot_dumper.asm (3), netboot_server.asm (3), smoke_test.asm (3), csd_probe.asm (2), http_main.asm (2). (samboot_config.asm's 1 is owned by i269.) Each needs per-site analysis: remove-if-overgated, model-in-harness, or run under SimCoupe; split further per file/cluster as taken on.
+    Umbrella for eliminating the carve-outs left after the i231b first pass, taken on per file/cluster (CLAUDE.md rule 7 / the i126 comprehensive-emulation north star). Children: i231b-b4a (smoke_test.asm, DONE) + i231b-b4b (the remaining 28 sites / 8 files).
+  status: OPEN
+  kind: umbrella
+  owner: agent
+  parent: i231b
+
+- id: i231b-b4a
+  title: "smoke_test.asm carve-outs eliminated (3 sites): unify the flat-beside-full smoke binary; smoke_main already harness-driven via netboot_boot_test.go"
+  description: |
+    Removed the 3 NETBOOT_HOSTTEST==0 carve-outs in src/netboot/smoke_test.asm (the jp smoke_main entry, the smoke_main body, the eeprom.asm include). smoke_main was already exercised in emulation by TestSmokeBootRunsFromEEPROM (i124, against the eeprom.go model), so this was a remove-if-overgated case: the only residue was the redundant flat-host binary (netboot_smoke_test.bin, HOSTTEST-stripped) sitting beside the full bootable (netboot_smoke_boot.bin) — the comprehensive-emulation anti-pattern. Collapsed both into ONE netboot_smoke.bin used by every test (smoke_test_test.go drives smoke_serve_once flat; netboot_boot_test.go drives smoke_main via LoadBoot). Ledger 31->28 / 9->8 files.
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 761, role: completing}
+  parent: i231b-b4
+
+- id: i231b-b4b
+  title: Eliminate the remaining 28 carve-outs (bdos_seam RST8 dispatch + multi-site files)
+  description: |
+    After the smoke_test.asm elimination (i231b-b4a), the ledger is 28 sites / 8 files: bdos_seam.asm (1, the RST8/B-DOS-hook dispatch HGTHD/HSAVE/HRSAD/HRECORD — needs harness modeling or SimCoupe, class B), netboot_serve.asm (11), netboot_client.asm (5), netboot_dumper.asm (3), netboot_server.asm (3), csd_probe.asm (2), http_main.asm (2). (samboot_config.asm's 1 is owned by i269.) Each needs per-site analysis: remove-if-overgated (check whether netboot_boot_test.go or another harness test already drives the carved-out path, as smoke_main was), model-in-harness, or run under SimCoupe; split further per file/cluster as taken on.
   status: OPEN
   kind: leaf
   owner: agent
-  parent: i231b
+  parent: i231b-b4
 
 - id: i232
   title: "All Go-harness tests boot the SAM from address 0 (real ROM cold-init) for faithful machine state, not Call-with-seeded-state"

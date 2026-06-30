@@ -30,8 +30,8 @@ import (
 )
 
 const (
-	smokeBootBin = "../../../build/netboot_smoke_boot.bin"
-	smokeBootMap = "../../../build/netboot_smoke_boot.map"
+	smokeBootBin = "../../../build/netboot_smoke.bin"
+	smokeBootMap = "../../../build/netboot_smoke.map"
 	cliBootBin   = "../../../build/netboot_client_boot.bin"
 	cliBootMap   = "../../../build/netboot_client_boot.map"
 	// The i182a fetch-and-boot bootable: netboot_client.asm built with
@@ -75,7 +75,7 @@ var cliBootServerIP = frame.IPv4{192, 168, 0, 1}
 func TestSmokeBootRunsFromEEPROM(t *testing.T) {
 	mac, err := z80h.LoadBoot(smokeBootBin, smokeBootMap, romBaseBoot)
 	if err != nil {
-		t.Fatalf("smoke boot binary not built (%v); run `make netboot-smoke-boot`", err)
+		t.Fatalf("smoke boot binary not built (%v); run `make netboot-smoke`", err)
 	}
 	enc := z80h.NewENC28J60()
 	enc.ProgramTrinityNetwork(mask.ServerMAC, mask.ServerIP)
