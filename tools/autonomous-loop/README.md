@@ -120,6 +120,43 @@ stop. Mechanics:
 Disable with `ALOOP_MERGE_WATCH=0`. The agent should still `touch task-done`
 itself; the watch is the safety net, not a licence to skip the handshake.
 
+## SAM power management (i281)
+
+The autonomous loop can power the real SAM on/off itself via a TAPO smart plug
+(`~/bin/tapo.sh on|off`; a global 10 s minimum gap between power events is
+enforced — never power-cycle faster). Left unattended the SAM would stay on
+indefinitely, so the monitor tracks how long it has been **on** and winds it down:
+
+- **Source of truth.** `tapo.sh` records the resulting state to
+  `/var/tmp/tapo-power-state` (`"<on|off> <epoch>"`); the monitor reads it (no
+  network query in the hot loop). State `off`/absent/garbage → the watch does
+  **nothing** (it never acts on an unknown state).
+- **Escalation.** While Pete is **away**, at 30/60/90/120/150 min of uptime the
+  monitor messages the agent once per threshold asking whether the SAM is still
+  needed.
+- **Backstop.** At `ALOOP_TAPO_OFF_MINS` (default **180** min) it runs
+  `tapo.sh off` itself and tells the agent.
+- **Suppressed while Pete is present** (he is steering the hardware), same as the
+  hang-nudge.
+
+Disable with `ALOOP_TAPO_WATCH=0`. Tunables: `ALOOP_TAPO_CMD`,
+`ALOOP_TAPO_STATE`, `ALOOP_TAPO_KEEPALIVE`, `ALOOP_TAPO_CHECK_INTERVAL`,
+`ALOOP_TAPO_ESCALATE_MINS`, `ALOOP_TAPO_OFF_MINS`. Logic unit-tested by
+`test-tapo-power.sh`.
+
+### What the agent must do
+
+- **Turn the SAM off when you are done with it** — `~/bin/tapo.sh off`. Don't
+  leave it powered after a hardware shot.
+- **You can power-cycle it yourself** — `tapo.sh off` then `tapo.sh on` (≥ 10 s
+  apart; the guard waits for you if you are too quick). It boots into `trinload`
+  and is reachable at `192.168.2.75` in ~80 s.
+- **Keep it on across the deadlines while you are using it** — `touch
+  ~/.claude/autonomous-loop/tapo-keepalive`. That resets the uptime clock, so the
+  escalations and the 180-min backstop start over. Refresh it whenever you are
+  mid-hardware-work and need the SAM to stay up past the next threshold; stop
+  touching it (or `tapo.sh off`) when you are finished.
+
 ## Run
 
 ```sh

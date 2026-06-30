@@ -5028,9 +5028,11 @@
   title: "TAPO power-management automation: monitor tracks SAM on-time + escalates + auto-off backstop; agent keep-alive; idle-off in agent prompts"
   description: |
     The 10s cross-process power-event guard is DONE (lock + /var/tmp/tapo-last-power-event timestamp in ~/git/tapo-plug/tapo.sh, shared across all callers). REMAINING (Pete, 2026-06-28): (1) monitor (tools/autonomous-loop/monitor.sh) tracks the TAPO on/off state + the age since the last power-ON; when on >30/60/90/120/150 min it MESSAGES the agent asking if the SAM is still needed (recording which interval it has already asked, so it asks once per threshold, not repeatedly); at 180 min it calls 'tapo.sh off' ITSELF as a backstop and tells the agent it did so. (2) The agent can SIGNAL 'keep it on' by refreshing the power-event timestamp (or a dedicated keep-alive file) — so the SAM only stays on past 3h if an agent actively pushes the timestamp forward. (3) Agent prompt(s)/briefing: instruct agents to TURN THE SAM OFF when not using it (tapo.sh off), that they can power-cycle it themselves (off->on, >=10s apart, boots into trinload in ~80s), and how the keep-alive works. Decide the on/off state source (TAPO query vs infer from tapo.sh's last action) + the keep-alive mechanism. owner agent.
-  status: OPEN
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 762, role: completing}
 
 - id: i282
   title: "build/registry: dedupe prs[] on set-pr/set-status --pr (both append, producing a duplicate {num,role} entry)"
