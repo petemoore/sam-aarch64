@@ -42,8 +42,10 @@
 ;                                ACK the 4-byte header.
 ;   'F'  finalize             -> reply "D" (done) if the received-count == 1600
 ;                                (size-only: a record is exactly 1600 sectors =
-;                                819200 bytes), else "E"; then RET to trinload (clean,
-;                                re-pushable).
+;                                819200 bytes), else "E" — either way followed by the
+;                                claimed record number (BD_FREE_RECORD, LE16; i308) so
+;                                the host can boot/inspect record N without reading
+;                                the card; then RET to trinload (clean, re-pushable).
 ;   plus ARP-request and ICMP-echo replies (so the host can reach us), ported from
 ;   trinload's return_eth / return_arp / return_ip + the RFC-1071 checksum.
 ;
@@ -773,8 +775,10 @@ m2r_addsec1:
 ; ---------------------------------------------------------------------------
 ; sp_finalize — an 'F' message: validate the received sector count (size-only:
 ; a Trinity record is exactly 1600 sectors = 819200 bytes — the
-; bdos_validate_disk_record contract), reply "D" (done) or "E" (error), then RET
-; to trinload (clean, re-pushable).
+; bdos_validate_disk_record contract), reply "D" (done) or "E" (error) followed
+; by the claimed record number (BD_FREE_RECORD, LE16; i308 — so the host learns
+; WHICH record was written without reading the card), then RET to trinload
+; (clean, re-pushable).
 ; ---------------------------------------------------------------------------
 sp_finalize:
                 ld      hl, (sp_recv_count)
@@ -786,7 +790,12 @@ sp_finalize:
                 ld      a, "D"                 ; complete record -> done
 sp_fin_reply:
                 ld      (packet+42), a
-                ld      bc, 1
+                ; append the claimed record number so the host can print/boot it
+                ; (BD_FREE_RECORD is >=1 here: a no-free-record card exits via
+                ; sp_fail_nofree before the serve loop ever runs).
+                ld      hl, (BD_FREE_RECORD)
+                ld      (packet+43), hl        ; LE16 after the status byte
+                ld      bc, 3
                 call    ack_len
                 ld      a, "9"                 ; DBG: write-complete (record body finalised)
                 call    dbg_char
