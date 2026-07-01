@@ -116,6 +116,10 @@ scwr_ready:     pop     bc
                 ret
 
 sdc_timed_out:  defb    0                      ; set once an SD busy-wait exhausts its budget
+sdc_card_ready: defb    0                      ; 0 until the push's first write runs the full init
+                                               ; ladder; then subsequent writes re-select only
+                                               ; (init-once, bdos15t hd.svb-t; i301). Cleared on a
+                                               ; failed write so the next call re-inits.
 
 ; sdc_cmd — send the 6-byte command frame, poll R1 (bit7 clear = valid) <=256.
 ; In: A=opcode|&40, BC=arg[31:16], DE=arg[15:0], (sdc_cmd_crc) preset.
@@ -487,10 +491,17 @@ blwr_shl:
 ; ===========================================================================
 ; bd_cmd24_write_core — the shared CMD24 single-block write protocol (the §5/§8
 ; write tail Colin's hd.svb-t models, matched to sdcard.go's CMD24 state machine).
-; Self-healing: runs the full sdc_init_ladder every call, so a disturbed SPI state
-; (the serve's ENC ereset) is re-established before the write. Used by both
-; bd_list_write_hw (record-list claim) and bd_record_write_hw (record data write),
-; so the CMD24 handshake lives in ONE tested place.
+; Init-once, like B-DOS 1.5t: the SD card is initialised ONCE per push (the full
+; sdc_init_ladder on the first write, gated by sdc_card_ready), then every
+; subsequent write just re-selects the still-initialised card (&31) and issues
+; CMD24 — mirroring bdos15t hd.svb-t (&A918), whose write core calls
+; sd.cmd-with-address (&A81F: DI, select &31, CMD24) and NEVER the init ladder
+; (&A623, run only at HDINIT boot / RESTORE DEVICE). A per-write init would also
+; re-issue the &38 SD-wake that disturbs the shared PIC / ENC RX (enc28j60.go
+; sdInitSettling, i242), so init-once is both faster and safer. A failed write
+; clears sdc_card_ready so the next write re-inits (self-heals a transient glitch).
+; Used by both bd_list_write_hw (record-list claim) and bd_record_write_hw (record
+; data write), so the CMD24 handshake lives in ONE tested place.
 ;
 ; In:  bd_list_lba  4 bytes  32-bit LE block/byte address (already v1-shifted).
 ;      HL                    pointer to the 512-byte source buffer.
@@ -500,7 +511,20 @@ blwr_shl:
 ; ===========================================================================
 bd_cmd24_write_core:
                 ld      (bd_cmd24_src), hl     ; latch the source pointer for the data phase
-                call    sdc_init_ladder        ; wake + CMD0/8/41/58/59; card selected
+                ; Establish the card: full init on the first write of the push, a
+                ; light &31 re-select on every subsequent write (see header).
+                ld      a, (sdc_card_ready)
+                or      a
+                jr      nz, bcw_reselect
+                call    sdc_init_ladder        ; first write: wake + CMD0/8/41/58/59; card selected
+                ld      a, 1
+                ld      (sdc_card_ready), a
+                jr      bcw_cmd24
+bcw_reselect:
+                di                             ; the CMD24 transaction runs under DI (deselect EIs)
+                ld      a, SDC_SEL             ; &31 select the already-inited card (bdos15t &A81F)
+                out     (SDC_PORT), a
+bcw_cmd24:
                 ; CMD24 WRITE_SINGLE_BLOCK, arg = bd_list_lba (sent MSB-first by sdc_cmd).
                 ld      a, &FF                  ; CRC don't-care (CRC off)
                 call    sdc_set_crc
@@ -560,6 +584,12 @@ blwr_busy:
 blwr_reject:
                 scf
 blwr_done:
+                ; write failed: force a full re-init on the next call (self-heal a
+                ; transient glitch). sdc_deselect preserves the CY we set here.
+                push    af
+                xor     a
+                ld      (sdc_card_ready), a
+                pop     af
                 jp      sdc_deselect
 blwr_ok:
                 or      a                       ; CY clear: success
@@ -567,10 +597,10 @@ blwr_ok:
 
 ; ===========================================================================
 ; bd_record_write_hw — write one 512-byte data sector of a claimed Trinity record
-; with our OWN self-healing CMD24, by ABSOLUTE card LBA, bypassing the B-DOS HWSAD
-; hook (q62 option (a) / i194 / §8ag). The B-DOS hooks flakily hang on real hardware
-; (they rely on boot-time SPI-mode persistence the serve's ENC reset disturbs);
-; bd_cmd24_write_core re-runs sdc_init_ladder every call, so it self-heals and works.
+; with our OWN CMD24, by ABSOLUTE card LBA, bypassing the B-DOS HWSAD hook (q62
+; option (a) / i194 / §8ag / the i295 own-LBA design). Owning the LBA math lets
+; sd_push write without a B-DOS rst 8 in the serve's in-context run; the shared
+; bd_cmd24_write_core inits the card once per push then streams the CMD24s.
 ;
 ; RECORD -> LBA (the data-safety-critical math; cross-checked against the Go
 ; authority tools/netboot-oracle/bdos/raw_sink.go + the §6/§7 record geometry):
