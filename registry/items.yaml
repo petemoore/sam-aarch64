@@ -5395,11 +5395,12 @@
 - id: i312
   title: Single named source-of-truth for the B-DOS record-HEADER vs disk-BODY (byte-232) distinction + code-comment pointers
   description: |
-    i274 P5 (kill the byte-232 conflation at source). A Trinity record's HEADER/metadata (registration + the 'BDOS' validity stamp, written by FORMAT/create) is SEPARATE from the disk-image .mgt BODY (.mgt content); the validity stamp is NOT at offset 232 of the body. This header-vs-body distinction was conflated 20+ times across the SD-write saga (memory feedback_bdos_record_header_vs_disk_body). TASK: establish ONE named source-of-truth (a dedicated section in docs/notes/trinity-sd-z80-interface.md, or a small reference doc) that authoritatively states the record-HEADER-vs-disk-BODY layout, where the 'BDOS' validity stamp actually lives, and what record validation actually checks (size-only == 819200 for boot; the stamp is B-DOS's catalogue signature, not a boot gate). Then add code-comment pointers to that source from every site that touches record validation or the 232 offset (bdos_seam.asm, sd_csd.asm, raw_record_sink.asm, and the Go bdos model). So the distinction cannot be re-conflated from scattered/contradictory prose. Authority: memory feedback_bdos_record_header_vs_disk_body + feedback_trinity_sd_write_settled_truths; CLAUDE.md rule 8.
-  status: OPEN
-  depends_on: [q66]
+    RESOLVED (q66 adjudicated option (a), Pete 2026-07-01): the 'BDOS' validity stamp lives at +232 of the disk-image BODY (record's first directory sector), NOT the card record-LIST catalogue. A .mgt FILE is valid without it; a persisted Trinity SD RECORD is patched with it on write (sd_push) because B-DOS 1.5t (get.label) requires it to accept the record. Canonical source-of-truth: docs/notes/trinity-sd-z80-interface.md §8a truth #4 + spec trinity-record-detection-design.md §4.5; the auto-loaded memory feedback_bdos_record_header_vs_disk_body reconciled to match (it was the sole header-not-body contradiction; settled-truth #3 + MEMORY.md index refined too). Stale 'size AND stamp@232' validation comments corrected to size-only in serve.go + src/netboot/README.md. Path-parity follow-up (sd_push patches the stamp; serve-WRQ + client_finalize validate size-only without patching) tracked as i321.
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 792, role: completing}
 
 - id: i313
   title: netboot-oracle z80 harness mis-executes code relocated above ~0xD000 (blocks STAGING-enlarging / large-overlay collapses)
@@ -5470,3 +5471,11 @@
   owner: agent
   prs:
     - {num: 788, role: completing}
+
+- id: i321
+  title: Verify +232 'BDOS' stamp-patch parity across SD-write paths (sd_push patches; serve-WRQ + client_finalize size-only)
+  description: |
+    sd_push.asm sp_data_write patches the 4-byte 'BDOS' stamp (+ record name @+210) into the record's sector-0 on write - the path that hardware-booted cj.mgt (i295/i302/i315). The serve-WRQ path (raw_record_sink -> bdos_write_record) and client_finalize validate SIZE-ONLY (819200) and do NOT patch the stamp. Per the file-vs-SD-record distinction (memory feedback_bdos_record_header_vs_disk_body, Pete 2026-07-01): a persisted Trinity SD record needs 'BDOS'@232 for B-DOS 1.5t (get.label) to accept it, else rep81 'Invalid record'. So a stampless .mgt (e.g. a FRED disk) pushed via the serve-WRQ or client route would land a record B-DOS rejects, whereas sd_push handles it. VERIFY: real gap (those routes should patch like sd_push) or intended (incoming .mgt always pre-stamped / those routes superseded)? Likely relates to i319 (disk push). If a real gap, port sd_push's sector-0 patch into raw_record_sink finalize + client_finalize.
+  status: OPEN
+  kind: leaf
+  owner: agent
