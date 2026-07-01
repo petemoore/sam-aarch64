@@ -771,6 +771,61 @@ bdos_claim_record:
                 ret
 
 ; ---------------------------------------------------------------------------
+; bdos_free_record — mark a Trinity record FREE by clearing its central record-LIST
+; name entry (zeroing the 16-byte entry), so bdos_find_free_record reports it free
+; again and the slot is reusable. The exact INVERSE of bdos_claim_record: the same
+; single-entry read-modify-write geometry, but it writes 16 ZERO bytes instead of a
+; name. This is the record-list side of B-DOS's new.rec / RENAME "change label in
+; record list" RMW (bdos15a.src.txt:2801-2823: load the record-list sector, LDIR a
+; 16-byte name into the entry, save the sector) with an all-zero label — which reads
+; back FREE ((entry[0] AND 0x7F) == 0, the frec3x test; bdos15a.src.txt:946-948;
+; docs/specs/trinity-record-detection-design.md §4.4). It completes the
+; store/boot/delete testing toolkit (i317) so the autonomous loop can re-push cleanly
+; without exhausting records.
+;
+; In:  BD_DELETE_RECORD  2 bytes  the 1-based record to free (>= 1).
+; Out: the record's list entry zeroed; the card now reads that record as FREE.
+; Clobbers: A, BC, DE, HL.
+;
+; SAFETY (the Trinity SD card is a SHARED user resource — trinity_storage_shared_
+; resource): this writes ONLY the 16-byte entry of BD_DELETE_RECORD. It reads the
+; entry's containing list sector, zeroes EXACTLY those 16 bytes in the loaded sector
+; (the read-modify-write keeps every other entry byte-for-byte intact), then writes
+; that one sector back. No neighbour is ever touched — the only entry mutated is the
+; one at this record's own (listSector, byteOffset). The CALLER is responsible for
+; confirming the record is one WE may free (show-name + confirm-before-overwrite,
+; trinity_storage_shared_resource) BEFORE calling; this primitive frees whatever
+; record it is handed.
+bdos_free_record:
+                ; 1. Geometry: which list sector holds this record's entry, and the
+                ;    byte offset of the entry within it. Shared with the READ
+                ;    (bdos_record_entry) and the CLAIM (bdos_claim_record) so all three
+                ;    target the same entry for a given record.
+                ld      hl, (BD_DELETE_RECORD)
+                ld      (BD_ENTRY_REC), hl
+                call    bdos_record_geometry   ; -> BD_LIST_SECTOR set, BC = byteOffset
+
+                ; 2. Read-modify-write: load the containing list sector, zero ONLY this
+                ;    record's 16 bytes, write the sector back. Every other entry in the
+                ;    sector is preserved byte-for-byte (the safety invariant — never
+                ;    touch a record we were not asked to free).
+                push    bc                     ; save byteOffset across the read
+                call    bdos_read_list_sector  ; -> BD_LIST_BUF (512 bytes)
+                pop     bc                     ; restore byteOffset
+
+                ld      hl, BD_LIST_BUF
+                add     hl, bc                 ; HL = BD_LIST_BUF + byteOffset (the entry)
+                ld      b, 16                  ; 16 bytes to zero (the whole entry)
+                xor     a                      ; A = 0 (the free / unnamed byte)
+bfr_zero:
+                ld      (hl), a
+                inc     hl
+                djnz    bfr_zero
+
+                call    bdos_write_list_sector ; write the modified sector back
+                ret
+
+; ---------------------------------------------------------------------------
 ; bdos_build_claim_entry — build the 16-byte central-list name entry for a record
 ; from BD_CLAIM_NAME_PTR, the WRQ filename. This is the FULL 16-char record-name
 ; field (the whole list entry IS the record name — design §4.3), so the pushed
@@ -1152,3 +1207,6 @@ BD_WRITE_COUNT:   defs 2                 ; bdos_write_record: number of sectors 
 
 ; --- i122a boot-a-record primitive --------------------------------------------
 BD_BOOT_RECORD:   defs 1                 ; bdos_boot_record: record to select + ALHK-boot
+
+; --- i317 delete-a-record primitive -------------------------------------------
+BD_DELETE_RECORD: defs 2                 ; bdos_free_record: 1-based record to free (zero its list entry)
