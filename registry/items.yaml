@@ -4245,9 +4245,9 @@
   parent: i231b-b4
 
 - id: i231b-b4b
-  title: "Eliminate the remaining 18 carve-outs / 3 files (http_main, netboot_client, netboot_serve)"
+  title: Eliminate the remaining carve-outs in http_main.asm + netboot_serve.asm (13 sites / 2 files)
   description: |
-    The carve-outs remaining after smoke_test.asm (i231b-b4a), csd_probe.asm (i231b-b4c), netboot_server.asm (i231b-b4d), netboot_dumper.asm (i231b-b4e) and bdos_seam.asm (i231b-b4g) — the live ledger is 18 sites / 3 files: netboot_serve.asm (11, the (HOSTTEST==0)*(DUMPER==0) combined gates — the hard core), netboot_client.asm (5, has a host-only STAGING size-switch double + a real bootable body already harness-driven via bdos_store_test.go RunBoot(client_main) + netboot_fetch_boot_test.go), http_main.asm (2, has a host store double [PROV_STORE_*] AND a real B-DOS HSAVE store leaf both defining store_begin/store_end — dropping HOSTTEST removes the recording double, so collapse needs the oracle store tests retargeted at the real B-DOS store model). netboot_client is the cleanest next remove-if-overgated collapse (the harness already models EEPROM + all B-DOS RST 8 hooks + SD CSD); http_main needs the store-double resolution; netboot_serve's combined gates are the hardest. Nesting maxed at i231b-b4X: track each file's completion as a NEW sibling leaf under i231b-b4 (split --parent i231b-b4).
+    The carve-outs remaining after smoke_test.asm (b4a), csd_probe.asm (b4c), netboot_server.asm (b4d), netboot_dumper.asm (b4e), bdos_seam.asm (b4g), and with netboot_client.asm now split out as its own leaf [[i231b-b4h]] (investigated: blocked on a STAGING/high-address resolution). Live ledger 13 sites / 2 files: netboot_serve.asm (11, the (HOSTTEST==0)*(DUMPER==0) combined gates — the hard core), http_main.asm (2, has a host store double [PROV_STORE_*] AND a real B-DOS HSAVE store leaf both defining store_begin/store_end — dropping HOSTTEST removes the recording double, so collapse needs the http_main oracle store tests [http_main_store_test.go, http_main_loop_test.go] retargeted at the real B-DOS store model, and must watch for the same [[i313]] high-address hazard the store leaf could hit). http_main is the smaller next slice; netboot_serve's combined gates are the hardest. Nesting maxed at i231b-b4X: track each file's completion as a NEW sibling leaf under i231b-b4 (split --parent i231b-b4).
   status: OPEN
   kind: leaf
   owner: agent
@@ -4306,6 +4306,15 @@
   owner: agent
   prs:
     - {num: 780, role: completing}
+  parent: i231b-b4
+
+- id: i231b-b4h
+  title: "netboot_client.asm carve-outs eliminated (5 sites): collapse the flat HOSTTEST binary into the bootable; client_main/client_fetch_boot already harness-driven"
+  description: |
+    Eliminate the 5 NETBOOT_HOSTTEST==0 carve-outs in src/netboot/netboot_client.asm (boot entry :55; sink-mode selector :420; cl_sink_payload+raw_record_sink_leaf :448; the bootable body :754; the real-module includes bdos_picker/eeprom/raw_record_sink/sd_csd :1114). INVESTIGATED (see PR that recorded this): the naive collapse (delete the flat netboot_client.bin HOSTTEST build, retarget netboot_client_test.go at netboot_client_boot.bin, make the 5 blocks unconditional) does NOT land clean. Removing the carve-out directives ALONE is a boot-binary no-op (the ==0 blocks were already in the REAL_LISTREAD boot build; verified byte-identical). But retargeting the flat test REQUIRES enlarging STAGING: netboot_client_test.go streams up to 7240 bytes into STAGING via the client's own ldir (makeFile(cliBlksize*5+100), TestClientWindowedSession/GapRewind) — the flat build has STAGING=16384, the boot build 2048; a 2048 boot binary fails those tests (frame-builder code above STAGING gets overwritten). And enlarging STAGING in place relocates the SD routines above ~0xD000 into the [[i313]] harness high-address defect (boot tests then fail). Irreducible in-place conflict: flat needs STAGING>=7240; boot needs SD routines below ~0xCF00. TWO resolution paths: (A) LIGHTER — move the STAGING 'defs' to the END of the image (after all includes) so growing it extends into high DATA RAM without relocating any CODE; then STAGING=16384 works and the collapse proceeds (verify all boot tests + retargeted flat tests + the 32768 boot-fit-check). (B) fix i313 (the emulation-first path), then enlarge STAGING in place. Care points confirmed GREEN: the flat test never reaches the LISTREAD/csd_set_bd_records path (harness-hook vs REAL_LISTREAD CMD17 difference is moot); all 15 symbols it uses exist in netboot_client_boot.map (clean retarget). Makefile: delete the flat recipe + its .PHONY + netboot-z80-routines membership; netboot-client-disk already uses the boot bin. Fix netboot_client_test.go:49 stale 'make netboot-client' comment. Ledger 18->13 / 3->2 files. Recommend path A (no harness dep).
+  status: OPEN
+  kind: leaf
+  owner: agent
   parent: i231b-b4
 
 - id: i232
@@ -5368,6 +5377,14 @@
   title: Single named source-of-truth for the B-DOS record-HEADER vs disk-BODY (byte-232) distinction + code-comment pointers
   description: |
     i274 P5 (kill the byte-232 conflation at source). A Trinity record's HEADER/metadata (registration + the 'BDOS' validity stamp, written by FORMAT/create) is SEPARATE from the disk-image .mgt BODY (.mgt content); the validity stamp is NOT at offset 232 of the body. This header-vs-body distinction was conflated 20+ times across the SD-write saga (memory feedback_bdos_record_header_vs_disk_body). TASK: establish ONE named source-of-truth (a dedicated section in docs/notes/trinity-sd-z80-interface.md, or a small reference doc) that authoritatively states the record-HEADER-vs-disk-BODY layout, where the 'BDOS' validity stamp actually lives, and what record validation actually checks (size-only == 819200 for boot; the stamp is B-DOS's catalogue signature, not a boot gate). Then add code-comment pointers to that source from every site that touches record validation or the 232 offset (bdos_seam.asm, sd_csd.asm, raw_record_sink.asm, and the Go bdos model). So the distinction cannot be re-conflated from scattered/contradictory prose. Authority: memory feedback_bdos_record_header_vs_disk_body + feedback_trinity_sd_write_settled_truths; CLAUDE.md rule 8.
+  status: OPEN
+  kind: leaf
+  owner: agent
+
+- id: i313
+  title: netboot-oracle z80 harness mis-executes code relocated above ~0xD000 (blocks STAGING-enlarging / large-overlay collapses)
+  description: |
+    Discovered during i231b-b4h (netboot_client carve-out collapse). When netboot binary code (the real SD re-blocking / ldir / 32-bit-division loops in raw_record_sink_leaf @ ~0xCF53+, bdos_read_sector, the sd_csd routines) is relocated ABOVE ~0xCF00-0xD000, the koron-go/z80 v0.10.2 harness mis-executes it: the CPU wild-jumps below the org (observed PC=&4E0D, 'raw_record_sink_leaf did not return after 5000000 steps') and/or decodes garbage ('no T-state timing for opcode DD FC at PC=&E16A'). Measured threshold (via real Make rebuild, boot tests = TestRawRecordSinkMatchesGo + TestClientFinalize*): raw_record_sink_leaf PASSES at 0xCB53 (STAGING=5120), FAILS at 0xCF53 (STAGING=6144) and above. pyz80 relocates correctly (every byte-diff is exactly a +high-byte delta on absolute operands; structurally identical code), and the CardModel HRSAD/HWSAD handlers are address-independent (bdos_store.go, keyed on PC==0x0008) — so the defect is in the harness's execution of high-address code, NOT the model or the assembly. Root-cause is UNCONFIRMED: could be a koron core decode/timing bug, a gap in the harness patch layer (see the INI/IND-style quirk already patched at harness.go:225-236 — a DD FC T-state entry may just be missing), or a subtler interaction. Task: root-cause + fix so high-address code runs faithfully (emulation-first, CLAUDE.md §7 'a gap is a defect to fix'). This unblocks the clean STAGING=16384 netboot_client collapse (i231b-b4h) and any future large section-D overlay. NOTE i231b-b4h has a LIGHTER alternative that dodges this bug (move the STAGING defs to the END of the image so growing it never relocates code) — so b4h is not hard-blocked on this, but fixing this is the emulation-first-correct path and de-risks all high-address netboot work.
   status: OPEN
   kind: leaf
   owner: agent
