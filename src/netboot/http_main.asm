@@ -5,44 +5,36 @@
 ; through the HTTP header-skip + a SHA-256 verify into a per-file store, recording
 ; whether the streamed bytes matched the file's pinned hash, then advancing.
 ;
-; It composes the already-host-verified pieces and adds only the sequencing:
+; It composes these pieces and adds only the sequencing:
 ;   - netboot_http.asm  : the single-file fetch phase machine (http_fetch_first /
 ;     http_fetch_onframe) + its whole include chain (http_get -> tcp_conn ->
 ;     build_tcp_segment -> encdrv, plus the streaming sink + SHA-256 verify),
 ;   - fw_source.asm     : the pinned manifest (FW_MANIFEST) + the per-file path
 ;     builder (fw_plan_path / fw_manifest_entry),
-;   - body_sink.asm     : the HTTP-response header skip (body_sink_write) — joined
-;     in Brick 3, where its standalone recording doubles (BODY_IN/BODY_OUT, ~12 KB)
-;     are guarded behind NETBOOT_STANDALONE so the composed binary stays inside the
-;     &8000-&10000 host-test window (the doubles are unused once body_sink forwards
-;     to storage_sink_leaf).
+;   - body_sink.asm     : the HTTP-response header skip (body_sink_write); its
+;     standalone recording doubles (BODY_IN/BODY_OUT, ~12 KB) are guarded behind
+;     NETBOOT_STANDALONE so this binary stays inside the &8000-&10000 window (they
+;     are unused once body_sink forwards to storage_sink_leaf).
 ;
 ; The orchestration driver (prov_first / prov_onframe / prov_next) is the rx-
-; driven port of Provisioner.First / OnFrame / Next; it lives OUTSIDE the
-; NETBOOT_HOSTTEST guard so the host harness drives it exactly like
-; http_fetch_onframe. The real-hardware bootable http_main (EEPROM read, the
-; B-DOS HSAVE write) is the only non-host-verifiable part (CLAUDE.md §5).
+; driven port of Provisioner.First / OnFrame / Next; the oracle tests drive it
+; exactly like http_fetch_onframe. The bootable http_main entry (Trinity EEPROM
+; read, the B-DOS HSAVE write) is the only non-host-verifiable part (CLAUDE.md §5).
 ;
-; This file is built incrementally per docs/plans/z80-http-main-port-plan.md.
-; It currently carries: the composition of the three include trees; prov_start —
-; the per-file connection re-init (port/ISS/state reset, path + host + pinned-hash
-; wiring, the bodySink seam armed); store_begin/store_end — the per-file store
-; double (the Z80 port of the Go MemStore) that demarcates each file's slice of
-; CONN_SINK_OUT and records its verify verdict; and prov_first/prov_onframe/
-; prov_next — the rx-driven download loop over the manifest (the port of
-; Provisioner.First/OnFrame/Next). The bootable migration to this loop is the
-; remaining brick.
+; This file carries: the composition of the three include trees; prov_start — the
+; per-file connection re-init (port/ISS/state reset, path + host + pinned-hash
+; wiring, the bodySink seam armed); store_begin/store_end/storage_sink_leaf — the
+; real per-file store leaf (the B-DOS HSAVE-per-record write, hardware-gated) that
+; streams each fetched body into bounded records and records its verify verdict;
+; and prov_first/prov_onframe/prov_next — the rx-driven download loop over the
+; manifest (the port of Provisioner.First/OnFrame/Next).
 
-                ; Bootable build (NETBOOT_STREAM, no NETBOOT_HOSTTEST): own the
-                ; org so the boot entry is the first instruction at &8000 — the
-                ; address the netboot AUTO BASIC CALLs (CALL 32768). tcp_conn.asm
-                ; suppresses its own org under NETBOOT_STREAM so this is the single
-                ; org. The host-test build keeps tcp_conn as the org provider (this
-                ; block is skipped), so its layout is unchanged.
-                if defined(NETBOOT_HOSTTEST)==0
+                ; Own the org so the boot entry is the first instruction at &8000 —
+                ; the address the netboot AUTO BASIC CALLs (CALL 32768). tcp_conn.asm
+                ; suppresses its own org under NETBOOT_STREAM, so this is the single
+                ; org.
                 org     &8000
                 jp      http_main
-                endif
 
                 include "netboot_http.asm"      ; org &8000 + the fetch machine +
                                                 ; tcp_conn (+ streaming/verify) +
@@ -54,16 +46,15 @@
                                                 ; recording doubles (BODY_IN/BODY_OUT)
                                                 ; guarded behind NETBOOT_STANDALONE so
                                                 ; the composed binary fits the &8000-
-                                                ; &10000 window (Brick 3).
+                                                ; &10000 window.
                 include "enc_link.asm"          ; drv_wait_link (PHY link-up, i127/i128)
 
-; prov_skeleton — the Brick 1 placeholder entry so the composed binary has a
-; public label to assemble. Superseded by prov_first/prov_onframe/prov_next in
-; Brick 6.
+; prov_skeleton — a public label so anything linking against the composed binary
+; has a stable entry alongside prov_first/prov_onframe/prov_next.
 prov_skeleton:  ret
 
 ; ===========================================================================
-; Brick 4 — per-file re-init configuration and prov_start.
+; Per-file re-init configuration and prov_start.
 ; ===========================================================================
 
 ; Config cells written by the test harness before calling prov_start.
@@ -91,7 +82,8 @@ PROV_WINDOW:    defw 0
 ;   8. fw_manifest_entry(BC=i) -> BC=rec ptr; copy rec+4 (32 B) -> CONN_PINNED_HASH
 ;   9. arm sink: CONN_SINK_FILTER_MODE=1, CONN_SINK_FILTER=body_sink_write,
 ;      BODY_DST_PTR=storage_sink_leaf
-;  10. call store_begin (placeholder ret until Brick 5)
+;  10. call store_begin (open this file in the store: remember its name for
+;       record naming, reset the record index)
 ; ===========================================================================
 prov_start:
                 ; --- step 1: CONN_CLIENT_PORT = BASE_PORT + i (BE) ---
@@ -182,7 +174,7 @@ ps_mac_zero:    ld      (hl), a
                 ld      bc, 32
                 ldir                            ; copy 32 bytes to CONN_PINNED_HASH
 
-                ; --- step 9: arm the Brick 3 bodySink seam ---
+                ; --- step 9: arm the bodySink seam ---
                 ld      a, 1
                 ld      (CONN_SINK_FILTER_MODE), a
                 ld      hl, body_sink_write
@@ -191,107 +183,15 @@ ps_mac_zero:    ld      (hl), a
                 ld      (BODY_DST_PTR), hl
 
                 ; --- step 10: store_begin(HL = manifest name ptr) ---
-                ; Opens this file in the per-file store double: records its name +
-                ; the current sink-out offset as the file's start boundary.
+                ; Opens this file in the store: remembers its name (for record
+                ; naming) and resets the record index; storage_sink_leaf writes the
+                ; body window-by-window as it streams.
                 pop     hl                      ; HL = name ptr (saved in step 8)
                 call    store_begin
                 ret
 
 ; ===========================================================================
-; Brick 5 — the per-file store double (the Z80 port of the Go MemStore).
-;
-; The Go authority Provisioner.start(i) does `hash = NewHashingSink(store.Begin(
-; name))` per file and, on file completion, records `Verified = (hash.Sum() ==
-; spec.SHA256)` then `store.End(name)`. The Z80 mirror keeps one shared append-
-; only sink buffer (CONN_SINK_OUT, the recording double for the real B-DOS
-; bounded write) and DEMARCATES each file's slice of it by recording the sink-out
-; length at the file's open (store_begin) and close (store_end) — so file i's
-; body is CONN_SINK_OUT[PROV_STORE_OFFS[i] : PROV_STORE_OFFS[i+1]]. The verdict
-; per file is CONN_HASH_MATCH (conn_verify_final's body-vs-pin compare).
-;
-; This is the host-test recording double only (NETBOOT_HOSTTEST): it uses the
-; streaming-sink state (CONN_SINK_OUT_LEN / CONN_HASH_MATCH / conn_verify_final),
-; all of which exist only in the host-test build. The bootable build's real
-; store_begin/store_end (the B-DOS HSAVE leaf, q16/i93) land in Brick 7; until
-; then they are no-ops there.
-; ===========================================================================
-                if defined(NETBOOT_HOSTTEST)
-; PROV_STORE_COUNT — number of files closed so far (store_end increments). It is
-; the live index store_begin/store_end write into, so store_begin for file i sees
-; i and store_end for file i sets it to i+1.
-PROV_STORE_COUNT:   defw 0
-; PROV_STORE_NAMES — one name pointer per file (2 B each), in fetch order; the
-; Go MemStore.Order analogue.
-PROV_STORE_NAMES:   defs 16     ; up to 8 files
-; PROV_STORE_OFFS — the file boundaries within CONN_SINK_OUT (2 B each): file i's
-; body is [OFFS[i], OFFS[i+1]). store_begin writes the start at OFFS[i], store_end
-; the end at OFFS[i+1], so N files leave N+1 boundaries.
-PROV_STORE_OFFS:    defs 18     ; up to 9 boundaries
-; PROV_FILE_VERDICTS — CONN_HASH_MATCH per file (1 B each): 1 if the streamed
-; body's SHA-256 matched the pinned hash, else 0 (the Go FileResult.Verified).
-PROV_FILE_VERDICTS: defs 8      ; up to 8 files
-
-; ---------------------------------------------------------------------------
-; store_begin — open file (PROV_STORE_COUNT) in the store double.
-; In:  HL = the file's name pointer (NUL-terminated string).
-; Records the name + the current sink-out offset as the file's start boundary.
-; Clobbers: A, BC, DE, HL.
-; ---------------------------------------------------------------------------
-store_begin:
-                ex      de, hl                  ; DE = name ptr
-                ld      hl, (PROV_STORE_COUNT)
-                add     hl, hl                  ; HL = idx*2 (word index)
-                push    hl                      ; save idx*2 for the OFFS store
-                ld      bc, PROV_STORE_NAMES
-                add     hl, bc                  ; HL = &PROV_STORE_NAMES[idx]
-                ld      (hl), e
-                inc     hl
-                ld      (hl), d                 ; PROV_STORE_NAMES[idx] = name ptr
-                pop     hl                      ; HL = idx*2
-                ld      bc, PROV_STORE_OFFS
-                add     hl, bc                  ; HL = &PROV_STORE_OFFS[idx]
-                ld      bc, (CONN_SINK_OUT_LEN)
-                ld      (hl), c
-                inc     hl
-                ld      (hl), b                 ; PROV_STORE_OFFS[idx] = start offset
-                ret
-
-; ---------------------------------------------------------------------------
-; store_end — close the current file: finish + verify its hash, record the
-; verdict and the end boundary, advance the file count.
-; In:  CONN_PINNED_HASH filled (by prov_start), the body fully streamed.
-; Clobbers: A, BC, DE, HL, IX (conn_verify_final).
-; ---------------------------------------------------------------------------
-store_end:
-                call    conn_verify_final       ; CONN_HASH + CONN_HASH_MATCH
-                ; PROV_FILE_VERDICTS[idx] = CONN_HASH_MATCH (1 byte per file).
-                ld      hl, (PROV_STORE_COUNT)
-                ld      de, PROV_FILE_VERDICTS
-                add     hl, de                  ; HL = &PROV_FILE_VERDICTS[idx]
-                ld      a, (CONN_HASH_MATCH)
-                ld      (hl), a
-                ; PROV_STORE_OFFS[idx+1] = current sink-out length (end boundary).
-                ld      hl, (PROV_STORE_COUNT)
-                inc     hl                      ; idx+1
-                add     hl, hl                  ; (idx+1)*2
-                ld      de, PROV_STORE_OFFS
-                add     hl, de                  ; HL = &PROV_STORE_OFFS[idx+1]
-                ld      bc, (CONN_SINK_OUT_LEN)
-                ld      (hl), c
-                inc     hl
-                ld      (hl), b
-                ; PROV_STORE_COUNT = idx+1.
-                ld      hl, (PROV_STORE_COUNT)
-                inc     hl
-                ld      (PROV_STORE_COUNT), hl
-                ret
-                endif  ; NETBOOT_HOSTTEST (host store double)
-                ; The bootable build's real store_begin / store_end /
-                ; storage_sink_leaf (the fw_span + B-DOS HSAVE-per-record leaf) are
-                ; in the "Brick 7" bootable section at the foot of this file.
-
-; ===========================================================================
-; Brick 6 — the rx-driven download loop: prov_first / prov_onframe / prov_next,
+; The rx-driven download loop: prov_first / prov_onframe / prov_next,
 ; the Z80 port of Provisioner.First / OnFrame / Next.
 ;
 ; The driver walks files 0..PROV_FILE_COUNT-1 of the manifest, one TCP connection
@@ -376,13 +276,13 @@ prov_next:
                 call    prov_start              ; prov_start(idx): per-file re-init
                 jp      http_fetch_first        ; ARP, BC = frame length
 
-; Loop state (both builds — prov_* reference these unconditionally).
+; Loop state (prov_* reference these unconditionally).
 PROV_IDX:        defw 0                 ; index of the file currently being fetched
-PROV_FILE_COUNT: defw FW_FILE_COUNT     ; number of files to fetch (host test sets it)
+PROV_FILE_COUNT: defw FW_FILE_COUNT     ; number of files to fetch (the oracle sets it)
 PROV_STATUS:     defb PROV_CONTINUE     ; last prov_onframe status (Continue/File/All)
 
 ; ===========================================================================
-; Brick 7 — the real-hardware bootable entry + the B-DOS HSAVE store leaf.
+; The real-hardware bootable entry + the B-DOS HSAVE store leaf.
 ;
 ; This is the non-host-verifiable half (CLAUDE.md §5): the Trinity EEPROM
 ; identity read, the ENC28J60 silicon init, and the per-record HSAVE to Trinity
@@ -402,7 +302,6 @@ PROV_STATUS:     defb PROV_CONTINUE     ; last prov_onframe status (Continue/Fil
 ; hardware-gated, so the persist/serve naming is consistent rather than matching
 ; bdos.SpanPlan's plain-name-when-single optimisation.
 ; ===========================================================================
-                if defined(NETBOOT_HOSTTEST)==0
 
                 include "fw_span.asm"          ; fw_span_record_name (<prefix><NNN>)
 
@@ -638,5 +537,3 @@ storage_sink_leaf:
                 inc     hl
                 ld      (FW_REC_IDX), hl
                 ret
-
-                endif  ; !NETBOOT_HOSTTEST (bootable entry + store leaf)
