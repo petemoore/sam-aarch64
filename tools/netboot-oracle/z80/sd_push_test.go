@@ -371,6 +371,104 @@ func TestSDPushFinalizeComplete(t *testing.T) {
 	}
 }
 
+// sideMajorRecordLinear mirrors sd_push's mgt_to_record_linear (i315/i294): a .mgt
+// container is TRACK-major (m = cyl*20 + side*10 + (sector-1), samfile) while a Trinity
+// SD record stores the disk SIDE-major (rec = side*800 + cyl*10 + (sector-1), B-DOS 1.5t
+// conv.de &A151). sd_push must reorder each streamed .mgt sector m to rec before the
+// write, or a pushed record shows its directory (track0/side0 aligns) but reads
+// scrambled side-1/higher-track data on boot ('108 End of file').
+func sideMajorRecordLinear(m int) int {
+	cyl := m / 20
+	side := (m / 10) & 1
+	sec1 := m % 10
+	return side*800 + cyl*10 + sec1
+}
+
+// TestSDPushSideMajorReorder is the i315 emulation gate: it proves sd_push actually
+// applies the track-major->side-major reorder on the write path (the plan's validation
+// item 1). It streams a full 1600-sector .mgt whose every sector is FINGERPRINTED with
+// its own .mgt linear index m (identical content — as TestSDPushFinalizeComplete uses —
+// could not tell a reorder from a no-op), then asserts that each .mgt sector m's content
+// lands at record linear sideMajorRecordLinear(m), and — explicitly — that the mapping is
+// a genuine reorder, not the identity (record linear 10 holds .mgt sector 20, not 10).
+func TestSDPushSideMajorReorder(t *testing.T) {
+	mac, enc, sd := setupSDPushMain(t, z80h.CSDForV2(0x001D59))
+
+	// fingerprint(m): a 512-byte sector uniquely identifying .mgt linear index m —
+	// bytes[0:2] = m (LE), the rest a per-m pseudo-random fill so two sectors are wholly
+	// distinct (any position mixup or content bleed is caught, not just the first bytes).
+	fingerprint := func(m int) []byte {
+		sec := make([]byte, 512)
+		sec[0] = byte(m)
+		sec[1] = byte(m >> 8)
+		for i := 2; i < 512; i++ {
+			sec[i] = byte((m*31 + i*7 + 0x5A) & 0xFF)
+		}
+		return sec
+	}
+
+	enc.InjectRX(sdPushFrame([]byte{'?'}))
+	for m := 0; m < 1600; m++ {
+		enc.InjectRX(sdPushBlock(uint16(m), fingerprint(m)))
+	}
+	enc.InjectRX(sdPushFrame([]byte{'F'}))
+
+	res, err := mac.RunBoot("sd_push_main", z80h.Entry{StepCap: 400_000_000})
+	if err != nil {
+		t.Fatalf("RunBoot sd_push_main faulted: %v", err)
+	}
+	t.Logf("sd_push side-major reorder: finalPC=&%04X steps=%d writes=%d",
+		res.PC, res.Steps, len(sd.WrittenSectors()))
+
+	sym := func(name string) uint16 {
+		a, err := mac.Sym(name)
+		if err != nil {
+			t.Fatalf("sd_push symbol %q absent from %s", name, sdPushMap)
+		}
+		return a
+	}
+	base := int(leU16(mac.Read(sym("csd_base"), 2)))
+	free := int(leU16(mac.Read(sym("BD_FREE_RECORD"), 2)))
+	if base != spCSDBase || free != 1 {
+		t.Fatalf("csd_base=%d free=%d, want %d and 1 (record 1 on an empty list)", base, free, spCSDBase)
+	}
+
+	// Every .mgt sector m must sit at record linear sideMajorRecordLinear(m). Sector 0
+	// (m==0 -> rec 0, the directory) carries the B-DOS validity metadata mutated into its
+	// [210,220)/[232,236)/[250,256) windows, so compare only its pre-metadata region.
+	for m := 0; m < 1600; m++ {
+		rec := sideMajorRecordLinear(m)
+		got, ok := sd.RecordDataSector(uint32(base), free, rec)
+		if !ok {
+			t.Fatalf(".mgt sector %d: record linear %d absent from the SD store", m, rec)
+		}
+		if m == 0 {
+			if !bytes.Equal(got[:210], fingerprint(0)[:210]) {
+				t.Fatalf(".mgt sector 0 -> record linear 0: pre-metadata bytes differ — the directory sector was not written here")
+			}
+			if s := string(got[232:236]); s != "BDOS" {
+				t.Fatalf(".mgt sector 0 -> record linear 0: +232 = %q, want \"BDOS\" (the validity stamp)", s)
+			}
+			continue
+		}
+		if !bytes.Equal(got, fingerprint(m)) {
+			t.Fatalf("side-major reorder wrong: record linear %d holds .mgt sector %d's fingerprint, want .mgt sector %d's (rec should hold sideMajor(m))",
+				rec, int(got[0])|int(got[1])<<8, m)
+		}
+	}
+
+	// Explicit NON-IDENTITY witnesses, so the reorder's intent is legible and a silent
+	// regression to a straight-through write is caught head-on:
+	//   .mgt sector 10 (track0/side1/sector1) -> record linear 800 (start of side 1);
+	//   record linear 10 (track1/side0/sector1) holds .mgt sector 20, NOT sector 10.
+	if got, _ := sd.RecordDataSector(uint32(base), free, 800); int(got[0])|int(got[1])<<8 != 10 {
+		t.Fatalf("record linear 800 holds .mgt sector %d, want 10 (side 1 begins at record linear 800)", int(got[0])|int(got[1])<<8)
+	}
+	if got, _ := sd.RecordDataSector(uint32(base), free, 10); int(got[0])|int(got[1])<<8 != 20 {
+		t.Fatalf("record linear 10 holds .mgt sector %d, want 20 — a straight-through (identity) write would wrongly hold sector 10", int(got[0])|int(got[1])<<8)
+	}
+}
+
 // countPayload counts TX frames whose UDP payload exactly equals want.
 func countPayload(frames [][]byte, want []byte) int {
 	n := 0
