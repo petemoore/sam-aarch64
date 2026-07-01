@@ -264,7 +264,7 @@ sd_cmd0arg:
 ; CCS-clear OCR; the CSD decode is the host's job. We just need CMD9 to deliver
 ; the 16 CSD bytes.
 ; ===========================================================================
-csd_read_into_stage:
+sd_run_init_ladder:
                 di
                 xor     a
                 ld      (sd_timed_out), a       ; fresh attempt — clear the sticky busy-timeout flag
@@ -352,6 +352,15 @@ csd_acmd41_done:
                 ; --- CMD59 CRC_ON_OFF: opcode &7B (turn CRC off) ----------
                 ld      a, &7B
                 call    sd_cmd0arg
+
+                ret                             ; card selected + ready for a data command (CMD9/CMD17)
+
+; ===========================================================================
+; csd_read_into_stage — run the init ladder (sd_run_init_ladder: the &38 wake +
+; CMD0/8/41/58/59 sequence), then read the 16-byte CSD via CMD9 into STAGE.
+; ===========================================================================
+csd_read_into_stage:
+                call    sd_run_init_ladder
 
                 ; --- CMD9 SEND_CSD: opcode &49 -> &FE token + 16 CSD + 2 CRC ---
                 ld      a, &49

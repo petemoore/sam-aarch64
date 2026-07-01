@@ -488,8 +488,9 @@ blwr_shl:
 ; bd_cmd24_write_core — the shared CMD24 single-block write protocol (the §5/§8
 ; write tail Colin's hd.svb-t models, matched to sdcard.go's CMD24 state machine).
 ; Self-healing: runs the full sdc_init_ladder every call, so a disturbed SPI state
-; is re-established before the write. Used by bd_list_write_hw (the record-list
-; claim write), so the CMD24 handshake lives in ONE tested place.
+; (the serve's ENC ereset) is re-established before the write. Used by both
+; bd_list_write_hw (record-list claim) and bd_record_write_hw (record data write),
+; so the CMD24 handshake lives in ONE tested place.
 ;
 ; In:  bd_list_lba  4 bytes  32-bit LE block/byte address (already v1-shifted).
 ;      HL                    pointer to the 512-byte source buffer.
@@ -564,8 +565,249 @@ blwr_ok:
                 or      a                       ; CY clear: success
                 jp      sdc_deselect
 
+; ===========================================================================
+; bd_record_write_hw — write one 512-byte data sector of a claimed Trinity record
+; with our OWN self-healing CMD24, by ABSOLUTE card LBA, bypassing the B-DOS HWSAD
+; hook (q62 option (a) / i194 / §8ag). The B-DOS hooks flakily hang on real hardware
+; (they rely on boot-time SPI-mode persistence the serve's ENC reset disturbs);
+; bd_cmd24_write_core re-runs sdc_init_ladder every call, so it self-heals and works.
+;
+; RECORD -> LBA (the data-safety-critical math; cross-checked against the Go
+; authority tools/netboot-oracle/bdos/raw_sink.go + the §6/§7 record geometry):
+;
+;     LBA = csd_base + 1600*(record-1) + linearSec
+;
+;   - csd_base (sd_csd.asm) is the first DATA sector of the card (record-list base
+;     + 1) computed by csd_blocks_to_records at startup.
+;   - record is 1-based; linearSec is 0-based (0..1599 within the record).
+;   - 1600*(record-1) is a 16-bit*16-bit -> >=24-bit product; computed by repeated
+;     16-bit addition of 1600 into a 32-bit accumulator ((record-1) iterations,
+;     <= ~4808 for the largest card). Correctness first; the per-sector cost is
+;     dwarfed by the bit-banged SPI transfer.
+;
+; DATA SAFETY (ENFORCED, i295): the LBA must fall in [csd_base+1600*(n-1),
+; csd_base+1600*n) for the claimed record n with linearSec in 0..1599, be >= csd_base,
+; and be < the card capacity — so it can never reach another record's blocks, the
+; record list (sectors 1..base-1), sector 0, or off the card. This is CHECKED by
+; bd_record_lba_in_band after the LBA is computed: a violation ABORTS the write (CY
+; set, NO CMD24) and sets bd_rec_guard_tripped. The caller passes the CLAIMED FREE
+; record number; bdos_find_record_for_strategy guarantees it was free — but the guard
+; does not trust that, so even a miscomputed csd_base or an arithmetic wrap cannot
+; silently corrupt Pete's shared card. Checks (b)/(d) are INDEPENDENT of csd_base's
+; correctness (>= csd_base, < capacity), which is what lets the guard catch a wrong
+; base at all — a band check derived only from csd_base moves with the error and
+; catches nothing (the i295 root cause: a wrong csd_base=2438 placed writes 388
+; sectors into the NEXT record).
+;
+; In:  BD_REC_WRITE_REC     2 bytes  1-based claimed record number n (>= 1)
+;      BD_REC_WRITE_LINEAR  2 bytes  0-based linear sector within the record (0..1599)
+;      HL                            pointer to the 512-byte source buffer
+; Out: CY clear on success, CY set on failure (bd_cmd24_write_core's contract OR the
+;      data-safety guard refusing an out-of-band LBA). Clobbers: AF, BC, DE, HL.
+;
+; EMULATION. Host-verified under the i145c/i145h SD model (sdcard.go): the CMD24
+; lands in store[LBA], so a test asserts the absolute block address + the 512 bytes
+; (netboot_serve_wrq_record_test.go own-CMD24 path; the LBA math is unit-tested in
+; isolation in sd_record_write_test.go). Emulation-verified is not hardware-verified
+; (CLAUDE.md §5): the real-Trinity write is i194's hardware step (Pete-gated).
+; ===========================================================================
+bd_record_write_hw:
+                push    hl                      ; save the source pointer across the LBA math
+
+                ; --- accumulator (32-bit LE) := 1600 * (record - 1) ---
+                ld      hl, 0
+                ld      (bd_rec_lba), hl
+                ld      (bd_rec_lba + 2), hl
+                ld      hl, (BD_REC_WRITE_REC)
+                dec     hl                      ; HL = record - 1 (iteration count)
+brw_mul_loop:
+                ld      a, h
+                or      l
+                jr      z, brw_mul_done         ; (record-1) additions of 1600 done
+                push    hl                      ; save the loop counter
+                ; bd_rec_lba += 1600 (32-bit: low word add, then propagate carry).
+                ld      hl, (bd_rec_lba)
+                ld      bc, 1600
+                add     hl, bc
+                ld      (bd_rec_lba), hl
+                jr      nc, brw_mul_nocarry
+                ld      hl, (bd_rec_lba + 2)
+                inc     hl
+                ld      (bd_rec_lba + 2), hl
+brw_mul_nocarry:
+                pop     hl                      ; restore the loop counter
+                dec     hl
+                jr      brw_mul_loop
+brw_mul_done:
+                ; Save the record OFFSET 1600*(n-1) (the band's start, relative to base)
+                ; for the data-safety band check below, BEFORE linearSec/base are added.
+                ld      hl, (bd_rec_lba)
+                ld      (bd_rec_ofs), hl
+                ld      hl, (bd_rec_lba + 2)
+                ld      (bd_rec_ofs + 2), hl
+                ; --- accumulator += linearSec (16-bit, into the 32-bit accumulator) ---
+                ld      hl, (bd_rec_lba)
+                ld      bc, (BD_REC_WRITE_LINEAR)
+                add     hl, bc
+                ld      (bd_rec_lba), hl
+                jr      nc, brw_lin_nocarry
+                ld      hl, (bd_rec_lba + 2)
+                inc     hl
+                ld      (bd_rec_lba + 2), hl
+brw_lin_nocarry:
+                ; --- accumulator += csd_base (16-bit) ---
+                ld      hl, (bd_rec_lba)
+                ld      bc, (csd_base)
+                add     hl, bc
+                ld      (bd_rec_lba), hl
+                jr      nc, brw_base_nocarry
+                ld      hl, (bd_rec_lba + 2)
+                inc     hl
+                ld      (bd_rec_lba + 2), hl
+brw_base_nocarry:
+                ; ---------------------------------------------------------------
+                ; DEFENSIVE DATA-SAFETY GUARD (i295). Pete's SD card is a SHARED user
+                ; resource; a raw absolute CMD24 to the wrong LBA silently corrupts the
+                ; record LIST (sectors 1..base-1), sector 0, or a NEIGHBOURING record.
+                ; The old "in-band" reasoning was circular — it derived the band from
+                ; the SAME csd_base the write used, so a wrong base passed. This guard
+                ; refuses the write (CY set, NO CMD24) unless the FINAL LBA is provably
+                ; inside the claimed record's own body sectors AND on the card:
+                ;   (a) linearSec < 1600           — a valid within-record sector index
+                ;   (b) final LBA >= csd_base      — never sector 0 or the record list
+                ;   (c) csd_base+ofs <= final < csd_base+ofs+1600  — the claimed record's
+                ;                                    band (catches an arithmetic wrap:
+                ;                                    final must equal base+ofs+linearSec)
+                ;   (d) final LBA < csd_blocks     — within the card's capacity
+                ; Any violation is a corruption attempt -> abort. bd_rec_guard_tripped is
+                ; a sticky diagnostic flag (host tests assert it). Even if the base were
+                ; ever miscomputed to push a write off the card or below base, this makes
+                ; the raw-LBA path refuse rather than clobber Pete's data.
+                call    bd_record_lba_in_band
+                jr      c, brw_out_of_band      ; guard failed -> refuse (CY already set)
+                ; Move the computed block LBA into bd_list_lba (the address
+                ; bd_cmd24_write_core sends), then apply the v1 byte-shift.
+                ld      hl, (bd_rec_lba)
+                ld      (bd_list_lba), hl
+                ld      hl, (bd_rec_lba + 2)
+                ld      (bd_list_lba + 2), hl
+                call    bd_lba_apply_v1_shift   ; SDv1: <<9; v2/SDHC: no-op
+
+                pop     hl                      ; restore the source pointer
+                jp      bd_cmd24_write_core     ; shared CMD24 protocol; returns to caller
+brw_out_of_band:
+                ld      a, 1
+                ld      (bd_rec_guard_tripped), a ; sticky: an out-of-band write was refused
+                pop     hl                      ; balance the entry `push hl`
+                scf                             ; CY set = failure (no CMD24 issued)
+                ret
+
+; ===========================================================================
+; bd_record_lba_in_band — the i295 data-safety validator. Returns CY CLEAR if the
+; computed record-write LBA (bd_rec_lba) is provably safe to write, CY SET (refuse)
+; otherwise. Checks (a)-(d) above using the record offset bd_rec_ofs (= 1600*(n-1),
+; saved before linearSec/base were added), csd_base, and csd_blocks (capacity).
+; Read-only w.r.t. bd_rec_lba. Clobbers AF, BC, DE, HL.
+; ===========================================================================
+bd_record_lba_in_band:
+                ; (a) linearSec < 1600  (16-bit: reject linearSec >= 1600)
+                ld      hl, (BD_REC_WRITE_LINEAR)
+                ld      bc, 1600
+                or      a
+                sbc     hl, bc                  ; linearSec - 1600 ; CY set => linearSec < 1600 (ok)
+                jr      nc, blb_refuse          ; linearSec >= 1600 -> refuse
+
+                ; Compute bandLo = csd_base + bd_rec_ofs (32-bit) into bd_band_lo.
+                ld      hl, (bd_rec_ofs)
+                ld      bc, (csd_base)
+                add     hl, bc
+                ld      (bd_band_lo), hl
+                ld      hl, (bd_rec_ofs + 2)
+                ld      bc, 0
+                adc     hl, bc                  ; propagate carry into the high word
+                ld      (bd_band_lo + 2), hl
+
+                ; (b) final LBA >= csd_base : refuse if bd_rec_lba < csd_base.
+                ; Build csd_base as a 32-bit value in bd_cmp_tmp for the compare.
+                ld      hl, (csd_base)
+                ld      (bd_cmp_tmp), hl
+                ld      hl, 0
+                ld      (bd_cmp_tmp + 2), hl
+                ld      hl, bd_rec_lba          ; A = bd_rec_lba, B = bd_cmp_tmp (csd_base)
+                ld      de, bd_cmp_tmp
+                call    bd_cmp32                ; CY set if bd_rec_lba < csd_base
+                jr      c, blb_refuse
+
+                ; (c-lo) final LBA >= bandLo : refuse if bd_rec_lba < bd_band_lo.
+                ld      hl, bd_rec_lba
+                ld      de, bd_band_lo
+                call    bd_cmp32
+                jr      c, blb_refuse
+
+                ; (c-hi) final LBA < bandLo + 1600 : bandHi = bandLo + 1600, refuse if
+                ; bd_rec_lba >= bandHi (i.e. NOT (bd_rec_lba < bandHi)).
+                ld      hl, (bd_band_lo)
+                ld      bc, 1600
+                add     hl, bc
+                ld      (bd_cmp_tmp), hl
+                ld      hl, (bd_band_lo + 2)
+                ld      bc, 0
+                adc     hl, bc
+                ld      (bd_cmp_tmp + 2), hl
+                ld      hl, bd_rec_lba          ; refuse unless bd_rec_lba < bandHi
+                ld      de, bd_cmp_tmp
+                call    bd_cmp32                ; CY set if bd_rec_lba < bandHi (ok)
+                jr      nc, blb_refuse          ; bd_rec_lba >= bandHi -> refuse
+
+                ; (d) final LBA < csd_blocks (capacity) : refuse if bd_rec_lba >= csd_blocks.
+                ld      hl, bd_rec_lba          ; refuse unless bd_rec_lba < csd_blocks
+                ld      de, csd_blocks
+                call    bd_cmp32                ; CY set if bd_rec_lba < csd_blocks (ok)
+                jr      nc, blb_refuse          ; bd_rec_lba >= capacity -> refuse
+
+                or      a                       ; CY clear = safe to write
+                ret
+blb_refuse:
+                scf                             ; CY set = refuse
+                ret
+
+; bd_cmp32 — unsigned 32-bit compare of two LE values. In: HL -> A (4 bytes LE),
+; DE -> B (4 bytes LE). Out: CY SET if A < B, CY CLEAR if A >= B (Z set if A == B).
+; Compares high word first, then low word. Clobbers AF, BC, HL, DE (advances them).
+bd_cmp32:
+                inc     hl
+                inc     hl
+                inc     hl                      ; HL -> A[3] (MSB)
+                inc     de
+                inc     de
+                inc     de                      ; DE -> B[3] (MSB)
+                ld      b, 4
+bc32_loop:
+                ld      a, (de)
+                cp      (hl)                    ; compare B[i] vs A[i]  (CY set if A[i] > B[i])
+                jr      c, bc32_a_greater       ; A[i] > B[i] -> A > B -> CY clear
+                jr      nz, bc32_a_less         ; A[i] < B[i] -> A < B -> CY set
+                dec     hl
+                dec     de
+                djnz    bc32_loop
+                or      a                       ; all bytes equal -> A == B -> CY clear, Z set
+                ret
+bc32_a_greater:
+                or      a                       ; CY clear (A >= B)
+                ret
+bc32_a_less:
+                scf                             ; CY set (A < B)
+                ret
+
 bd_list_lba:      defs 4                        ; 32-bit LE CMD17/CMD24 block/byte address
 bd_cmd24_src:     defs 2                        ; bd_cmd24_write_core: 512-byte source pointer
+bd_rec_lba:       defs 4                        ; bd_record_write_hw: 32-bit LE record data-block LBA accumulator
+bd_rec_ofs:       defs 4                        ; bd_record_write_hw: 32-bit LE record offset 1600*(n-1) (band start, rel. base)
+bd_band_lo:       defs 4                        ; bd_record_lba_in_band: 32-bit LE band lower bound = csd_base + bd_rec_ofs
+bd_cmp_tmp:       defs 4                        ; bd_record_lba_in_band / bd_cmp32: 32-bit LE compare scratch
+bd_rec_guard_tripped: defb 0                    ; sticky: set when the data-safety guard REFUSED an out-of-band write
+BD_REC_WRITE_REC:    defs 2                     ; bd_record_write_hw: 1-based claimed record number n
+BD_REC_WRITE_LINEAR: defs 2                     ; bd_record_write_hw: 0-based linear sector within the record
 
 ; ===========================================================================
 ; csd_decode_blocks — decode CSD_STAGE into the 32-bit (LE) csd_blocks.
@@ -684,16 +926,24 @@ cbs_test:
                 ret
 
 ; ===========================================================================
-; csd_blocks_to_records — the §6 records math on csd_blocks, storing the 16-bit
-; (wrapping) record count into csd_records. Mirrors refRecords:
-;   records1 = blocks / 1600
-;   base     = (records1 + 32)/32 + 1
-;   usable   = blocks - base
-;   records  = usable / 1600  (+1 if (usable % 1600) >= 50)   [low 16 bits stored]
-; Clobbers AF/BC/DE/HL.
-; ===========================================================================
+; csd_blocks_to_records — the §6 records math, storing the 16-bit record count into
+; csd_records and the record-list base into csd_base. It runs on the EFFECTIVE block
+; count csd_eff (csd_compute_eff below), NOT csd_blocks directly, exactly mirroring
+; B-DOS 1.5t's HDINIT (&A3D2→&A4A7):
+;   eff      = csd_compute_eff(blocks)   ; the +1 (&A340) and 16-bit clamp (&A452)
+;   records1 = eff / 1600
+;   base     = (records1 + 32)/32 + 1                     -> csd_base (16-bit @ &80C2)
+;   usable   = eff - base
+;   records  = usable / 1600  (+1 if (usable % 1600) >= 50)  -> csd_records (16-bit @ &80C4)
+; Mirrors refRecordsFull (csd_decode_colin_test.go). Clobbers AF/BC/DE/HL.
+;
+; AUTHORITY (i295, Trinity-HW): B-DOS runs the WHOLE records math on eff, so the
+; 16-bit-overflow clamp on records1 propagates into base — the reason B-DOS's base
+; for Pete's 64 GB card is 2050, not the un-clamped 2438. Traced live on the real
+; B-DOS 1.5t binary in TestBDOSRecordsMathBase64GB; see csd_compute_eff.
 csd_blocks_to_records:
-                ; records1 = blocks / 1600 (32-bit quotient in csd_div_n)
+                call    csd_compute_eff        ; csd_eff <- effective dividend (+1 & clamp)
+                ; records1 = eff / 1600 (32-bit quotient in csd_div_n)
                 call    csd_load_dividend
                 ld      bc, 1600
                 call    csd_div32              ; csd_div_n = quotient, HL = remainder
@@ -724,7 +974,7 @@ csdr_base_shr_loop:
                 ld      hl, (csd_div_n)        ; low 16 bits of the list size
                 inc     hl                     ; base = listSize + 1
                 ld      (csd_base), hl
-                ; usable = blocks - base
+                ; usable = eff - base
                 call    csd_load_dividend
                 ld      de, (csd_base)
                 ld      hl, (csd_div_n)
@@ -752,12 +1002,65 @@ csdr_no_roundup:
                 ld      (csd_records), hl
                 ret
 
-; csd_load_dividend — csd_div_n <- csd_blocks (32-bit). Clobbers AF/HL.
+; csd_load_dividend — csd_div_n <- csd_eff (32-bit). The records math divides the
+; EFFECTIVE block count (csd_compute_eff), not csd_blocks. Clobbers AF/HL.
 csd_load_dividend:
-                ld      hl, (csd_blocks)
+                ld      hl, (csd_eff)
                 ld      (csd_div_n), hl
-                ld      hl, (csd_blocks + 2)
+                ld      hl, (csd_eff + 2)
                 ld      (csd_div_n + 2), hl
+                ret
+
+; ===========================================================================
+; csd_compute_eff — csd_eff <- the effective 32-bit block count B-DOS 1.5t's HDINIT
+; feeds its records math, from csd_blocks. Two steps, ported byte-for-byte from the
+; traced B-DOS boot path (i295, Trinity-HW authority bdos15t-beta6 &A340 + &A452):
+;
+;   1. +1 (&A340). HDINIT's zero-check does `inc hl` on the block-count low word and,
+;      on the normal non-zero branch (&A34E), does NOT undo it, so eff = blocks + 1.
+;
+;   2. THE 16-BIT-OVERFLOW CLAMP (&A452). `ld hl,&F9C0 (-1600); add hl,de` tests the
+;      HIGH word of (blocks+1): if it is >= 1600 (i.e. blocks+1 >= 1600*65536 =
+;      104,857,600) the &A454 branch substitutes a SYNTHETIC dividend DE:HL =
+;      1600:449 = &064001C1 = 104,858,049 for the whole records math. Dividing that
+;      by 1600 gives exactly 65536 (= 2^16): records1 SATURATES at 65536, so the
+;      record-list base CEILINGS at (65536+32)/32+1 = 2050. This is B-DOS's "16-bit
+;      records" limit — it cannot address more than 65536 records, so on a >51 GB
+;      card (Pete's 64 GB) records1 AND the derived base clamp. Using the full
+;      capacity would need a wider BD_RECORDS in B-DOS itself (out of scope): the
+;      hardware-matching answer today is base=2050, and we MUST mirror it or every
+;      raw-LBA record write lands where B-DOS does not look (the i295 root cause).
+;
+; Mirrors bdosEffBlocks (csd_decode_colin_test.go). Clobbers AF/BC/DE/HL.
+CSD_CLAMP_HI:     equ &0640                     ; high word of the &A454 synthetic dividend (1600)
+CSD_CLAMP_LO:     equ &01C1                     ; low  word of the &A454 synthetic dividend (449)
+csd_compute_eff:
+                ; eff = blocks + 1  (32-bit LE increment)
+                ld      hl, (csd_blocks)
+                ld      de, 1
+                add     hl, de
+                ld      (csd_eff), hl
+                ld      hl, (csd_blocks + 2)
+                jr      nc, csdce_hi_done
+                inc     hl                     ; carry from the low-word +1
+csdce_hi_done:
+                ld      (csd_eff + 2), hl      ; HL = high word of (blocks+1)
+                ; &A452 test: if high16(blocks+1) >= 1600, clamp eff to &064001C1.
+                ; (BC := high word; NC from `sbc hl,1600` means high >= 1600.)
+                ld      b, h
+                ld      c, l
+                ld      hl, CSD_CLAMP_HI       ; 1600
+                or      a
+                sbc     hl, bc                 ; 1600 - high ; CY set if high > 1600, Z if ==
+                jr      z, csdce_clamp         ; high == 1600 -> clamp (>= 1600)
+                jr      nc, csdce_done         ; high <  1600 -> no clamp (1600-high > 0, NC)
+csdce_clamp:
+                ; high >= 1600: substitute the synthetic dividend 1600:449 = 104,858,049.
+                ld      hl, CSD_CLAMP_LO       ; low word 449
+                ld      (csd_eff), hl
+                ld      hl, CSD_CLAMP_HI       ; high word 1600
+                ld      (csd_eff + 2), hl
+csdce_done:
                 ret
 
 ; ===========================================================================
@@ -799,7 +1102,8 @@ csd_div_next:
                 ret
 
 ; --- decode/divide scratch ---------------------------------------------------
-csd_blocks:       defs 4                  ; 32-bit LE block count
+csd_blocks:       defs 4                  ; 32-bit LE block count (raw, from the CSD)
+csd_eff:          defs 4                  ; 32-bit LE effective dividend (csd_compute_eff: +1 & &A452 clamp)
 csd_records:      defs 2                  ; 16-bit (wrapping) record count -> BD_RECORDS
 csd_base:         defs 2                  ; record-list base sector + 1
 csd_div_n:        defs 4                  ; csd_div32 dividend / quotient

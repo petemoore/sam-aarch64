@@ -98,19 +98,24 @@ func TestSDInitColinV2(t *testing.T) {
 				t.Fatalf("C_SIZE=0x%X: ladder blocks=%d, Go reference=%d", tc.cSize, blocks, want)
 			}
 
-			// (3) Records math must match POC-1's value for the same block count.
-			wantBase, wantRecords := refRecords(blocks)
+			// (3) Records math must match POC-1's value. Feed the isolated &A45A core
+			// the &A452-clamped effective dividend (bdosEffBlocks) — what B-DOS's full
+			// HDINIT hands the core; the 64GB case exercises the 16-bit overflow clamp.
+			eff := bdosEffBlocks(blocks)
+			wantBase, wantRecords := refRecordsCore(eff)
 			_, fullRecords := refRecordsFull(blocks)
-			gotBase, gotRecords, rres := runColinRecords(t, mac, blocks)
+			gotBase, gotRecords, rres := runColinRecords(t, mac, eff)
 			if !rres.ReachedStop {
 				t.Fatalf("records math did not reach the store (PC=&%04X)", rres.PC)
 			}
 			if gotBase != wantBase || gotRecords != wantRecords {
-				t.Fatalf("C_SIZE=0x%X blocks=%d: ladder base=%d records=%d, Go reference base=%d records=%d",
-					tc.cSize, blocks, gotBase, gotRecords, wantBase, wantRecords)
+				t.Fatalf("C_SIZE=0x%X blocks=%d eff=%d: ladder base=%d records=%d, Go reference base=%d records=%d",
+					tc.cSize, blocks, eff, gotBase, gotRecords, wantBase, wantRecords)
 			}
 			note := "via modeled CMD9; ladder==Go"
-			if fullRecords > 0xFFFF {
+			if eff != blocks+1 {
+				note = "via modeled CMD9; ladder==Go; CLAMPED (16-bit records overflow, base=2050)"
+			} else if fullRecords > 0xFFFF {
 				note = "via modeled CMD9; ladder==Go(16-bit); TRUE records overflow the 16-bit slot"
 			}
 			t.Logf("v2 C_SIZE=0x%X  CSD[7..9]=%02x %02x %02x  blocks=%d (=%d GB)  base=%d  records=%d (%s)",
@@ -152,14 +157,15 @@ func TestSDInitColinV1(t *testing.T) {
 					tc.readBlLen, tc.cSize, tc.cSizeMult, blocks, want)
 			}
 
-			wantBase, wantRecords := refRecords(blocks)
-			gotBase, gotRecords, rres := runColinRecords(t, mac, blocks)
+			eff := bdosEffBlocks(blocks)
+			wantBase, wantRecords := refRecordsCore(eff)
+			gotBase, gotRecords, rres := runColinRecords(t, mac, eff)
 			if !rres.ReachedStop {
 				t.Fatalf("records math did not reach the store (PC=&%04X)", rres.PC)
 			}
 			if gotBase != wantBase || gotRecords != wantRecords {
-				t.Fatalf("v1 C_SIZE=%d blocks=%d: ladder base=%d records=%d, Go reference base=%d records=%d",
-					tc.cSize, blocks, gotBase, gotRecords, wantBase, wantRecords)
+				t.Fatalf("v1 C_SIZE=%d blocks=%d eff=%d: ladder base=%d records=%d, Go reference base=%d records=%d",
+					tc.cSize, blocks, eff, gotBase, gotRecords, wantBase, wantRecords)
 			}
 			t.Logf("v1 BL=%d C_SIZE=%d MULT=%d  blocks=%d  base=%d  records=%d (via modeled CMD9; ladder==Go)",
 				tc.readBlLen, tc.cSize, tc.cSizeMult, blocks, gotBase, gotRecords)
