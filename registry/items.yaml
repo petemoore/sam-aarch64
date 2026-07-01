@@ -5397,6 +5397,7 @@
   description: |
     i274 P5 (kill the byte-232 conflation at source). A Trinity record's HEADER/metadata (registration + the 'BDOS' validity stamp, written by FORMAT/create) is SEPARATE from the disk-image .mgt BODY (.mgt content); the validity stamp is NOT at offset 232 of the body. This header-vs-body distinction was conflated 20+ times across the SD-write saga (memory feedback_bdos_record_header_vs_disk_body). TASK: establish ONE named source-of-truth (a dedicated section in docs/notes/trinity-sd-z80-interface.md, or a small reference doc) that authoritatively states the record-HEADER-vs-disk-BODY layout, where the 'BDOS' validity stamp actually lives, and what record validation actually checks (size-only == 819200 for boot; the stamp is B-DOS's catalogue signature, not a boot gate). Then add code-comment pointers to that source from every site that touches record validation or the 232 offset (bdos_seam.asm, sd_csd.asm, raw_record_sink.asm, and the Go bdos model). So the distinction cannot be re-conflated from scattered/contradictory prose. Authority: memory feedback_bdos_record_header_vs_disk_body + feedback_trinity_sd_write_settled_truths; CLAUDE.md rule 8.
   status: OPEN
+  depends_on: [q66]
   kind: leaf
   owner: agent
 
