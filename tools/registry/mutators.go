@@ -26,8 +26,15 @@ type mutatorPaths struct {
 // while preserving Pete's curated ordering of items that are still pullable.
 // The algorithm:
 //  1. Keep every id in the current priority that is still pullable, in order.
-//  2. Append every pullable id NOT already listed, in canonical id sort order
-//     (deterministic: new items land at the end where Pete can re-rank them).
+//  2. Prepend every pullable id NOT already listed, in canonical id sort order,
+//     at the FRONT of the queue (new items land at the top where they are most
+//     visible and immediately actionable; Pete can demote them with `move` if needed).
+//  3. Topo-repair the result so every item appears after its in-queue deps.
+//
+// Effect on `add`: a newly-added item with no in-queue dependencies lands at
+// ready-position 1. An item added with a `--dep` on an in-queue item lands just
+// after that dependency (topo repair pulls the dep forward, or holds the new item
+// back — whichever achieves correctness with minimal perturbation).
 //
 // The result satisfies validatePriority's strict-permutation invariant:
 // exactly the pullable set, each id once, no closed/umbrella ids.
@@ -47,12 +54,20 @@ func reconcilePriority(reg *Registry) {
 		}
 	}
 
-	// Append any pullable id not already in the kept list, in canonical order.
+	// Collect pullable ids not already in the kept list, in canonical order.
+	// These are genuinely new ids (not previously in the priority queue).
+	var newIDs []string
 	for _, it := range sortedItems(reg.Items) {
 		if pullable[it.ID] && !inKept[it.ID] {
-			kept = append(kept, it.ID)
+			newIDs = append(newIDs, it.ID)
 		}
 	}
+
+	// Prepend new ids so they land at the top of the queue. Topo repair below
+	// then slides each new id after its in-queue dependencies if needed — so a
+	// no-dep new item reaches ready-position 1, and a dep-gated one sits just
+	// after its last in-queue prerequisite.
+	combined := append(newIDs, kept...)
 
 	// Repair ordering so the queue is a valid topological extension of the
 	// dependency DAG. Membership reconciliation above preserves Pete's ranking
@@ -60,7 +75,7 @@ func reconcilePriority(reg *Registry) {
 	// `dep add`); this slides each dependency just ahead of its dependents with
 	// minimal perturbation, so validatePriority passes instead of the mutation
 	// being rejected. (i146 ordering-repair — "the queue always stays correct".)
-	reg.Priority = topoRepairPriority(reg.Items, kept)
+	reg.Priority = topoRepairPriority(reg.Items, combined)
 }
 
 // topoRepairPriority returns a permutation of `order` that is a valid topological

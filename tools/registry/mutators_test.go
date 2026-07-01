@@ -1059,6 +1059,88 @@ func TestPriorityAutoMaintain_OrderPreservation(t *testing.T) {
 	assertPriorityValid(t, paths)
 }
 
+// TestAddLandsAtTop_NoDepItem verifies that a newly added OPEN no-dep item
+// becomes the tip of the ready queue (ready-position 1 among agent-actionable
+// items) after add.
+//
+// Setup: priority starts as [i1b, i2]. A new item (i6) is added with no deps.
+// Expected: after add, i6 is at index 0 in the priority queue (topo repair has
+// nothing to move past, so it stays at the front).
+func TestAddLandsAtTop_NoDepItem(t *testing.T) {
+	// Testdata pullable set: {i1b, i2}. Start with that curated order.
+	paths := setupMutatorFixtureWithPriority(t, []string{"i1b", "i2"})
+
+	newID := expectedNextItemID(t, paths)
+	runAdd([]string{
+		"--title", "Should land at top of backlog",
+		"--status", "OPEN",
+		"--owner", "agent",
+	}, paths)
+
+	ids := loadPriorityFromPaths(t, paths)
+
+	if len(ids) == 0 {
+		t.Fatal("priority queue is empty after add")
+	}
+	// The new item must be at position 0 (the front / highest priority).
+	if ids[0] != newID {
+		t.Errorf("after add of no-dep item, expected %s at position 0 (top of queue); got queue %v", newID, ids)
+	}
+	// Existing items must still follow it.
+	if !containsStr(ids, "i1b") {
+		t.Errorf("priority missing i1b after add; got %v", ids)
+	}
+	if !containsStr(ids, "i2") {
+		t.Errorf("priority missing i2 after add; got %v", ids)
+	}
+	assertPriorityValid(t, paths)
+}
+
+// TestAddLandsAfterDep_DepedOnItem verifies topo correctness: when a new item
+// is added with --dep on an item already in the queue, topo repair places the
+// new item AFTER its dependency, not at rank 1.
+//
+// Setup: priority starts as [i1b, i2]. A new item (i6) is added with
+// --dep i1b (i1b is pullable and in the queue). Expected: after add, i6 is
+// somewhere after i1b in the queue (not at position 0 or before i1b).
+func TestAddLandsAfterDep_DepedOnItem(t *testing.T) {
+	// i1b depends_on i1a (DONE — satisfied for ready), so i1b itself is pullable.
+	paths := setupMutatorFixtureWithPriority(t, []string{"i1b", "i2"})
+
+	newID := expectedNextItemID(t, paths)
+	runAdd([]string{
+		"--title", "Should land after its in-queue dep",
+		"--status", "OPEN",
+		"--owner", "agent",
+		"--dep", "i1b", // i1b is an in-queue item
+	}, paths)
+
+	ids := loadPriorityFromPaths(t, paths)
+
+	// Find positions.
+	posNew, posI1b := -1, -1
+	for i, id := range ids {
+		switch id {
+		case newID:
+			posNew = i
+		case "i1b":
+			posI1b = i
+		}
+	}
+	if posNew == -1 {
+		t.Fatalf("%s not found in priority after add; got %v", newID, ids)
+	}
+	if posI1b == -1 {
+		t.Fatalf("i1b not found in priority after add; got %v", ids)
+	}
+	// The new item must appear AFTER its dependency.
+	if posNew <= posI1b {
+		t.Errorf("topo violation: %s (pos %d) is at or before its dep i1b (pos %d); queue: %v",
+			newID, posNew, posI1b, ids)
+	}
+	assertPriorityValid(t, paths)
+}
+
 // TestDeriveUmbrellaStatuses covers the i233 fix: umbrella status is derived
 // from its children (DONE iff all children are DONE/WONTFIX, else OPEN, never
 // IN_PROGRESS), at the applyAndCommit chokepoint, so completing the last child
