@@ -427,6 +427,182 @@ func TestAddAssemblerSlotsCodeAuto(t *testing.T) {
 	}
 }
 
+// TestMangleStoreName — the i346 store-name mangling is deterministic
+// truncation: a name that fits the 10-char B-DOS directory field passes
+// verbatim; a longer one keeps its first 10 characters.
+func TestMangleStoreName(t *testing.T) {
+	cases := []struct{ name, want string }{
+		{"config.txt", "config.txt"},          // exactly 10: verbatim
+		{"start4.elf", "start4.elf"},          // exactly 10: verbatim
+		{"cfg", "cfg"},                        // short: verbatim
+		{"cmdline.txt", "cmdline.tx"},         // 11 chars
+		{"armstub8-gic.bin", "armstub8-g"},    // 16 chars
+		{"bcm2711-rpi-400.dtb", "bcm2711-rp"}, // 19 chars
+		{"kernel8-rpi4.img", "kernel8-rp"},    // 16 chars
+	}
+	for _, c := range cases {
+		got := mangleStoreName(c.name)
+		if got != c.want {
+			t.Errorf("mangleStoreName(%q) = %q, want %q", c.name, got, c.want)
+		}
+		if again := mangleStoreName(c.name); again != got {
+			t.Errorf("mangleStoreName(%q) not deterministic: %q then %q", c.name, got, again)
+		}
+		if len(got) > StoreNameMax {
+			t.Errorf("mangleStoreName(%q) = %q exceeds the %d-char field", c.name, got, StoreNameMax)
+		}
+	}
+}
+
+// writeExtraFixture writes a small payload file and returns a name=path spec.
+func writeExtraFixture(t *testing.T, dir, name string, data []byte) string {
+	t.Helper()
+	p := filepath.Join(dir, "payload-"+mangleStoreName(name))
+	if err := os.WriteFile(p, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return name + "=" + p
+}
+
+// TestExtraFilesStoreNameCollision — mangling collisions fail the build loudly
+// (never silently rename): two long names sharing a 10-char prefix, a long
+// name mangling onto another extra's verbatim name, and the reserved
+// NBMANIFEST name itself.
+func TestExtraFilesStoreNameCollision(t *testing.T) {
+	dir := t.TempDir()
+	cases := []struct {
+		label string
+		specs []string
+	}{
+		{"two long names sharing a prefix", []string{
+			writeExtraFixture(t, dir, "bcm2711-rpi-400.dtb", []byte("a")),
+			writeExtraFixture(t, dir, "bcm2711-rpi-4-b.dtb", []byte("b")),
+		}},
+		{"a long name mangling onto a verbatim name", []string{
+			writeExtraFixture(t, dir, "armstub8-g", []byte("a")),
+			writeExtraFixture(t, dir, "armstub8-gic.bin", []byte("b")),
+		}},
+		{"the reserved manifest name", []string{
+			writeExtraFixture(t, dir, "NBMANIFEST", []byte("a")),
+		}},
+	}
+	for _, c := range cases {
+		if _, err := extraFileFlags(c.specs).load(); err == nil {
+			t.Errorf("%s: load() should fail, got nil error", c.label)
+		}
+	}
+}
+
+// TestExtraFilesTFTPNameTooLong — a TFTP name over the ManifestTFTPNameMax
+// cap fails the build (the Z80 table sizing arithmetic depends on the cap).
+func TestExtraFilesTFTPNameTooLong(t *testing.T) {
+	long := strings.Repeat("x", ManifestTFTPNameMax+1)
+	spec := writeExtraFixture(t, t.TempDir(), long, []byte("a"))
+	if _, err := extraFileFlags([]string{spec}).load(); err == nil {
+		t.Error("an over-cap TFTP name should fail load()")
+	}
+}
+
+// TestBuildManifestBytes — the exact manifest encoding: 10-byte space-padded
+// store name + NUL-terminated TFTP name per record, single-NUL terminated,
+// with fits-verbatim extras omitted.
+func TestBuildManifestBytes(t *testing.T) {
+	extras := []extraFile{
+		{name: "config.txt", storeName: "config.txt", data: []byte("c")},
+		{name: "cmdline.txt", storeName: "cmdline.tx", data: []byte("k")},
+		{name: "bcm2711-rpi-400.dtb", storeName: "bcm2711-rp", data: []byte("d")},
+	}
+	got := buildManifest(extras)
+	want := append([]byte("cmdline.tx"), append([]byte("cmdline.txt"), 0)...)
+	want = append(want, []byte("bcm2711-rp")...)
+	want = append(want, append([]byte("bcm2711-rpi-400.dtb"), 0)...)
+	want = append(want, 0)
+	if !bytes.Equal(got, want) {
+		t.Errorf("manifest bytes:\n  got  % X\n  want % X", got, want)
+	}
+}
+
+// TestBuildManifestVerbatimPassthrough — when every extra fits the directory
+// field there is nothing to map: no manifest bytes, and the built disk ships
+// no NBMANIFEST file.
+func TestBuildManifestVerbatimPassthrough(t *testing.T) {
+	extras := []extraFile{
+		{name: "config.txt", storeName: "config.txt", data: []byte("c")},
+		{name: "start4.elf", storeName: "start4.elf", data: []byte("s")},
+	}
+	if m := buildManifest(extras); m != nil {
+		t.Errorf("all-verbatim extras should build no manifest, got % X", m)
+	}
+
+	dir := t.TempDir()
+	binPath, _, _, _ := fakeServe(t, dir, 0x200)
+	out := filepath.Join(dir, "verbatim.mgt")
+	specs := extraFileFlags{
+		writeExtraFixture(t, dir, "config.txt", []byte("config bytes")),
+	}
+	extrasLoaded, err := specs.load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := buildNetbootDisk(testDosPath(t), DefaultDosName, DefaultDosLoad, binPath, "AUTOserve", out, nil, true, extrasLoaded); err != nil {
+		t.Fatalf("buildNetbootDisk: %v", err)
+	}
+	di, err := samfile.Load(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := di.File(ManifestStoreName); err == nil {
+		t.Error("an all-verbatim disk should not ship an NBMANIFEST file")
+	}
+	if _, err := di.File("config.txt"); err != nil {
+		t.Errorf("File(config.txt): %v", err)
+	}
+}
+
+// TestBuildNetbootDiskLongExtras — the full i346 shape: long-named extras land
+// under their mangled store names plus an NBMANIFEST file carrying the exact
+// mapping bytes.
+func TestBuildNetbootDiskLongExtras(t *testing.T) {
+	dir := t.TempDir()
+	binPath, _, _, _ := fakeServe(t, dir, 0x200)
+	out := filepath.Join(dir, "long.mgt")
+	specs := extraFileFlags{
+		writeExtraFixture(t, dir, "config.txt", []byte("config bytes")),
+		writeExtraFixture(t, dir, "cmdline.txt", []byte("cmdline bytes")),
+		writeExtraFixture(t, dir, "bcm2711-rpi-400.dtb", []byte("dtb bytes")),
+	}
+	extras, err := specs.load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := buildNetbootDisk(testDosPath(t), DefaultDosName, DefaultDosLoad, binPath, "AUTOserve", out, nil, true, extras); err != nil {
+		t.Fatalf("buildNetbootDisk: %v", err)
+	}
+	di, err := samfile.Load(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The payloads ride under their store names; the full names are not
+	// directory entries.
+	for _, storeName := range []string{"config.txt", "cmdline.tx", "bcm2711-rp"} {
+		if _, err := di.File(storeName); err != nil {
+			t.Errorf("File(%s): %v", storeName, err)
+		}
+	}
+	if _, err := di.File("cmdline.txt"); err == nil {
+		t.Error("the full TFTP name must not be a directory entry (11 chars cannot fit)")
+	}
+
+	mf, err := di.File(ManifestStoreName)
+	if err != nil {
+		t.Fatalf("File(%s): %v", ManifestStoreName, err)
+	}
+	if !bytes.Equal(mf.Body, buildManifest(extras)) {
+		t.Errorf("on-disk manifest != buildManifest output\n  got  % X\n  want % X", mf.Body, buildManifest(extras))
+	}
+}
+
 // TestAddAssemblerSlotsFloppyShape — the codeAuto=false floppy vessel is
 // unchanged: AUTO BASIC + a NON-auto-exec "assembler" CODE file.
 func TestAddAssemblerSlotsFloppyShape(t *testing.T) {

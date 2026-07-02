@@ -337,6 +337,20 @@ cvp_got60:
                 ld      a, b
                 cp      pxeclient_len
                 jr      c, cvp_no              ; value too short for the prefix
+                ; the 9 compared value bytes must lie inside the frame: a
+                ; truncated option 60 whose claimed length runs past RX_LEN
+                ; would otherwise be compared against stale RXBUF bytes
+                ; beyond the frame (the same push/sbc bound style as the
+                ; code/length checks above, applied to the value; i349).
+                push    hl
+                ld      bc, pxeclient_len
+                add     hl, bc
+                or      a
+                sbc     hl, de                 ; (value + 9) - end
+                pop     hl
+                jr      z, cvp_prefix          ; value+9 == end: still in frame
+                jr      nc, cvp_no             ; value+9 > end: truncated, ignore
+cvp_prefix:
                 ld      de, pxeclient
                 ld      b, pxeclient_len
 cvp_cmp:

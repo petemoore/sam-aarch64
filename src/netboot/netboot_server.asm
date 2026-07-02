@@ -499,6 +499,20 @@ cvp_got60:
                 ld      a, b
                 cp      pxeclient_len
                 jr      c, cvp_no              ; value too short for the prefix
+                ; the 9 compared value bytes must lie inside the frame: a
+                ; truncated option 60 whose claimed length runs past RX_LEN
+                ; would otherwise be compared against stale RXBUF bytes
+                ; beyond the frame (the same push/sbc bound style as the
+                ; code/length checks above, applied to the value; i349).
+                push    hl
+                ld      bc, pxeclient_len
+                add     hl, bc
+                or      a
+                sbc     hl, de                 ; (value + 9) - end
+                pop     hl
+                jr      z, cvp_prefix          ; value+9 == end: still in frame
+                jr      nc, cvp_no             ; value+9 > end: truncated, ignore
+cvp_prefix:
                 ld      de, pxeclient
                 ld      b, pxeclient_len
 cvp_cmp:
@@ -1329,7 +1343,8 @@ RXBUF:            defs 1518              ; the single received-frame buffer
 NB_FILE_MAX:      equ 1518               ; = RXBUF's size (the HLOAD bounce)
 NB_DIR_TRACKS:    equ 4                  ; MGT directory: tracks 0-3, side 0
 NB_ENTRY_PAGES:   equ &EF                ; dir entry: full-16K-pages count
-NB_ENTRY_LENMOD:  equ &F0                ; dir entry: length mod 16K (LE word)
+                                         ; (length mod 16K follows at &F0,
+                                         ; reached by inc hl from here)
 NB_TYPE_CODE:     equ 19                 ; dir entry type: CODE (bits 0-5)
 
 nb_fill_store:
@@ -1376,7 +1391,8 @@ nbfs_sector:
                 ld      (hl), 0
                 ld      hl, (NB_TBL_W)
                 ld      (hl), 0
-                ret
+                ; rewrite mangled store names to full TFTP names (i346).
+                jp      nb_apply_manifest      ; tail call: rets to our caller
 
 ; nb_walk_entry — consider the 256-byte directory entry at HL: skip anything
 ; that is not a plain small CODE file; otherwise HGTHD+HLOAD it into the arena
@@ -1447,7 +1463,7 @@ nbwe_name_end:
                 ld      de, 6
                 add     hl, de
                 ex      de, hl                 ; DE = STORE cursor + need
-                ld      hl, STORE + 1024       ; STORE's capacity (tftp_parse.asm)
+                ld      hl, STORE + STORE_LEN  ; STORE's capacity (tftp_parse.asm)
                 or      a
                 sbc     hl, de
                 ret     c                      ; STORE full: skip
@@ -1654,6 +1670,244 @@ rsv_nomatch:
                 or      a
                 ret
 
+; ===========================================================================
+; nb_apply_manifest (i346) — rewrite the walk-filled tables through the
+; NBMANIFEST name map, so TFTP names longer than the 10-char B-DOS directory
+; field are served under their real names.
+;
+; build-disk mangles each long -netboot-extra name to a unique 10-char store
+; name and ships an NBMANIFEST file in the same record mapping store name ->
+; full TFTP name. The walk stages that file like any other; this pass parses
+; it and REBUILDS both STORE and NB_SRC_TABLE with every mapped name replaced
+; by its full TFTP name — resolve and resolve_src both match the request name
+; against these tables, so both must carry the served name. The NBMANIFEST
+; entry itself is dropped from both tables (it is not servable; its bytes
+; stay in the arena, unreferenced).
+;
+; NBMANIFEST format (keep in lockstep with the emitter,
+; tools/build-disk/main.go buildManifest):
+;   repeated records:
+;     [10 bytes]  store name, space-padded (the B-DOS directory name)
+;     [1+ bytes]  full TFTP name, NUL-terminated
+;   terminated by a single NUL where the next record's store name would start.
+; A store name absent from the manifest keeps its walked name (identity), so
+; a record carrying no NBMANIFEST is served exactly as walked.
+;
+; The rebuild reads from a copy of NB_SRC_TABLE in RXBUF (idle between the
+; walk's HLOAD bounce and the serve loop; STORE is a name+size projection of
+; NB_SRC_TABLE, so the one copy rebuilds both). Room checks mirror the
+; walk's: an entry whose mapped name would overflow either table falls back
+; to its walked name, and one that fits under neither is dropped — the same
+; degrade-by-skipping the walk applies when a region fills.
+; ===========================================================================
+nb_apply_manifest:
+                ; find NBMANIFEST in NB_SRC_TABLE -> NB_MAN_PTR / NB_MAN_END.
+                ld      hl, NB_SRC_TABLE
+nam_find:
+                ld      a, (hl)
+                or      a
+                ret     z                      ; no manifest: identity, done
+                push    hl
+                ld      de, nb_manifest_name
+                call    streq_cstr             ; CY + HL past the NUL on match
+                jr      c, nam_found
+                pop     hl
+                call    skip_cstr
+                ld      de, 6                  ; ptr (2) + size (4)
+                add     hl, de
+                jr      nam_find
+nam_found:
+                pop     de                     ; discard the entry-start copy
+                ld      e, (hl)
+                inc     hl
+                ld      d, (hl)
+                inc     hl                     ; -> the 4-byte LE size
+                ld      (NB_MAN_PTR), de       ; the manifest's arena bytes
+                push    de
+                ld      e, (hl)
+                inc     hl
+                ld      d, (hl)                ; DE = size low word (<= NB_FILE_MAX)
+                pop     hl                     ; HL = the manifest base
+                add     hl, de
+                ld      (NB_MAN_END), hl       ; one past the manifest's last byte
+
+                ; rebuild both tables from a scratch copy of NB_SRC_TABLE in
+                ; RXBUF (RXBUF is 1518 bytes >= NB_SRC_TABLE_LEN).
+                ld      hl, NB_SRC_TABLE
+                ld      de, RXBUF
+                ld      bc, NB_SRC_TABLE_LEN
+                ldir
+                ld      hl, STORE
+                ld      (NB_STORE_W), hl
+                ld      hl, NB_SRC_TABLE
+                ld      (NB_TBL_W), hl
+                ld      hl, RXBUF              ; the scratch read cursor
+nam_entry:
+                ld      a, (hl)
+                or      a
+                jr      z, nam_done            ; scratch terminator
+                ld      (NB_MAP_READ), hl
+                ; the manifest's own entry is dropped (never servable).
+                push    hl
+                ld      de, nb_manifest_name
+                call    streq_cstr
+                pop     hl
+                jr      c, nam_advance
+                ; map the walked name through the manifest (or identity).
+                call    nb_manifest_map        ; DE = the name to serve under
+                ld      (NB_MAP_NAME), de
+                call    nam_try_emit           ; CY = appended to both tables
+                jr      c, nam_advance
+                ; the mapped name does not fit: fall back to the walked name.
+                ld      de, (NB_MAP_READ)
+                ld      (NB_MAP_NAME), de
+                call    nam_try_emit           ; still no room: drop the entry
+nam_advance:
+                ld      hl, (NB_MAP_READ)
+                call    skip_cstr
+                ld      de, 6
+                add     hl, de
+                jr      nam_entry
+nam_done:
+                ; terminate both rebuilt tables.
+                ld      hl, (NB_STORE_W)
+                ld      (hl), 0
+                ld      hl, (NB_TBL_W)
+                ld      (hl), 0
+                ret
+
+; nam_try_emit — append the scratch entry at (NB_MAP_READ) to both rebuilt
+; tables under the name at (NB_MAP_NAME), room-checking both first (STORE:
+; name + NUL + size4 + the terminator; NB_SRC_TABLE: name + NUL + ptr2 +
+; size4 + the terminator — the walk's arithmetic).
+; Out: CY set = appended; CY clear = no room, both cursors untouched.
+; Clobbers A, BC, DE, HL.
+nam_try_emit:
+                ; C = the emit name's length.
+                ld      hl, (NB_MAP_NAME)
+                ld      c, 0
+nte_len:
+                ld      a, (hl)
+                or      a
+                jr      z, nte_have_len
+                inc     hl
+                inc     c
+                jr      nte_len
+nte_have_len:
+                ; STORE room: cursor + len + 6 <= STORE + STORE_LEN?
+                ld      hl, (NB_STORE_W)
+                ld      b, 0
+                add     hl, bc
+                ld      de, 6
+                add     hl, de
+                ex      de, hl
+                ld      hl, STORE + STORE_LEN
+                or      a
+                sbc     hl, de
+                jr      c, nte_no
+                ; NB_SRC_TABLE room: cursor + len + 8 <= table end?
+                ld      hl, (NB_TBL_W)
+                ld      b, 0
+                add     hl, bc
+                ld      de, 8
+                add     hl, de
+                ex      de, hl
+                ld      hl, NB_SRC_TABLE + NB_SRC_TABLE_LEN
+                or      a
+                sbc     hl, de
+                jr      c, nte_no
+                ; STORE entry: name\0 + the scratch entry's 4-byte size.
+                ld      hl, (NB_MAP_NAME)
+                ld      de, (NB_STORE_W)
+                call    copy_cstr_incl_nul
+                ld      hl, (NB_MAP_READ)
+                call    skip_cstr
+                inc     hl
+                inc     hl                     ; past the arena ptr -> size4
+                ld      bc, 4
+                ldir
+                ld      (NB_STORE_W), de
+                ; NB_SRC_TABLE entry: name\0 + ptr2 + size4.
+                ld      hl, (NB_MAP_NAME)
+                ld      de, (NB_TBL_W)
+                call    copy_cstr_incl_nul
+                ld      hl, (NB_MAP_READ)
+                call    skip_cstr              ; -> ptr2 + size4
+                ld      bc, 6
+                ldir
+                ld      (NB_TBL_W), de
+                scf
+                ret
+nte_no:
+                or      a
+                ret
+
+; nb_manifest_map — look the NUL-terminated name at HL up in the NBMANIFEST
+; records (format at nb_apply_manifest).
+; Out: DE = the record's full TFTP name on a match, else DE = HL (identity).
+; Clobbers A, BC, HL.
+nb_manifest_map:
+                ld      (NB_MAP_LOOKUP), hl
+                ld      de, (NB_MAN_PTR)
+nmm_rec:
+                ld      (NB_MAN_REC), de
+                ; stop at the terminator or the manifest's end (a malformed
+                ; manifest degrades to identity, never a runaway scan).
+                ld      hl, (NB_MAN_END)
+                or      a
+                sbc     hl, de
+                jr      c, nmm_none            ; cursor past the end
+                jr      z, nmm_none            ; cursor at the end
+                ld      a, (de)
+                or      a
+                jr      z, nmm_none            ; the terminating empty record
+                ; compare the 10-byte store-name field with the looked-up name.
+                ld      hl, (NB_MAP_LOOKUP)
+                ld      b, 10
+nmm_cmp:
+                ld      a, (hl)
+                or      a
+                jr      z, nmm_pad             ; name ended: the rest must be spaces
+                ld      c, a
+                ld      a, (de)
+                cp      c
+                jr      nz, nmm_miss
+                inc     hl
+                inc     de
+                djnz    nmm_cmp
+                ; all 10 field bytes matched; a 10-char name ends exactly here.
+                ld      a, (hl)
+                or      a
+                jr      z, nmm_hit
+                jr      nmm_miss               ; the name is longer than the field
+nmm_pad:
+                ld      a, (de)
+                cp      BD_SPACE
+                jr      nz, nmm_miss
+                inc     de
+                djnz    nmm_pad
+nmm_hit:
+                ret                            ; DE -> the record's TFTP name
+nmm_miss:
+                ; advance to the next record: start + 10, then past the TFTP
+                ; name's NUL.
+                ld      hl, (NB_MAN_REC)
+                ld      de, 10
+                add     hl, de
+                ex      de, hl
+nmm_skip:
+                ld      a, (de)
+                inc     de
+                or      a
+                jr      nz, nmm_skip
+                jr      nmm_rec
+nmm_none:
+                ld      de, (NB_MAP_LOOKUP)    ; identity: serve the walked name
+                ret
+
+nb_manifest_name: defm "NBMANIFEST"
+                  defb 0
+
 ; --- store-walk state + the staged-file regions -----------------------------
 NB_STORE_W:       defs 2                 ; STORE write cursor
 NB_TBL_W:         defs 2                 ; NB_SRC_TABLE write cursor
@@ -1665,7 +1919,21 @@ NB_WALK_TRACK:    defs 1                 ; directory walk: track 0-3
 NB_WALK_SECTOR:   defs 1                 ; directory walk: sector 1-10
 NB_WALK_NAME:     defs 11                ; current entry's name + NUL
 
-NB_SRC_TABLE_LEN: equ 256
+; nb_apply_manifest state (i346).
+NB_MAN_PTR:       defs 2                 ; NBMANIFEST bytes (arena address)
+NB_MAN_END:       defs 2                 ; one past the manifest's last byte
+NB_MAN_REC:       defs 2                 ; manifest scan: current record start
+NB_MAP_READ:      defs 2                 ; rebuild: current scratch-entry start
+NB_MAP_NAME:      defs 2                 ; rebuild: the name to emit
+NB_MAP_LOOKUP:    defs 2                 ; nb_manifest_map: the looked-up name
+
+; NB_SRC_TABLE capacity. Sizing (i346): entries carry the SERVED name after
+; the manifest rewrite, so the full Pi-4 + Pi-3 boot name set (~12 names,
+; <= 19 chars — docs/notes/pi-netboot-capture-analysis.md §5) costs at most
+; 12 * (19 + 7) = 312 bytes; every name at the 31-char -netboot-extra cap
+; costs 12 * (31 + 7) = 456. 512 covers both with the arena (4096 bytes)
+; bounding the staged file count well below the table's worst case.
+NB_SRC_TABLE_LEN: equ 512
 NB_SRC_TABLE:     defs NB_SRC_TABLE_LEN  ; name\0 + ptr + size records + 0
 
 NB_ARENA_LEN:     equ 4096
