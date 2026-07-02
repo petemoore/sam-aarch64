@@ -93,3 +93,37 @@ assert_eq32_de_hl_imm:
 
                 push    bc             ; restore as return address
                 ret
+
+
+; -----------------------------------------------------------------------
+; out_run_peek — read one byte from the OUT run (self-test support).
+;
+; Resident in the main binary (section C, HMPR-stable) for the same
+; reason as assert_eq32_de_hl_imm above: the emit self-test runs
+; off-axis in the page-12 cluster, so it must NOT touch LMPR itself —
+; the swap would page its own executing code out of section A.  This
+; helper executes from section C, so its LMPR bracket (mapping the
+; requested run page into section B) is safe under any caller LMPR.
+;
+; Input:    A = 0-based page index within the OUT run,
+;           HL = section-B address (&4000..&7FFF) within that page.
+; Output:   A = the byte.  HL preserved.
+; Clobbers: B, C.
+; -----------------------------------------------------------------------
+out_run_peek:
+                ld      c, a
+                ld      a, (OUT_RUN_BASE)
+                add     a, c
+                dec     a
+                or      &20            ; LMPR: RAM0 | (page-1) → section B = page
+                ld      c, a
+                in      a, (250)
+                ld      b, a           ; B = caller's LMPR
+                ld      a, c
+                out     (250), a
+                ld      a, (hl)        ; read via section B
+                ld      c, a
+                ld      a, b
+                out     (250), a       ; restore the caller's LMPR
+                ld      a, c
+                ret

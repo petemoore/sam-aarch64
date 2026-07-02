@@ -25,7 +25,7 @@
 ;
 ; WHICH suites live here (and why they are LMPR-swap-safe):
 ;   symbols, local_labels, expr_eval, slots, pc_rel, directives,
-;   ror_imm, shifted_reg, extended_reg, litpool.
+;   ror_imm, shifted_reg, extended_reg, litpool, pagepool, emit_paged.
 ;
 ;   symbols and local_labels are LMPR-swap-safe: their production
 ;   routines (symbol_table_init, symbol_lookup, symbol_insert,
@@ -108,6 +108,13 @@ cluster_dispatch:
                 ; ran earlier in the main boot path). pp_* operate on the
                 ; section-D page_owner[] table, HMPR-stable under this swap.
                 call    run_pool_self_tests
+                ; i24: the pool-run emit path. Runs AFTER the pool suite (which
+                ; claims + frees every FREE page) so its own PP_OUT run alloc
+                ; sees the boot pool state. LMPR-swap-safe because the suite
+                ; never touches LMPR itself: emit_byte / out_run_peek bracket
+                ; LMPR internally while executing from section C, restoring the
+                ; cluster page before returning (see test_emit_paged.asm).
+                call    run_emit_paged_self_tests
                 ret
 
                 include "test_symbols.asm"
@@ -121,3 +128,4 @@ cluster_dispatch:
                 include "test_extended_reg.asm"
                 include "test_litpool.asm"
                 include "test_pagepool.asm"
+                include "test_emit_paged.asm"

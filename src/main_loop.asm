@@ -31,9 +31,14 @@
 ;
 ; PASS_PC invariant (correctness gate for Tasks 5-6):
 ;   At any record boundary, PASS_PC = "address of the next record to
-;   process".  Equivalently, in pass 2, PASS_PC == OUT_LEN at every
-;   record boundary (M3's OUT_BUF starts at PC 0).  Both passes advance
-;   by the same per-record amount, so the invariant follows.
+;   process".  Equivalently, in pass 2, PASS_PC == OUT_LEN (u24) at
+;   every record boundary (the OUT buffer starts at PC 0).  Both passes
+;   advance by the same per-record amount, so the invariant follows —
+;   and the final pass-1 PASS_PC is exactly the output size, which is
+;   what reset_out_buffer sizes the OUT page run from (it asserts
+;   PASS_PC byte 3 == 0; a >16 MB output is impossible).  emit_byte's
+;   run-overrun guard (tag &b0) is the runtime backstop: it fires only
+;   if pass 2 emits more than pass 1 counted.
 
 
 ; OperandKind / RecordKind / Directive-ID constants — the OP_KIND_* /
@@ -89,8 +94,10 @@ main_assemble:
 ; ----- Pass 2: emit --------------------------------------------------
                 ld      a, PASS_PASS2
                 ld      (PASS_MODE), a
-                call    pass_pc_reset
+; reset_out_buffer sizes the OUT run from the final pass-1 PASS_PC, so
+; it must run BEFORE pass_pc_reset zeroes PASS_PC for pass 2.
                 call    reset_out_buffer
+                call    pass_pc_reset
                 call    reset_reader_to_in_buf
 ; Pass 2 re-uses the LITPOOL_TABLE / LITPOOL_PC_MAP populated by pass 1.
 ; Reset the per-slot `pending` flag (cleared by pass-1 flush) so the
@@ -128,26 +135,114 @@ reset_reader_to_in_buf:
 
 
 ; -----------------------------------------------------------------------
-; reset_out_buffer — reset output cursor + counter to empty.
+; reset_out_buffer — size + allocate the OUT run, reset cursor + counter.
 ;
-; Called before pass 2 only (pass 1 never emits).
+; Called between the passes (pass 1 never emits), BEFORE pass_pc_reset
+; zeroes PASS_PC: the final pass-1 PASS_PC IS the output size, and this
+; routine snapshots it (24-bit OUT_TOTAL) as the run-sizing input.
 ;
-; Per docs/specs/paged-out-design.md the OUT buffer
-; lives in physical pages 5+6, reached via section B (&4000..&7FFF).
-; OUT_PC starts at the section-B base; OUT_ZONE starts at 0 (= low
-; zone, section B = page 5 for free under LMPR_ENCTAB).
+; Per docs/specs/paged-out-design.md the OUT buffer is ONE contiguous
+; run of page-pool pages: pages = ceil(OUT_TOTAL / 16384), minimum 1,
+; allocated via pp_alloc_run(PP_OUT).  Any previous run is freed first
+; (pp_free_run), so repeated assembles never leak PP_OUT pages.  emit
+; reaches the run via section B (&4000..&7FFF); OUT_LMPR_CUR caches the
+; LMPR value mapping the cursor's page there (&20 OR (page-1), section
+; B = LMPR low5 + 1; run base >= 5 since pool pages 0..4 are reserved).
 ;
-; Input:  none.
-; Output: OUT_PC = &4000; OUT_ZONE = 0; OUT_LEN = 0.
-; Clobbers: A, HL.
+; Failure tags:
+;   &b4 — PASS_PC byte 3 non-zero (an output past 16 MB is impossible;
+;         internal invariant break).
+;   &b3 — the pool cannot supply the run (pass-1 total >= 4 MB, or no
+;         contiguous free run large enough) — the user-facing
+;         out-of-memory for oversized outputs.
+;
+; Input:  PASS_PC = final pass-1 total.
+; Output: OUT_TOTAL snapshot; OUT_RUN_BASE / OUT_RUN_PAGES /
+;         OUT_LMPR_CUR set; OUT_PAGE_IDX = 0; OUT_PC = &4000;
+;         OUT_LEN = 0.
+; Clobbers: A, BC, DE, HL.
 ; -----------------------------------------------------------------------
 reset_out_buffer:
+; -- Snapshot the pass-1 total as u24 (assert byte 3 is clear) ----------
+                ld      a, (PASS_PC + 3)
+                or      a
+                jr      z, reset_out_total_ok
+                ld      a, &b4
+                jp      fail_with_tag       ; tag b4: pass-1 total >= 16 MB
+reset_out_total_ok:
+                ld      hl, (PASS_PC)
+                ld      (OUT_TOTAL), hl
+                ld      a, (PASS_PC + 2)
+                ld      (OUT_TOTAL + 2), a
+
+; -- Free any previous run (edit ⇄ assemble cycles re-enter here) -------
+; First assemble of a session sees OUT_RUN_PAGES = 0 (binary-image
+; initial value) and skips.  pp_free_run is all-or-nothing; its result
+; is not checked — a mismatch would mean the pool table already
+; diverged from OUT_RUN_*, and the alloc below fails honestly anyway.
+                ld      a, (OUT_RUN_PAGES)
+                or      a
+                jr      z, reset_out_no_prev
+                ld      b, a
+                ld      c, PP_OUT
+                ld      a, (OUT_RUN_BASE)
+                call    pp_free_run
+reset_out_no_prev:
+
+; -- pages = ceil(OUT_TOTAL / 16384), minimum 1 -------------------------
+; A total >= 4 MB (OUT_TOTAL byte 2 >= &40) cannot fit the pool's
+; 512 KB reach and would corrupt the shift below (rlca is a rotate) —
+; reject as out-of-memory up front.
+                ld      a, (OUT_TOTAL + 2)
+                cp      &40
+                jr      c, reset_out_size_ok
+reset_out_oom:
+                ld      a, &b3
+                jp      fail_with_tag       ; tag b3: output too large for free memory
+reset_out_size_ok:
+                rlca
+                rlca                        ; A = t2 << 2 (clean: t2 < &40)
+                ld      b, a
+                ld      a, (OUT_TOTAL + 1)
+                rlca
+                rlca
+                and     3                   ; A = t1 >> 6
+                or      b
+                ld      b, a                ; B = full pages = OUT_TOTAL >> 14
+                ld      a, (OUT_TOTAL + 1)
+                and     &3F
+                ld      c, a
+                ld      a, (OUT_TOTAL)
+                or      c                   ; Z ⇔ (OUT_TOTAL & &3FFF) == 0
+                jr      z, reset_out_no_partial
+                inc     b                   ; + the partial page
+reset_out_no_partial:
+                ld      a, b
+                or      a
+                jr      nz, reset_out_have_pages
+                inc     b                   ; empty output still gets 1 page
+reset_out_have_pages:
+
+; -- Allocate the contiguous run ----------------------------------------
+                ld      a, b
+                ld      (OUT_RUN_PAGES), a
+                ld      a, PP_OUT
+                call    pp_alloc_run        ; A = run base page, or PP_FAIL
+                cp      PP_FAIL
+                jr      z, reset_out_oom
+                ld      (OUT_RUN_BASE), a
+
+; -- Reset the cursor into run page 0 -----------------------------------
+                dec     a
+                or      &20                 ; LMPR: RAM0 | (base-1) → B = base
+                ld      (OUT_LMPR_CUR), a
+                xor     a
+                ld      (OUT_PAGE_IDX), a
+                ld      (OUT_LEN), a
+                ld      (OUT_LEN + 1), a
+                ld      (OUT_LEN + 2), a
                 ld      hl, &4000           ; section-B base
                 ld      (OUT_PC), hl
-                xor     a
-                ld      (OUT_ZONE), a       ; start in low zone (page 5)
-                ld      hl, 0
-                ld      (OUT_LEN), hl
                 ret
 
 
@@ -650,12 +745,11 @@ compute_dir_size_balign:
 ; small N (corpus values are 2..4), so we just shift in place.
 compute_dir_size_align:
                 call    main_eval_first_imm         ; expr_result = N (s64)
-; `.align N` aligns to 2^N bytes.  Valid N on the SAM is 1..15: the OUT
-; buffer is 32 KB (pages 5 + 6), so an alignment of 2^16 or more can
-; never be reached within it and the 16-bit pad machinery cannot hold it.
-; Reject N >= 16 (and negatives / N >= 256, which show up as a non-zero
-; byte above the low byte) with tag a0, rather than letting 1<<N overflow
-; HL to a silent no-op.
+; `.align N` aligns to 2^N bytes.  Valid N on the SAM is 1..15: the
+; 16-bit pad machinery (compute_balign_pad_from_n's HL) cannot hold an
+; alignment of 2^16 or more.  Reject N >= 16 (and negatives / N >= 256,
+; which show up as a non-zero byte above the low byte) with tag a0,
+; rather than letting 1<<N overflow HL to a silent no-op.
                 ld      hl, expr_result + 1
                 ld      b, 7
                 xor     a
@@ -1167,9 +1261,8 @@ main_dir_org_backward:
 
 ; ---- .org (pass 2) — zero-fill from current PC to target ------------
 ;
-; PR-A scope: 16-bit delta only (max 64 KB pad).  M5's IN/OUT buffers
-; are 2 KB each, so anything larger would be unusable anyway.  Larger
-; deltas are out-of-scope until a fixture needs them.
+; PR-A scope: 16-bit delta only (max 64 KB pad).  Larger deltas are
+; out-of-scope until a fixture needs them.
 ;
 ; Mirrors refenc/pass2.go:102-128: emit (target - pc) zero bytes and
 ; set PASS_PC = target.
@@ -1509,7 +1602,7 @@ load_in_file:
 ; size (the size lives at file offset 8, inside the head).  Alloc one IN page
 ; from the pool; IN_BASE_LMPR holds its full LMPR value (RAM0 | page).  After
 ; decoding the prefix size we free this page and alloc the full contiguous run
-; (Phase 1.5).  i23 / docs/plans/i23-in-pool-contiguous.md.
+; (Phase 1.5).  i23 / docs/specs/paged-in-design.md.
                 ld      a, PP_IN
                 ld      b, 1
                 call    pp_alloc_run        ; A = head page, or PP_FAIL
@@ -1711,10 +1804,16 @@ in_lmpr_save:   defb    0
 ; caller only has to populate UIFA[31..36]:
 ;
 ;   byte 31    : start page → HSAVE sets HMPR low 5 bits from this
-;                (= OUT_BASE_PAGE = 5; page 5 then page 6 via auto-page).
+;                (= OUT_RUN_BASE, wherever the pool placed the run;
+;                the following run pages via auto-page).
 ;   bytes 32-33: source offset in section-C form (= &8000).
-;   byte 34    : pages count = OUT_LEN >> 14.
+;   byte 34    : pages count = OUT_LEN >> 14, computed across the full
+;                24-bit count (a multi-page run can far exceed the old
+;                two-page &3 mask).
 ;   bytes 35-36: remainder length = OUT_LEN & 0x3FFF.
+;
+; The computation is deliberately general over (OUT_RUN_BASE, OUT_LEN)
+; — i33's staged/record-seam output builds on this same seam.
 ;
 ; LMPR is unchanged across HSAVE (ROM PTDOS save/restores).  After
 ; this call: OUT is on disk; assembler-side LMPR/HMPR back to
@@ -1724,22 +1823,31 @@ save_out_file:
                 ld      hl, name_OUT
                 call    fill_uifa
 
-                ld      a, OUT_BASE_PAGE
+                ld      a, (OUT_RUN_BASE)
                 ld      (UIFA + 31), a              ; HSAVE: HMPR low5 = page
 
                 ld      hl, &8000                   ; section-C source offset
                 ld      (UIFA + 32), hl             ; HSAVE: HL = (hd0d1) = UIFA[32-33]
 
-                ld      hl, (OUT_LEN)               ; total bytes (0..32767)
-                ld      a, h
+; pages = OUT_LEN >> 14 over the u24 count.  Byte 2 < &40 is guaranteed
+; (reset_out_buffer rejects totals >= 4 MB), so the rlca pair is a
+; clean shift.
+                ld      a, (OUT_LEN + 2)
+                rlca
+                rlca
+                ld      b, a                        ; B = byte2 << 2
+                ld      a, (OUT_LEN + 1)
                 rlca
                 rlca
                 and     3
+                or      b
                 ld      (UIFA + 34), a              ; pages = OUT_LEN >> 14
 
-                ld      a, h
+                ld      a, (OUT_LEN + 1)
                 and     &3f
                 ld      h, a
+                ld      a, (OUT_LEN)
+                ld      l, a
                 ld      (UIFA + 35), hl             ; remainder = OUT_LEN & 0x3FFF
 
                 rst     8
@@ -1812,7 +1920,7 @@ main_dir_equ_pending_id:        defw    0
 ; buffer's contiguous run, allocated from the i2 page pool by load_in_file
 ; (pp_alloc_run).  Replaces the old fixed LMPR_IN_BASE constant: reset_reader
 ; and reader_init's IN_END calc read it so the reader walks the run wherever
-; the pool placed it (i23 / docs/plans/i23-in-pool-contiguous.md).  Pages within
+; the pool placed it (i23 / docs/specs/paged-in-design.md).  Pages within
 ; the run are contiguous, so the per-page advance stays a plain LMPR increment.
 IN_BASE_LMPR:           defb    0
 IN_POS_PAGE:            defb    0           ; current LMPR low5+RAM0 for IN
@@ -1822,11 +1930,21 @@ IN_END_PAGE:            defb    0           ; last byte's LMPR low5+RAM0
 IN_END_OFFSET:          defw    0           ; last byte's offset in that page
 
 ; Paged OUT cursor state — see docs/specs/paged-out-design.md.
-; OUT_PC walks section B (&4000..&7FFF); OUT_ZONE flips 0 → 1 at the
-; first byte 16384 to switch from page 5 (under LMPR_ENCTAB) to page 6
-; (under LMPR_OUT_HIGH).  OUT_LEN is the total emitted byte count
-; (16-bit; cap is 32 KB given the two-page allocation).
+; The OUT buffer is one contiguous page-pool run (pp_alloc_run(PP_OUT)),
+; sized from the pass-1 total by reset_out_buffer.  OUT_PC walks section
+; B (&4000..&7FFF) within the current run page; OUT_PAGE_IDX is that
+; page's 0-based index within the run; OUT_LMPR_CUR caches the LMPR
+; value mapping it at section B (&20 OR (page-1)), bumped by
+; out_advance_page at each page boundary.  OUT_LEN is the total emitted
+; byte count (u24 LE; the pool's ~512 KB reach makes 24 bits ample) —
+; the logical offset is OUT_PAGE_IDX*16384 + (OUT_PC - &4000).
+; OUT_RUN_PAGES doubles as the "a run is live" flag (0 = none yet);
+; its binary-image initial value 0 makes reset_out_buffer's
+; free-previous guard safe on the first assemble.
 OUT_PC:                 defw    0           ; next emit position (section B)
-OUT_LEN:                defw    0           ; bytes emitted so far
-OUT_ZONE:               defb    0           ; 0 = low zone (section B, page 5);
-                                            ; 1 = high zone (LMPR=&25, page 6)
+OUT_LEN:                defb    0, 0, 0     ; bytes emitted so far (u24 LE)
+OUT_TOTAL:              defb    0, 0, 0     ; pass-1 total (u24 LE) — run sizing
+OUT_RUN_BASE:           defb    0           ; first physical page of the run
+OUT_RUN_PAGES:          defb    0           ; pages allocated (0 = no run)
+OUT_PAGE_IDX:           defb    0           ; cursor's 0-based run page index
+OUT_LMPR_CUR:           defb    0           ; LMPR mapping that page at section B

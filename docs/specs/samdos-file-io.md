@@ -481,10 +481,14 @@ save_out_file_paged:
                 ret
 ```
 
-In the in-tree implementation: `OUT_PAGE` is the constant `OUT_BASE_PAGE = 5`
-(`src/trampoline.asm`), `name_OUT` / `fill_uifa` / `UIFA` (`&4B00`) live in
-`src/main_loop.asm` / `sam_io.inc`, and `HOOK_HSAVE = 132` is defined
-alongside `HOOK_HLOAD` (per `samdos/src/b.s:501`).
+In the in-tree implementation (`save_out_file`, `src/main_loop.asm`):
+`OUT_PAGE` is the runtime `OUT_RUN_BASE` — the first page of the
+pool-allocated OUT run (`docs/specs/paged-out-design.md`) — and the
+pages/remainder split is computed across the 24-bit `OUT_LEN` (a multi-page
+run can exceed the snippet's two-`RLCA`-plus-`AND 3` reach). `name_OUT` /
+`fill_uifa` / `UIFA` (`&4B00`) live in `src/main_loop.asm` / `sam_io.inc`,
+and `HOOK_HSAVE = 132` is defined alongside `HOOK_HLOAD` (per
+`samdos/src/b.s:501`).
 
 #### Length encoding (verified against the HSAVE source)
 

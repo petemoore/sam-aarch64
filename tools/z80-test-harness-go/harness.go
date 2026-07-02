@@ -7,7 +7,8 @@
 // encoder table (enctab.enc) and a pre-built .tbn input file, then runs the
 // Z80 emulator until HALT (or timeout), capturing:
 //
-//   - The assembled OUT bytes (from physical pages 5+6)
+//   - The assembled OUT bytes (from the pool-allocated OUT run, located
+//     via the UIFA start page the assembler hands HSAVE)
 //   - The printer-channel banner ("OK" / "FAIL…")
 //   - The last 200 Z80 PC values before HALT
 //   - A pass/fail verdict
@@ -23,8 +24,9 @@
 //	Section D (&C000-&FFFF): scratch / stack (page 3 = HMPR_DEFAULT+1)
 //
 //	Physical page 4:   ENCTAB (paged into section A via LMPR_ENCTAB = &24)
-//	Physical pages 5-6: OUT buffer (written by assembler)
-//	Physical pages 7-12: IN .tbn (pre-deposited; read via LMPR brackets)
+//	Physical pages 5-12: page-pool pages — the assembler allocates its IN
+//	                     and OUT runs here at assemble time (pp_alloc_run)
+//	                     and reaches them via LMPR brackets
 //
 // # RST 8 / DOS hook interception
 //
@@ -45,7 +47,8 @@
 //	            for the IN file and for enctab.enc (i7 phase A: load_enctab
 //	            now reads the DIFA header instead of a hardcoded constant).
 //	130 HLOAD — no-op: data already pre-deposited in the target pages.
-//	132 HSAVE — capture: read OUT bytes from UIFA[31..36] + pages 5-6.
+//	132 HSAVE — capture: read OUT bytes from UIFA[31..36] (start page +
+//	            pages count + remainder, spanning the whole OUT run).
 //
 // # DOS file-I/O error dispatch via DOSER (&5BC0) (i25 prerequisite)
 //
@@ -538,7 +541,8 @@ func (h *Hardware) readPageBytes(startPage int, offset int, length int) []byte {
 //
 //	assemblerBin: contents of assembler-prod.bin (loaded at &8000)
 //	enctabData:   contents of enctab.enc (pre-deposited in page 4)
-//	inData:       contents of a .tbn file (pre-deposited in pages 7-12)
+//	inData:       contents of a .tbn file (served as the "IN" DOS file;
+//	              HLOAD deposits it into whatever run the pool allocates)
 //	timeout:      wall-clock limit
 //
 // Returns a Result describing the outcome.

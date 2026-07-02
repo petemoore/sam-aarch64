@@ -27,9 +27,10 @@ POOL_TEST_N0:   equ PP_TABLE_BASE + 1 + PP_MAX_PAGES
 ; run_pool_self_tests — the spec §6 boot self-test on the live, boot-sized
 ; pool: claim every FREE page, confirm the count, confirm the reserved pages
 ; never moved, free them all, and confirm the FREE count is restored exactly.
-; Machine-size independent (the free count N0 is 6 on a 256 KB machine — the IN
-; pages 7..12 — and larger on bigger machines). Leaves the pool exactly
-; as pool_boot_init left it. On any mismatch: jp fail_with_tag (&F0..&F3).
+; Machine-size independent (the free count N0 is 8 on a 256 KB machine — the
+; IN/OUT buffer pages 5..12 — and larger on bigger machines). Leaves the pool
+; exactly as pool_boot_init left it. On any mismatch: jp fail_with_tag
+; (&F0..&F3).
 ; Clobbers: A, B, C, D, E, HL.
 ; ===========================================================================
 run_pool_self_tests:
@@ -53,9 +54,9 @@ pool_test_claim:
                 ld      a, &F0
                 jp      fail_with_tag
 pool_test_count_ok:
-                ; Reserved ranges A (0..6) and B (13..15) must still be RESERVED
-                ; (IN's pages 7..12 are now FREE — handed to the pool — so they
-                ; were claimed as SCRATCH above, not reserved). i23.
+                ; Reserved ranges A (0..4) and B (13..15) must still be RESERVED
+                ; (the IN/OUT buffer pages 5..12 are FREE — handed to the pool —
+                ; so they were claimed as SCRATCH above, not reserved). i23/i24.
                 ld      b, POOL_RESV_A_N
                 ld      c, POOL_RESV_A_BASE
 pool_test_resv_a:

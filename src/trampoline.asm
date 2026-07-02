@@ -110,77 +110,17 @@
 ; encoder + form_lookup may read ENCTAB freely via direct addressing.
 ;
 ; LMPR = LMPR_ENCTAB means section A = page 4 (ENCTAB, RAM-replaces-
-; ROM) and section B = page 5 (currently unused — we never write or
-; read here while LMPR = LMPR_ENCTAB).  The trampoline copy at
-; TRAMPOLINE_DST lives in section B under LMPR = LMPR_DEFAULT; with
-; LMPR = LMPR_ENCTAB section B = page 5, so the trampoline copy is
-; INVISIBLE — but we never call it during the LMPR = LMPR_ENCTAB
-; window, so this is fine.
+; ROM).  The trampoline copy at TRAMPOLINE_DST lives in section B
+; under LMPR = LMPR_DEFAULT; with LMPR = LMPR_ENCTAB section B is a
+; different page, so the trampoline copy is INVISIBLE — but we never
+; call it during the LMPR = LMPR_ENCTAB window, so this is fine.
 ;
-;
-; ===========================================================================
-; HOW TO EXTEND THIS PATTERN FOR IN AND OUT BUFFERS
-; ===========================================================================
-;
-; The current code budget pressure (M5) was solved by paging ENCTAB
-; out of section C — the largest single block, biggest payoff.  Later
-; milestones (M6: large spectrum4 sources, ~20 KB input, ~22 KB
-; output) will face the same pressure on IN and OUT buffers, and will
-; need an analogous extension of this machinery.
-;
-; The PATTERN is the same:
-;
-; 1. **HSAVE (hook 132) trampoline.**  Mirror `trampoline_hload` but
-;    with `defb 132` instead of `defb HOOK_HLOAD`.  Verify the exact
-;    byte against samdos/src/b.s::samhk — HSAVE is samhk[4] = code
-;    132 (`samdos/src/b.s:501 defw hsave ;132`).  HSAVE reads the
-;    source address from UIFA byte 32 and the length from UIFA byte
-;    35/36; the trampoline's job is to set HMPR so the DOS reads
-;    through section C land in the right physical page.
-;
-; 2. **Runtime read/write via section A.**  Parse-eval-encode-emit
-;    interleaves reads from IN with reads from ENCTAB with writes to
-;    OUT.  Three buffers all mapped via section A can't all be active
-;    at once — only one page maps to A at a time.  Options:
-;    (a) Snapshot a window of IN into a small section-C scratch
-;        before encoding, encode from the scratch, write OUT to a
-;        section-C scratch, then HSAVE the scratch.  Compatible with
-;        the current encoder structure.
-;    (b) Keep ENCTAB in section A (current LMPR = LMPR_ENCTAB setup),
-;        keep IN in section B (via a second LMPR value), keep OUT in
-;        section D (via HMPR change).  Three different paging
-;        registers, complex bracketing.
-;    (c) Split the encoder into phases: read-IN phase (LMPR=IN page),
-;        encode-with-ENCTAB phase (LMPR=ENCTAB page), emit-to-OUT
-;        phase (HMPR=OUT page).  Buffers the data in section D
-;        scratch between phases.
-;
-;    No single option is obviously best — needs design analysis
-;    informed by COMET's OUT-side write pattern (HSAVE assembles to
-;    disk so COMET must have solved this).
-;
-; 3. **Survey-and-design BEFORE implementation.**  See the deferred-
-;    work item in `docs/ROADMAP.md` flagged "M6 prerequisite —
-;    trampoline extension for IN/OUT buffers".  The expected
-;    workflow:
-;
-;    a) Read `~/git/comet/` (or `reference/comet-decoded/comet.asm`)
-;       for HSAVE / save-side patterns.  COMET likely has a
-;       counterpart to the HLOAD trampoline at lines 1265-1284.
-;       Find it, document its calling convention.
-;    b) If COMET's pattern doesn't translate cleanly, scan
-;       `~/sam-corpus/disks/` for other SAM-era assemblers /
-;       large-output programs (the COMET trampoline study found the
-;       pattern in COMET because we already had its source; the
-;       broader corpus may have other examples).
-;    c) Write the design up alongside
-;       `docs/specs/samdos-file-io.md` (a follow-up
-;       note in the same `docs/specs/` directory).
-;    d) Open the implementation PR AFTER the design note is in.
-;
-; The architectural foundation for paged IN/OUT is already here — the
-; trampoline + LMPR-swap pattern below generalises directly.  Don't
-; re-derive it from scratch; extend it.
+; The IN and OUT buffers extend this same paging pattern: IN is read
+; per-record via an LMPR bracket into section A (reader.asm;
+; docs/specs/paged-in-design.md), and OUT is written per-byte via an
+; LMPR bracket into section B (emit_byte in encoder.asm;
+; docs/specs/paged-out-design.md).  Both live in page-pool runs
+; allocated at assemble time (src/pagepool.asm).
 
 
 ; -----------------------------------------------------------------------
@@ -232,24 +172,14 @@ LMPR_ENCTAB:    equ     &20 + ENCTAB_PAGE
                                        ; boot LMPR has bit 5 = 0; we
                                        ; need it = 1 to swap ROM out).
 
-; OUT-buffer paged-output constants.
+; OUT buffer: no compile-time page constants.
 ;
-; Per docs/specs/paged-out-design.md.  OUT lives in
-; physical pages 5..6 across two zones:
-;
-;   Low zone  (bytes 0..16383)   — section B during LMPR_ENCTAB window;
-;                                  page 5 reached for free as
-;                                  LMPR_ENCTAB+1 = &25 (Tech Manual
-;                                  tech-man_v3-0.txt:908-910).
-;   High zone (bytes 16384..32767) — LMPR brackets each emit to LMPR_OUT_HIGH,
-;                                    placing page 6 in section B.
-;
-; HSAVE at end of pass 2 reads via section C with UIFA[31]=OUT_BASE_PAGE
-; (= 5), HMPR auto-paging at &C000 to reach page 6 (see
-; docs/specs/samdos-file-io.md).
-
-OUT_BASE_PAGE:  equ     5              ; first physical page of OUT
-LMPR_OUT_HIGH:  equ     &25            ; RAM0 + low5=5; A=page 5, B=page 6
+; Per docs/specs/paged-out-design.md, OUT is a contiguous page-pool run
+; allocated at assemble time (reset_out_buffer in main_loop.asm); the
+; runtime state (OUT_RUN_BASE / OUT_RUN_PAGES / OUT_LMPR_CUR / OUT_PC /
+; OUT_LEN) lives in main_loop.asm.  HSAVE at end of pass 2 reads via
+; section C with UIFA[31] = OUT_RUN_BASE, HMPR auto-paging at &C000
+; across the run (see docs/specs/samdos-file-io.md).
 
 
 ; IN-buffer paged-input constants.
