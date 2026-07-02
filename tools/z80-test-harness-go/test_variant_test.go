@@ -20,6 +20,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -76,9 +77,32 @@ func TestVariantBootSelfTests(t *testing.T) {
 	// the stack at &C100 overwriting the test function's own opcodes when
 	// it spilled above &C000 — which must not recur).
 	//
-	// After the M6 budget-relief PR (2026-05-29) the whole code region
-	// dropped well below &C000 (binary ends ~&BA89); run_reader_paged_self_tests
-	// now lives around &B870.  Trace [B800,BA00) brackets it.
+	// The window is derived from build/assembler.sym rather than hardcoded:
+	// the routine's address shifts with every layout change, and a stale
+	// fixed window ends up tracing whatever code drifts into it — code that
+	// may legitimately run on the paged-call trampoline stack (&7EFE, see
+	// TRAMP_SAFE_SP in src/trampoline.asm) and so trips the SP guard
+	// spuriously.  The window spans run_reader_paged_self_tests up to the
+	// first following symbol outside the routine's reader_paged_* block.
+	syms, err := loadSAMSymbols(filepath.Join(root, "build", "assembler.sym"))
+	if err != nil {
+		t.Fatalf("build/assembler.sym unreadable: %v", err)
+	}
+	winLo, ok := syms["run_reader_paged_self_tests"]
+	if !ok {
+		t.Fatal("run_reader_paged_self_tests missing from build/assembler.sym")
+	}
+	winHi := uint32(0)
+	for name, addr := range syms {
+		if addr > winLo && (winHi == 0 || addr < winHi) && !strings.HasPrefix(name, "reader_paged_") {
+			winHi = addr
+		}
+	}
+	if winHi == 0 {
+		t.Fatal("no symbol found after run_reader_paged_self_tests — cannot bound the trace window")
+	}
+	t.Logf("reader-test window: [%04X,%04X)", winLo, winHi)
+
 	res, trace, _ := RunConfig(Config{
 		AssemblerBin: asm, EnctabData: enc, InData: in,
 		Files: []NamedFile{
@@ -106,7 +130,7 @@ func TestVariantBootSelfTests(t *testing.T) {
 			{Name: "d15", Content: d15, TargetPage: 15},
 		},
 		Timeout: 10 * time.Second,
-		TraceLo: 0xB800, TraceHi: 0xBA00,
+		TraceLo: uint16(winLo), TraceHi: uint16(winHi),
 	})
 
 	t.Logf("Exit: %s", res.ExitReason)
@@ -118,20 +142,30 @@ func TestVariantBootSelfTests(t *testing.T) {
 		t.Fatalf("test variant boot self-tests did not pass: printer=%q exit=%q regs=%s",
 			res.PrinterCapture, res.ExitReason, res.FaultRegs)
 	}
+	// The trace window filters on logical PC only, so it also captures
+	// off-axis code (pages 12/13/15 paged into section C, running on the
+	// trampoline stack at &7EFE) whose logical addresses happen to overlap
+	// the window.  The routine under guard executes from the production
+	// code page (HMPR = hmprDefault; bits 5-7 of HMPR are CLUT, so mask),
+	// so only those steps are the guard's business.
+	prodSteps := 0
+	for _, s := range trace {
+		if s.HMPR&0x1F == hmprDefault {
+			prodSteps++
+		}
+	}
 	// The regression guard below is only meaningful if execution actually
-	// entered the reader-test window; an empty trace would let it pass
-	// vacuously (e.g. if a future layout moved the routine out of the
-	// window).  Fail loudly rather than rot into a no-op.
-	if len(trace) == 0 {
-		t.Fatal("reader-test window [B800,BA00) never entered — regression guard is not exercising the target routine")
+	// entered the reader-test routine on the production page; a trace of
+	// off-axis pass-through entries alone would let it pass vacuously.
+	// Fail loudly rather than rot into a no-op.
+	if prodSteps == 0 {
+		t.Fatalf("reader-test window [%04X,%04X) never entered on the production page — regression guard is not exercising the target routine", winLo, winHi)
 	}
 	// Regression guard for the PR #42 failure mode: the boot stack at
 	// &C100 must never collide with code executing in the reader-test
-	// region.  Post-budget-relief the code sits ~&B870, so SP (descending
-	// from &C100) has ~2 KB of clearance; flag if it ever dips into the
-	// reader-test window itself.
+	// region; flag if SP ever dips into the reader-test window itself.
 	for _, s := range trace {
-		if s.PC >= 0xB800 && s.PC < 0xBA00 && s.SP < 0xBA00 {
+		if s.HMPR&0x1F == hmprDefault && uint32(s.SP) < winHi {
 			t.Errorf("SP descended dangerously close to reader-test code: PC=%04X SP=%04X", s.PC, s.SP)
 			break
 		}
