@@ -49,6 +49,14 @@
 ;   plus ARP-request and ICMP-echo replies (so the host can reach us), ported from
 ;   trinload's return_eth / return_arp / return_ip + the RFC-1071 checksum.
 ;
+; SCREEN STATUS (i318): alongside the compact startup stage markers ("1".."5", which
+; localise a hardware hang to the last stage shown), sd_push prints legible status
+; lines via RST &10 so a human at the SAM can follow a push without the host's log:
+; a "SD-PUSH" banner, "REC n FREE" after the pick, "name -> REC n" when the record
+; is catalogued, one progress dot per 100 sectors received, and a closing
+; "DONE: REC n" / "ERR: n SECS" line; the failure paths print a short reason next
+; to their diagnostic border colour.
+;
 ; VERIFICATION (emulation-first, CLAUDE.md rule 7): sd_push_faithful_test.go boots
 ; Colin's ROM + real B-DOS, loads this program, injects the cj.mgt stream over the ENC
 ; model, and asserts the catalogue entry + the 1600 body sectors + the sector-0
@@ -299,6 +307,8 @@ cblk_end:
 ; ===========================================================================
 sd_push_main:
                 di
+                ld      hl, sp_str_banner      ; "SD-PUSH " — announce the tool (i318);
+                call    sp_print_str           ; the stage markers follow on the same line
                 ld      a, "1"                 ; DBG: entered main (after di)
                 call    dbg_char
 
@@ -361,6 +371,14 @@ sd_push_main:
                 jp      z, sp_fail_nofree      ; no free record: decline, do not write
                 ld      a, "5"                 ; DBG: free record found (CMD17 list scan OK)
                 call    dbg_char
+                ; i318: show the picked record (decimal) before anything is written,
+                ; so the human at the SAM knows the target even if no stream arrives.
+                ld      hl, sp_str_rec
+                call    sp_print_str           ; CR + "REC "
+                ld      hl, (BD_FREE_RECORD)
+                call    sp_print_dec
+                ld      hl, sp_str_free
+                call    sp_print_str           ; " FREE" + CR
 
                 ; =====================================================================
                 ; The record's CATALOGUE / list-name entry (the ONLY create step) makes it
@@ -404,9 +422,12 @@ sd_push_main:
                 ; encdrv/sd_csd/bdos already do) keeps individual port switches safe; with
                 ; RX undisturbed there is nothing further to restore.
 
-                ; reset the received-sector counter (finalize checks it == 1600).
+                ; reset the received-sector counter (finalize checks it == 1600) and
+                ; the next progress-dot threshold (i318: a dot per 100 sectors).
                 ld      hl, 0
                 ld      (sp_recv_count), hl
+                ld      hl, 100
+                ld      (sp_next_dot), hl
 
 sp_serve_loop:
                 ; Esc-to-exit (trinload idiom): poll the keyboard; on Esc, RET to
@@ -577,12 +598,15 @@ sp_claim_once:
                 ld      hl, sp_record_name     ; default 'cj.mgt' or the 'N'-pushed name
                 ld      (BD_CLAIM_NAME_PTR), hl
                 call    bdos_claim_record      ; builds BD_CLAIM_ENTRY + writes the list entry
-                ld      a, "7"                 ; DBG: catalogue entry written
-                call    dbg_char
-                ld      a, "R"                 ; DBG: record number claimed + written to
-                call    dbg_char
+                ; i318: the record is now catalogued — show "name -> REC n" so the
+                ; human at the SAM sees where the pushed disk is landing.
+                call    sp_print_entry16       ; the claimed name, trailing spaces trimmed
+                ld      hl, sp_str_arrow
+                call    sp_print_str           ; " -> REC "
                 ld      hl, (BD_FREE_RECORD)
-                call    dbg_hl                 ; the 1-based record number (hex)
+                call    sp_print_dec
+                ld      a, 13
+                call    dbg_char               ; end the claim line
                 ret
 
 ; ---------------------------------------------------------------------------
@@ -697,6 +721,19 @@ sp_data_lba:
                 inc     hl
                 ld      (sp_recv_count), hl
 
+                ; i318 progress: one dot per 100 sectors received (16 for a full
+                ; record) — legible without flooding the screen or the serve loop.
+                ld      de, (sp_next_dot)
+                and     a
+                sbc     hl, de
+                jr      nz, sp_data_ack        ; not at the threshold yet
+                ld      hl, 100
+                add     hl, de
+                ld      (sp_next_dot), hl      ; next dot 100 sectors on
+                ld      a, "."
+                call    dbg_char
+sp_data_ack:
+
                 ; NO ENC re-arm after the CMD24 write. The write is an SD transaction, but
                 ; an SD transaction does NOT disturb the ENC's autonomous RX (only the &DC
                 ; mux-select changes, which the ENC's internal RXEN cannot see; the RX FIFO
@@ -790,6 +827,7 @@ sp_finalize:
                 ld      a, "D"                 ; complete record -> done
 sp_fin_reply:
                 ld      (packet+42), a
+                push    af                     ; keep the status for the screen line below
                 ; append the claimed record number so the host can print/boot it
                 ; (BD_FREE_RECORD is >=1 here: a no-free-record card exits via
                 ; sp_fail_nofree before the serve loop ever runs).
@@ -797,10 +835,28 @@ sp_fin_reply:
                 ld      (packet+43), hl        ; LE16 after the status byte
                 ld      bc, 3
                 call    ack_len
-                ld      a, "9"                 ; DBG: write-complete (record body finalised)
+                ; i318: close the screen story — "DONE: REC n" on success, else
+                ; "ERR: n SECS" with the received count (the reply went first, so
+                ; the host never waits on the ROM print).
+                pop     af
+                cp      "D"
+                jr      nz, sp_fin_err_line
+                ld      hl, sp_str_done
+                call    sp_print_str           ; CR + "DONE: REC "
+                ld      hl, (BD_FREE_RECORD)
+                call    sp_print_dec
+                ld      a, 13
                 call    dbg_char
                 ; clean exit: RET to trinload's start (it pushed start as our return).
                 ret
+sp_fin_err_line:
+                ld      hl, sp_str_err
+                call    sp_print_str           ; CR + "ERR: "
+                ld      hl, (sp_recv_count)
+                call    sp_print_dec
+                ld      hl, sp_str_secs
+                call    sp_print_str           ; " SECS" + CR
+                ret                            ; -> trinload's start (clean, re-pushable)
 
 ; ---------------------------------------------------------------------------
 ; dbg_char — print the character in A to the SAM screen via the ROM print-a-char
@@ -824,63 +880,93 @@ dbg_char:
                 pop     af
                 ret
 
-; dbg_hex — print A as two hex digits; dbg_hl — print HL as four. i295 debug.
-dbg_hex:
-                push    af
-                push    bc
-                ld      c, a
-                rrca
-                rrca
-                rrca
-                rrca
-                call    dbg_nib                ; high nibble
-                ld      a, c
-                call    dbg_nib                ; low nibble
-                pop     bc
-                pop     af
-                ret
-dbg_nib:
-                and     15
-                cp      10
-                jr      c, dbg_nib_dec
-                add     a, "A" - 10
-                jr      dbg_nib_emit
-dbg_nib_dec:
-                add     a, "0"
-dbg_nib_emit:
+; sp_print_str — print the NUL-terminated string at HL via dbg_char (RST &10).
+; Clobbers A, HL.
+sp_print_str:
+                ld      a, (hl)
+                or      a
+                ret     z
                 call    dbg_char
+                inc     hl
+                jr      sp_print_str
+
+; sp_print_dec — print HL as unsigned decimal (1..5 digits, leading zeros
+; suppressed; HL=0 prints "0"). Clobbers A, BC, DE, HL.
+sp_print_dec:
+                ld      b, 0                   ; B = "a digit has printed" flag
+                ld      de, 10000
+                call    spd_digit
+                ld      de, 1000
+                call    spd_digit
+                ld      de, 100
+                call    spd_digit
+                ld      de, 10
+                call    spd_digit
+                ld      a, l                   ; remainder = the units digit (0..9)
+                add     a, "0"
+                jp      dbg_char               ; the last digit always prints
+; spd_digit — extract HL's DE-place digit by repeated subtraction (HL := HL mod DE)
+; and print it, suppressing a leading zero (prints only once B is set).
+spd_digit:
+                ld      a, "0"-1
+spd_sub:
+                inc     a
+                and     a
+                sbc     hl, de
+                jr      nc, spd_sub
+                add     hl, de                 ; undo the overshoot: HL = remainder
+                cp      "0"
+                jr      nz, spd_print          ; a non-zero digit always prints
+                ld      c, a                   ; digit '0': print only after a
+                ld      a, b                   ; non-zero digit has printed
+                and     a
+                ld      a, c
+                ret     z                      ; leading zero: skip
+spd_print:
+                ld      b, 1                   ; later zeros are significant
+                jp      dbg_char               ; dbg_char preserves every register
+
+; sp_print_entry16 — print BD_CLAIM_ENTRY's 16-char record name with trailing
+; spaces trimmed (the claim guarantees printable 0x20..0x7E bytes). Clobbers
+; A, B, HL.
+sp_print_entry16:
+                ld      hl, BD_CLAIM_ENTRY+15  ; scan backward for the last non-space
+                ld      b, 16
+spe_scan:
+                ld      a, (hl)
+                cp      " "
+                jr      nz, spe_print
+                dec     hl
+                djnz    spe_scan
+                ret                            ; all spaces: print nothing
+spe_print:                                     ; B = chars to print from the start
+                ld      hl, BD_CLAIM_ENTRY
+spe_loop:
+                ld      a, (hl)
+                call    dbg_char
+                inc     hl
+                djnz    spe_loop
                 ret
-dbg_hl:
-                push    af
-                ld      a, h
-                call    dbg_hex
-                ld      a, l
-                call    dbg_hex
-                pop     af
-                ret
-; dbg_hold_esc — hold the CPU (screen frozen) until Esc, then RET to trinload.
-; Keeps trinload from resuming + scrolling away the debug output. i295 debug.
-dbg_hold_esc:
-                ld      a, &f7
-                in      a, (&f9)
-                bit     5, a                   ; Esc?  (same poll as the serve loop)
-                jr      nz, dbg_hold_esc       ; not pressed -> keep holding
-                ret                            ; Esc -> RET to trinload (recoverable)
 
 ; ---------------------------------------------------------------------------
-; Failure paths — show a diagnostic border, hold until Esc, then RET to trinload
-; (never a raw di;halt, which would strand the SAM and cost a power-cycle).
+; Failure paths — print the reason (i318), show a diagnostic border, hold until
+; Esc, then RET to trinload (never a raw di;halt, which would strand the SAM and
+; cost a power-cycle).
 ; ---------------------------------------------------------------------------
 sp_fail_cfg:
+                ld      hl, sp_str_fail_cfg
                 ld      a, 2                   ; red: no/bad network settings
                 jr      sp_fail_show
 sp_fail_init:
+                ld      hl, sp_str_fail_enc
                 ld      a, 1                   ; blue: ENC28J60 init failed
                 jr      sp_fail_show
 sp_fail_nofree:
+                ld      hl, sp_str_fail_nofree
                 ld      a, 6                   ; yellow: no free record (nothing written)
 sp_fail_show:
                 out     (&fe), a
+                call    sp_print_str           ; the reason, next to the border colour
 sp_fail_wait:
                 ld      a, &f7
                 in      a, (&f9)
@@ -909,6 +995,40 @@ sp_record_name: defm "cj.mgt"                  ; DEFAULT; an 'N' message overwri
                 defs 10                         ; room for a <=16-char pushed name + NUL (17 B)
 sp_claimed:     defb 0                          ; 0 until sp_claim_once registers the record
 sp_recv_count:  defw 0                         ; sectors received this session
+sp_next_dot:    defw 100                       ; next progress-dot threshold (i318)
+
+; Screen-status strings (i318) — NUL-terminated for sp_print_str; 13 = CR (the
+; SAM ROM newline).
+sp_str_banner:  defb 13
+                defm "SD-PUSH "
+                defb 0
+sp_str_rec:     defb 13
+                defm "REC "
+                defb 0
+sp_str_free:    defm " FREE"
+                defb 13, 0
+sp_str_arrow:   defm " -> REC "
+                defb 0
+sp_str_done:    defb 13
+                defm "DONE: REC "
+                defb 0
+sp_str_err:     defb 13
+                defm "ERR: "
+                defb 0
+sp_str_secs:    defm " SECS"
+                defb 13, 0
+sp_str_fail_cfg:
+                defb 13
+                defm "NO NET CONFIG"
+                defb 13, 0
+sp_str_fail_enc:
+                defb 13
+                defm "ENC INIT FAIL"
+                defb 13, 0
+sp_str_fail_nofree:
+                defb 13
+                defm "NO FREE RECORD"
+                defb 13, 0
 
 packet:         defs 1518                      ; RX/TX frame buffer (drv_read fills it)
 
