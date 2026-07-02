@@ -175,7 +175,10 @@ try_udp:
 
             ld  a,"!"
             ld  (packet+42),a           ; reply as "!"
-            ld  bc,1
+            ld  bc,1                    ; BARE '!' (1 byte) is trinload's signature:
+                                        ; pushed tools tag their replies ('!'+2-byte
+                                        ; tag) and push_and_run refuses stage-1 against
+                                        ; any non-bare responder (i329) — keep 1 byte.
             call ack_len
             jp  read_loop
 

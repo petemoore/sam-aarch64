@@ -11,6 +11,13 @@ It exists because the Pi (and other dev hosts) ship python3 only; the upstream
 `@`-blocks (unicast, 4-byte acks, 4 outstanding), then `X` (page + execute addr). The
 wire protocol lives in `trinpush.py` (a library), shared by both CLI scripts here.
 
+Because the pushed tools reuse the same port and `?` verb, discovery replies carry
+identity (i329): trinload alone answers a **bare** `!`; every tool with its own wire
+loop answers `!` + a 2-byte tag (`SP` = sd_push, `LR` = list_records — the
+`TOOL_TAGS` table in `trinpush.py`). A stage-1 push is **refused** unless the reply
+is trinload's bare `!` — a live tool would swallow the `@`-blocks as data (the i319a
+junk-record incident) — and the stage-2 launchers verify their own tool's tag.
+
 ## Quick reference
 
 `make trinpush-help` prints the canonical push invocations — no looking up the path

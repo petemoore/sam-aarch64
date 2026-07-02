@@ -6,8 +6,9 @@ i293 / boot-record.py i316 / delete-record.py i317): this launcher pushes
 build/list_records.bin to the SAM via TrinLoad (the ?/@/X protocol in trinpush.py),
 then queries the program's own framing on the same UDP port 0xEDB0:
 
-  '?'                  -> '!' + records(LE16)   (the card's record count; 0 = the
-                                                 CSD was unreadable)
+  '?'                  -> '!LR' + records(LE16) ('!' + the tool tag (i329), then the
+                                                 card's record count; 0 = the CSD was
+                                                 unreadable)
   'L' + listSec(LE16)  -> 'R' + listSec(LE16) + the raw 512-byte list sector
                           'E' + listSec(LE16)   (out of range / CMD17 read failure)
   'Q'                  -> 'q'                   (quit: the program RETs to trinload,
@@ -32,7 +33,7 @@ import socket
 import struct
 import sys
 
-from trinpush import LOAD_ORG, PORT, push_and_run
+from trinpush import LOAD_ORG, PORT, discover_tool, push_and_run
 
 SECTOR = 512
 ENTRIES_PER_SECTOR = 32
@@ -41,21 +42,19 @@ ENTRIES_PER_SECTOR = 32
 def discover_inventory(sock, sam, attempts=15):
     """Run list_records' '?' handshake; return (sam_addr, record_count) or (None, None).
 
+    The reply is '!LR' + records(LE16) — discover_tool verifies the tag, so a bare-'!'
+    trinload (the program exited / never ran) or another live tool fails fast (i329).
     The pushed program's startup (EEPROM read + ENC init + CSD ladder + list
     scan) takes ~12 s on a 64 GB card, so the stage-2 window must outlast it:
     15 attempts x 2 s timeout = 30 s (i330).
     """
-    for attempt in range(attempts):
-        sock.sendto(b"?", (sam, PORT))
-        try:
-            reply, addr = sock.recvfrom(16)
-        except socket.timeout:
-            print(f"  ? attempt {attempt + 1}: timeout, retrying")
-            continue
-        if reply[:1] == b"!" and len(reply) >= 3:
-            return addr[0], struct.unpack("<H", reply[1:3])[0]
-        print(f"  ? got unexpected reply {reply!r} from {addr}")
-    return None, None
+    dst, reply = discover_tool(sock, sam, b"LR", attempts)
+    if dst is None:
+        return None, None
+    if len(reply) < 5:
+        print(f"  ? malformed list_records discovery reply {reply!r} (want 5 bytes)")
+        return None, None
+    return dst, struct.unpack("<H", reply[3:5])[0]
 
 
 def fetch_list_sector(sock, dst, idx, attempts=3):

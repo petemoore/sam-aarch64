@@ -116,7 +116,7 @@ func setupSDPushMain(t *testing.T, csd [16]byte) (*z80h.Machine, *z80h.ENC28J60,
 
 // TestSDPushLogic drives sd_push end-to-end with a small 3-sector .mgt stream and
 // asserts the OWN-LBA create-record behaviour:
-//  1. discovery is answered ('!');
+//  1. discovery is answered ("!SP" — tagged, never trinload's bare '!'; i329);
 //  2. the CSD read set csd_base=152 and the scan auto-picked the first free record
 //     (record 1 on an empty list), with the data-safety guard NOT tripped;
 //  3. exactly four raw CMD24s land — the catalogue-claim write to list sector 1, plus
@@ -168,9 +168,13 @@ func TestSDPushLogic(t *testing.T) {
 		return a
 	}
 
-	// (1) Discovery must have been answered with '!'.
-	if got := countPayload(enc.TXFrames(), []byte{'!'}); got < 1 {
-		t.Errorf("no '!' discovery reply among %d TX frames", len(enc.TXFrames()))
+	// (1) Discovery must have been answered with "!SP" — '!' + the tool tag
+	// (i329: never a bare '!', which is trinload's signature).
+	if got := countPayload(enc.TXFrames(), []byte{'!', 'S', 'P'}); got < 1 {
+		t.Errorf("no '!SP' discovery reply among %d TX frames", len(enc.TXFrames()))
+	}
+	if got := countPayload(enc.TXFrames(), []byte{'!'}); got != 0 {
+		t.Errorf("%d BARE '!' discovery replies — that is trinload's signature; sd_push must tag its reply '!SP' (i329)", got)
 	}
 
 	// (2) The CSD read set the record->LBA anchor, and the scan picked record 1.
