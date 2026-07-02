@@ -5481,9 +5481,11 @@
   title: "List-records tool: trinload-pushed program that reports the Trinity SD record inventory (number + name) over the net"
   description: |
     A trinload-pushed Z80 program that reads the on-card Trinity SD record list and reports each used record's NUMBER + NAME (+ free slots) back over the network, so a host/agent can query what is on the card remotely without physical access. Completes the store/boot/delete/LIST testing toolkit. Motivation (Pete 2026-07-01): when iterating on a disk image we want to keep re-writing it to the SAME record each pass (preserve the record number); if that mapping is lost, an agent can re-discover what is on the card by querying it remotely. Reads the record list directly per docs/specs/trinity-record-detection-design.md + trinity_storage_shared_resource (frozen layout, show name). Read-only (no write) - data-safe. Feeds i319 (hardware-test-all-images needs to know/preserve record placement).
-  status: OPEN
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 799, role: completing}
 
 - id: i323
   title: Measure + assess sd_push network throughput on hardware (the ~10-13 KB/s question)
@@ -5505,6 +5507,14 @@
   title: Optimise the assembler emit hot path (T-state tuning) -- measure candidates by total T-states to assemble release.s
   description: |
     Lowest-priority future perf item (Pete 2026-07-01). After i24 lands option A (uniform per-byte LMPR-bracketed emit into a pool run), the emit hot path pays ~1/4 of its per-byte cost on the page-swap bracket and ~3/4 on register push/pop (ABI), zone/full checks, and OUT_PC/OUT_LEN bookkeeping. Candidates to evaluate: (a) a small staging buffer (8-128 bytes) in an always-paged region, flushed via ONE bracket + ldir per N bytes (amortises the page-swap); (b) restructure so the per-byte hot path is just store-to-buffer + pointer-bump, moving zone/page-run advance + OUT_LEN + the bracket into the per-flush path (potentially ~3x); (c) alternative-register / reduced-stack-op tuning of emit_byte. METHOD: measure EACH candidate by TOTAL T-states to assemble release.s (a representative full source); best T-states that STILL fits the memory budget wins. DO WHEN CODE IS FEATURE-COMPLETE (so the free-memory / staging-buffer budget is known). One-shot cost -> lowest priority.
+  status: OPEN
+  kind: leaf
+  owner: agent
+
+- id: i326
+  title: "Widen the record-list seam BD_LIST_SECTOR to 16-bit (records >8160 unreachable on >6.7GB cards)"
+  description: |
+    BD_LIST_SECTOR (bdos_seam.asm) is a 1-byte list-sector input, so every record-list consumer (find-free scan, claim, free/delete, list_records) reaches only list sectors 1..255 = records 1..8160; on cards over ~6.7GB the higher records are invisible to the whole SD toolkit. list_records clamps + refuses ('E') past the limit (i322 review finding, PR 799) and its launcher warns -- honest but partial. Widen the seam input to 16-bit (bd_list_read_hw already builds a 32-bit LBA) and lift the clamps. Low urgency: the current card decodes to 4809 records.
   status: OPEN
   kind: leaf
   owner: agent

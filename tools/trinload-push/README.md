@@ -136,6 +136,31 @@ clear + neighbour-safety are **emulation-verified only**
 **separate, Pete-gated hardware shot** (CLAUDE.md §5; i295 family). The launcher frees
 whatever in-range record you name — make sure it is one you own / may reuse.
 
+## `list-records.py` — print the SD record inventory via `list_records` (i322)
+
+The **read-only LIST** counterpart completing the store/boot/delete toolkit: it
+TrinLoad-pushes `build/list_records.bin` (page 1 / `&8000`), then queries the program's
+own framing on the same port — `'?'` returns the card's record count, `'L'+listSec`
+returns each raw 512-byte record-list sector, `'Q'` exits the program back to trinload.
+The launcher decodes the 16-byte name entries (free iff byte 0 masked `&7F` is zero;
+bit 7 = write-protect; names print with the B-DOS `AND 127` convention) and prints one
+line per used record plus a summary with the **first free record** — the number the next
+`sd-push.py` will claim. This is how an agent re-discovers what is on the card remotely,
+e.g. to keep re-writing an iterated image to the **same** record.
+
+```sh
+make netboot-list-records
+tools/trinload-push/list-records.py 192.168.2.75
+```
+
+Args: `<sam-ip> [--bin build/list_records.bin] [--page 1]`.
+
+**Data-safety**: `list_records` is structurally **read-only** — built without the
+list-write primitives (`NETBOOT_WANT_CLAIM` absent), it can only issue the CSD read and
+CMD17 list reads; `tools/netboot-oracle/z80/list_records_test.go` asserts the SD model
+sees **zero writes**. Emulation-verified only; the real-Trinity run is a separate shot
+(CLAUDE.md §5).
+
 TrinLoad must already be running on the SAM (it listens on `0xEDB0`). The full
 hardware procedure lives in
 [`docs/notes/netboot-trinity-testing.md`](../../docs/notes/netboot-trinity-testing.md).
