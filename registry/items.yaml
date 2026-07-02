@@ -5639,6 +5639,16 @@
   title: "sd-push.py finalize is single-shot: a lost 'D'/'E' UDP reply misreports a completed push as failure"
   description: |
     Observed on the i319a-b2 boot-leg shot (2026-07-02): all 1600 sectors streamed (109.6s), sd_push finalized SAM-side (record 145 claimed + named 'netboot_serve_re', trinload back at the port), but the single 'F' send with one 2s wait missed the lost UDP reply -> the launcher printed 'ERROR: no finalize reply' and exited 1 for a push that SUCCEEDED. FIX in sd-push.py finalize(): retry 'F' a few times (safe both ways: if the first 'F' was lost sd_push is still serving and finalizes on the retry; if only the reply was lost sd_push has RET'd and trinload ignores 'F'); on continued silence, probe '?' -- a bare-'!' (trinload) response implies sd_push exited post-finalize, so report 'finalize reply lost; verify via list-records' (distinct exit code) instead of a hard ERROR.
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 809, role: completing}
+
+- id: i336
+  title: "deploy-guard: quoted commit-message text can false-positive as a pusher execution"
+  description: |
+    Observed 2026-07-02 (i335 session): a 'g commit -m' whose multi-line message contained a wrapped line beginning with a pusher filename (test_trinpush dot py) was DENIED as 'a pusher script executed directly' -- the guard's statement splitter breaks on newlines inside the quoted -m string, so message text parses as statements. Violates the guard's own contract ('a command that merely MENTIONS a pusher path -- a heredoc writing a retro -- is NOT a deploy'). FIX in tools/deploy-guard/pre-deploy-check.sh: make statement splitting quote-aware (shlex the whole command before splitting on newlines, or strip quoted string contents before the split), and add a regression test in pre_deploy_check_test.py with a commit command whose -m body starts a line with a pusher filename. Workaround meanwhile: reword the message.
   status: OPEN
   kind: leaf
   owner: agent

@@ -12,11 +12,26 @@ drift or an offset slip is caught.
 Run via `make netboot-trinpush-test` (builds netboot_serve_boot.bin first) or
 `python3 -m unittest` from this directory.
 """
+import importlib.util
 import os
+import socket
 import struct
+import threading
 import unittest
 
 import trinpush as tp
+
+
+def _load_sd_push():
+    """Import sd-push.py (dashed filename) as a module."""
+    path = os.path.join(os.path.dirname(__file__), "sd-push.py")
+    spec = importlib.util.spec_from_file_location("sd_push_launcher", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+sd_push = _load_sd_push()
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 SERVE_BIN = os.path.join(REPO, "build", "netboot_serve_boot.bin")
@@ -44,6 +59,92 @@ class TestDiscoveryIdentity(unittest.TestCase):
             refusal = tp.stage1_refusal(reply)
             self.assertIsNotNone(refusal, f"{reply!r} must be refused")
             self.assertIn(who, refusal)
+
+
+class TestFinalizeRetry(unittest.TestCase):
+    """i335: a lost finalize reply must not misreport a completed push.
+
+    finalize() runs against a loopback UDP responder scripted per test; the
+    launcher socket uses a short timeout so the retry paths run fast."""
+
+    def setUp(self):
+        self.responder = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.responder.bind(("127.0.0.1", 0))
+        self.responder.settimeout(2.0)
+        self.port = self.responder.getsockname()[1]
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.sock.settimeout(0.2)
+        # finalize() sends to (dst, PORT); aim the module's PORT at the responder.
+        self._orig_port = sd_push.PORT
+        sd_push.PORT = self.port
+
+    def tearDown(self):
+        sd_push.PORT = self._orig_port
+        self.sock.close()
+        self.responder.close()
+
+    def _respond(self, script):
+        """Answer datagrams per `script`: each entry is a bytes reply or None
+        (receive but stay silent). Runs in a thread; returns it for join()."""
+        def run():
+            for reply in script:
+                data, addr = self.responder.recvfrom(16)
+                if reply is not None:
+                    self.responder.sendto(reply, addr)
+        t = threading.Thread(target=run)
+        t.start()
+        return t
+
+    def test_first_reply(self):
+        t = self._respond([b"D\x91\x00"])
+        status, record = sd_push.finalize(self.sock, "127.0.0.1")
+        t.join()
+        self.assertEqual((status, record), (b"D", 145))
+
+    def test_lost_f_retried(self):
+        # First 'F' swallowed, second answered — the retry must land it.
+        t = self._respond([None, b"D\x05\x00"])
+        status, record = sd_push.finalize(self.sock, "127.0.0.1")
+        t.join()
+        self.assertEqual((status, record), (b"D", 5))
+
+    def test_stale_ack_skipped(self):
+        # A stale block ack ('.') arrives before the real reply: must be
+        # consumed and skipped, not returned as the finalize status.
+        def run():
+            data, addr = self.responder.recvfrom(16)
+            self.responder.sendto(b".", addr)
+            self.responder.sendto(b"E\x07\x00", addr)
+        t = threading.Thread(target=run)
+        t.start()
+        status, record = sd_push.finalize(self.sock, "127.0.0.1")
+        t.join()
+        self.assertEqual((status, record), (b"E", 7))
+
+    def test_all_lost(self):
+        t = self._respond([None, None, None])
+        status, record = sd_push.finalize(self.sock, "127.0.0.1", attempts=3)
+        t.join()
+        self.assertEqual((status, record), (None, None))
+
+
+class TestLostReplyVerdict(unittest.TestCase):
+    """i335: the post-finalize '?' probe decides verify-vs-failure."""
+
+    def test_trinload_back_means_verify(self):
+        code, message = sd_push.lost_reply_verdict(b"!")
+        self.assertEqual(code, 3)
+        self.assertIn("list-records", message)
+
+    def test_sd_push_still_serving_is_failure(self):
+        code, message = sd_push.lost_reply_verdict(b"!SP")
+        self.assertEqual(code, 1)
+        self.assertIn("sd_push", message)
+
+    def test_silence_is_failure(self):
+        code, message = sd_push.lost_reply_verdict(None)
+        self.assertEqual(code, 1)
+        self.assertIn("wedged", message)
 
 
 class TestParseStrategy(unittest.TestCase):
