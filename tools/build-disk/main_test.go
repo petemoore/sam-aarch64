@@ -219,7 +219,7 @@ func TestBuildServeDiskOverlayMatchesTrinload(t *testing.T) {
 		cfg := &netbootConfig{name: "cfg", addr: configAddr, data: serveConfigBlock(strat, rec), strategy: c.spec}
 
 		out := filepath.Join(dir, "serve-"+c.spec+".mgt")
-		if err := buildNetbootDisk(testDosPath(t), DefaultDosName, DefaultDosLoad, binPath, "serve", out, cfg); err != nil {
+		if err := buildNetbootDisk(testDosPath(t), DefaultDosName, DefaultDosLoad, binPath, "serve", out, cfg, false); err != nil {
 			t.Fatalf("buildNetbootDisk(%s): %v", c.spec, err)
 		}
 
@@ -258,7 +258,7 @@ func TestBuildServeDiskNoConfig(t *testing.T) {
 	dir := t.TempDir()
 	binPath, _, _, _ := fakeServe(t, dir, 0x200)
 	out := filepath.Join(dir, "serve.mgt")
-	if err := buildNetbootDisk(testDosPath(t), DefaultDosName, DefaultDosLoad, binPath, "serve", out, nil); err != nil {
+	if err := buildNetbootDisk(testDosPath(t), DefaultDosName, DefaultDosLoad, binPath, "serve", out, nil, false); err != nil {
 		t.Fatalf("buildNetbootDisk: %v", err)
 	}
 	di, err := samfile.Load(out)
@@ -282,13 +282,82 @@ func TestBuildServeDiskMagicGuard(t *testing.T) {
 
 	// Point one byte too low — lands on a non-magic byte.
 	cfg := &netbootConfig{name: "cfg", addr: configAddr - 1, data: serveConfigBlock(ServeStratHighest, 0), strategy: "highest"}
-	if err := buildNetbootDisk(testDosPath(t), DefaultDosName, DefaultDosLoad, binPath, "serve", out, cfg); err == nil {
+	if err := buildNetbootDisk(testDosPath(t), DefaultDosName, DefaultDosLoad, binPath, "serve", out, cfg, false); err == nil {
 		t.Error("expected the magic guard to reject a config addr off the SERVE_CONFIG block")
 	}
 
 	// Point past the end of the binary — out-of-range guard.
 	cfg2 := &netbootConfig{name: "cfg", addr: LoadAddress + 0x200, data: serveConfigBlock(ServeStratHighest, 0), strategy: "highest"}
-	if err := buildNetbootDisk(testDosPath(t), DefaultDosName, DefaultDosLoad, binPath, "serve", out, cfg2); err == nil {
+	if err := buildNetbootDisk(testDosPath(t), DefaultDosName, DefaultDosLoad, binPath, "serve", out, cfg2, false); err == nil {
 		t.Error("expected the range guard to reject a config addr past the serve code")
+	}
+}
+
+// TestBuildServeRecordVesselCodeAuto (i332): the record vessel ships the serve
+// binary as ONE auto-executing CODE file — exec = load in the dir entry, the
+// config baked into the file bytes (identical to the trinload host-patched
+// image), and no BASIC auto / cfg overlay files. Uses a >16K binary so the
+// multi-page encoding (Pages + LengthMod16K) is exercised.
+func TestBuildServeRecordVesselCodeAuto(t *testing.T) {
+	dir := t.TempDir()
+	const bigLen = 0x4729 // >16K, the netboot_serve_boot.bin size class
+	binPath, _, configAddr, bin := fakeServe(t, dir, bigLen)
+	off := configAddr - LoadAddress
+
+	strat, rec, err := parseServeStrategy("explicit:42")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := &netbootConfig{name: "cfg", addr: configAddr, data: serveConfigBlock(strat, rec), strategy: "explicit:42"}
+
+	out := filepath.Join(dir, "serve-record.mgt")
+	if err := buildNetbootDisk(testDosPath(t), DefaultDosName, DefaultDosLoad, binPath, "AUTOserve", out, cfg, true); err != nil {
+		t.Fatalf("buildNetbootDisk(codeAuto): %v", err)
+	}
+
+	di, err := samfile.Load(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// No BASIC auto and no cfg overlay ride the record vessel.
+	if _, err := di.File("auto"); err == nil {
+		t.Error("record vessel should not ship a BASIC auto file")
+	}
+	if _, err := di.File("cfg"); err == nil {
+		t.Error("record vessel should not ship a cfg overlay file (config is baked)")
+	}
+
+	f, err := di.File("AUTOserve")
+	if err != nil {
+		t.Fatalf("File(AUTOserve): %v", err)
+	}
+	if want := trinpushPatch(bin, off, strat, rec); !bytes.Equal(f.Body, want) {
+		t.Errorf("baked body != trinload-patched image (config at +%#x: got % X want % X)",
+			off, f.Body[off:off+4], want[off:off+4])
+	}
+
+	// Dir entry: load &8000, auto-exec &8000, multi-page length encoding.
+	var fe *samfile.FileEntry
+	for _, e := range di.DiskJournal() {
+		if e.Name.String() == "AUTOserve" {
+			fe = e
+			break
+		}
+	}
+	if fe == nil {
+		t.Fatal("AUTOserve missing from the directory")
+	}
+	if got := fe.StartAddress(); got != LoadAddress {
+		t.Errorf("StartAddress = &%04X, want &%04X", got, LoadAddress)
+	}
+	if fe.ExecutionAddressDiv16K == 0xFF {
+		t.Fatal("ExecutionAddressDiv16K = &FF — auto-exec is not armed")
+	}
+	if got := fe.ExecutionAddress(); got != LoadAddress {
+		t.Errorf("ExecutionAddress = &%04X, want &%04X", got, LoadAddress)
+	}
+	if got := fe.Length(); got != uint32(bigLen) {
+		t.Errorf("Length = %d, want %d", got, bigLen)
 	}
 }

@@ -829,6 +829,21 @@ netboot-serve-disk: $(BUILD)/netboot_serve_boot.bin $(BUILD)/netboot_serve_boot.
 	    -netboot-config-map $(BUILD)/netboot_serve_boot.map -netboot-strategy $(NETBOOT_STRATEGY) \
 	    $(BUILD)/netboot_serve.mgt
 
+# netboot-serve-record (i332) — the boot_record-bootable RECORD vessel: the same
+# serve binary as ONE auto-executing CODE file (exec = load &8000) with the
+# strategy config baked into its bytes. B-DOS's record boot (ALHK) runs the AUTO*
+# CODE file directly and never fires a BASIC-auto RUN leg, so the BASIC-auto
+# netboot_serve.mgt above stays the FLOPPY vessel and this is the shape to
+# `tftp put … trinity-sam-disks/…` / sd-push onto the card and boot-record.py.
+# Emulation gate: netboot-oracle TestBootRecordServeRecordVessel boots this exact
+# artifact from the pushed context on the captured B-DOS 1.5t.
+.PHONY: netboot-serve-record
+netboot-serve-record: $(BUILD)/netboot_serve_boot.bin $(BUILD)/netboot_serve_boot.map $(BUILD)/build-disk
+	$(BUILD)/build-disk -netboot $(BUILD)/netboot_serve_boot.bin -netboot-name AUTOserve \
+	    -netboot-code-auto \
+	    -netboot-config-map $(BUILD)/netboot_serve_boot.map -netboot-strategy $(NETBOOT_STRATEGY) \
+	    $(BUILD)/netboot_serve_record.mgt
+
 # netboot-serve-trinload (i121d) — the pushable serve block, ALSO the i194 "disk-record
 # push" deployable. Unlike the dumper (which has no boot build), the serve program's
 # BOOT binary is already org &8000 with entry &8000 (`jp serve_main`) and self-

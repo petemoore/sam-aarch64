@@ -246,6 +246,21 @@ a different strategy via `make netboot-serve-disk NETBOOT_STRATEGY=lowest` (or
 `NETBOOT_STRATEGY=explicit:N`). The strategy governs which **free** Trinity record a
 `tftp put` writes to — a named record is never overwritten (write-to-free-only, q30).
 
+**Record vessel (i332):** the BASIC-auto disk above is the **floppy** vessel only —
+stored as a Trinity record it does NOT boot (B-DOS's record boot runs the AUTO\*
+file directly and never fires a BASIC RUN leg; the result is a silent livelock).
+To store a **boot_record-bootable** serve record, build the CODE-auto shape:
+
+```sh
+make netboot-serve-record        # NETBOOT_STRATEGY=… works here too
+# -> build/netboot_serve_record.mgt   (one auto-exec CODE file, config baked in)
+```
+
+then `tftp put build/netboot_serve_record.mgt trinity-sam-disks/<name>.mgt` (or
+sd-push) and boot it with `tools/trinload-push/boot-record.py`. The emulation gate
+for this exact artifact is `TestBootRecordServeRecordVessel`
+(tools/netboot-oracle/z80).
+
 **Run it:**
 
 1. Boot `build/netboot_serve.mgt` on the SAM + Trinity. As with the smoke test, a

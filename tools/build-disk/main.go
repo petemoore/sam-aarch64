@@ -269,6 +269,7 @@ func main() {
 	netbootConfigMap := flag.String("netboot-config-map", "", "i121i: pyz80 mapfile of the -netboot serve binary; when set, ships a SERVE_CONFIG CODE file the AUTO BASIC overlays at the SERVE_CONFIG address (config-aware .mgt serve vessel)")
 	netbootStrategy := flag.String("netboot-strategy", "highest", "i121i: WRQ record placement baked into the disk config file: highest | lowest | explicit:N (requires -netboot-config-map)")
 	netbootConfigName := flag.String("netboot-config-name", "cfg", "i121i: directory-entry name for the SERVE_CONFIG CODE file (the AUTO BASIC LOADs this name)")
+	netbootCodeAuto := flag.Bool("netboot-code-auto", false, "i332: compose the -netboot binary as ONE auto-executing CODE file (exec = load address) instead of the AUTO BASIC + CODE pair, baking any -netboot-config-map config into the file bytes; the record vessel B-DOS boot_record can boot (its ALHK runs the AUTO* CODE file directly — the BASIC-auto run leg never fires on that path). -netboot-name must start with \"AUTO\"")
 	variant := flag.String("variant", "none", "i207: assembler-disk boot-payload completeness guard — 'test' or 'prod' require every payload the boot loader HLOADs to be present (a missing one silently HANGS SimCoupé); 'none' (default) skips the check (minimal boot-test disks)")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr,
@@ -315,7 +316,10 @@ func main() {
 				strategy: *netbootStrategy,
 			}
 		}
-		if err := buildNetbootDisk(*dosPath, *dosName, uint32(*dosLoad), *netbootPath, *netbootName, args[0], cfg); err != nil {
+		if *netbootCodeAuto && !strings.HasPrefix(*netbootName, "AUTO") {
+			log.Fatalf("-netboot-code-auto: -netboot-name %q must start with \"AUTO\" (B-DOS ALHK selects the record's AUTO* file)", *netbootName)
+		}
+		if err := buildNetbootDisk(*dosPath, *dosName, uint32(*dosLoad), *netbootPath, *netbootName, args[0], cfg, *netbootCodeAuto); err != nil {
 			log.Fatal(err)
 		}
 		return
@@ -692,7 +696,12 @@ type netbootConfig struct {
 	strategy string
 }
 
-func buildNetbootDisk(dosPath, dosName string, dosLoad uint32, codePath, codeName, outputPath string, cfg *netbootConfig) error {
+// codeAuto (i332) selects the record-vessel shape: the binary ships as ONE
+// auto-executing CODE file (exec = load) with any config baked into its bytes,
+// because B-DOS boot_record's ALHK path runs an AUTO* CODE file directly and
+// never fires a BASIC-auto's RUN leg. The BASIC-auto shape stays the floppy
+// ROM-BOOT vessel.
+func buildNetbootDisk(dosPath, dosName string, dosLoad uint32, codePath, codeName, outputPath string, cfg *netbootConfig, codeAuto bool) error {
 	dosBin, err := os.ReadFile(dosPath)
 	if err != nil {
 		return fmt.Errorf("read dos: %w", err)
@@ -737,6 +746,14 @@ func buildNetbootDisk(dosPath, dosName string, dosLoad uint32, codePath, codeNam
 		}
 	}
 
+	// Record vessel: the config cannot ride a separate overlay CODE file (no
+	// BASIC runs to LOAD it), so bake it into the binary's own bytes — the
+	// runtime image is identical to the overlay shape either way.
+	if codeAuto && cfg != nil {
+		codeBin = append([]byte(nil), codeBin...)
+		copy(codeBin[cfg.addr-LoadAddress:], cfg.data)
+	}
+
 	disk := samfile.NewDiskImage()
 
 	// Slot 0: the boot DOS (ROM BOOT reads T4S1 raw).
@@ -745,6 +762,28 @@ func buildNetbootDisk(dosPath, dosName string, dosLoad uint32, codePath, codeNam
 	}
 	if err := disk.SetStartAddressPageUnusedBits(dosName, 3); err != nil {
 		return fmt.Errorf("SetStartAddressPageUnusedBits(%s): %w", dosName, err)
+	}
+
+	// Record vessel (i332): one auto-executing CODE file; B-DOS ALHK selects
+	// it by its AUTO* name and the exec fields fire it after the load. The
+	// exec environment is the flat load window (HMPR = start page, ROM1 off),
+	// verified against the captured B-DOS 1.5t in the netboot-oracle rig.
+	if codeAuto {
+		if err := disk.AddCodeFile(codeName, codeBin, LoadAddress, LoadAddress); err != nil {
+			return fmt.Errorf("AddCodeFile(%s): %w", codeName, err)
+		}
+		if err := disk.Save(outputPath); err != nil {
+			return fmt.Errorf("save %s: %w", outputPath, err)
+		}
+		fmt.Printf("%-12s%d bytes  T4S1-T5S10\n", dosName+":", len(dosBin))
+		if cfg != nil {
+			fmt.Printf("%-12s%d bytes  auto-exec &%04X  (config baked @ &%04X, strategy=%s)\n",
+				codeName+":", len(codeBin), LoadAddress, cfg.addr, cfg.strategy)
+		} else {
+			fmt.Printf("%-12s%d bytes  auto-exec &%04X\n", codeName+":", len(codeBin), LoadAddress)
+		}
+		fmt.Printf("Built %s (boot_record-bootable CODE-auto record vessel)\n", outputPath)
+		return nil
 	}
 
 	// Slot 1: AUTO BASIC — CLEAR &7FFF : LOAD "<name>" CODE 32768 [: LOAD
