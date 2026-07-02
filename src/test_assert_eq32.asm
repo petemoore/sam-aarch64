@@ -1,5 +1,6 @@
 ; test_assert_eq32.asm — the shared inline-literal assertion helper for
-; the boot-time self-test suites.  BUILD_TESTS only.
+; the boot-time self-test suites.  Included in both self-test variants
+; (BUILD_TESTS and BUILD_TESTS_ENCODE); absent from production.
 ;
 ; Extracted from test_slots.asm in the M6 budget-relief PR (2026-05-29)
 ; so that test_slots.asm could be relocated off-axis (page 12) while this
@@ -19,7 +20,7 @@
 ; off-axis page) is read correctly.  See test_offaxis_cluster.asm and
 ; test_mem_offaxis.asm:36-43 for the full caveat.
 ;
-; Included from src/assembler.asm's BUILD_TESTS include block, BEFORE
+; Included from src/assembler.asm's self-test include block, BEFORE
 ; the suites that reference it (so the symbol exists for inline callers
 ; and is exported into assembler.sym for the off-axis builds).
 

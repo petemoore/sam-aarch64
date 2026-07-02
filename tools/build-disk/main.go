@@ -240,10 +240,13 @@ func serveConfigAddr(mapText string) (uint32, error) {
 //
 //   - prod boot HLOADs sysreg-data (sd13), disasm (d15), zx0 (zx013).
 //   - test boot (BUILD_TESTS) HLOADs those plus the off-axis self-test payloads
-//     test-mem, paged-call (p14), cluster, enc-fix.
+//     test-mem, paged-call (p14), cluster.
+//   - enc-tests boot (BUILD_TESTS_ENCODE, i234) HLOADs the prod set plus the
+//     page-11 encode_inst fixture payload enc-fix.
 var variantRequiredFlags = map[string][]string{
-	"prod": {"-sysreg-data", "-disasm", "-zx0"},
-	"test": {"-sysreg-data", "-disasm", "-zx0", "-test-mem", "-paged-call", "-cluster", "-enc-fix"},
+	"prod":      {"-sysreg-data", "-disasm", "-zx0"},
+	"test":      {"-sysreg-data", "-disasm", "-zx0", "-test-mem", "-paged-call", "-cluster"},
+	"enc-tests": {"-sysreg-data", "-disasm", "-zx0", "-enc-fix"},
 }
 
 // checkVariantPayloads enforces the i207 boot-payload completeness guard. paths
@@ -256,7 +259,7 @@ func checkVariantPayloads(variant string, paths map[string]string) error {
 	}
 	required, ok := variantRequiredFlags[variant]
 	if !ok {
-		return fmt.Errorf("unknown -variant %q (want test | prod | none)", variant)
+		return fmt.Errorf("unknown -variant %q (want test | prod | enc-tests | none)", variant)
 	}
 	var missing []string
 	for _, flag := range required {
@@ -282,7 +285,7 @@ func main() {
 	testMemPath := flag.String("test-mem", "", "path to off-axis test_mem.bin (BUILD_TESTS only; plan-PR 3)")
 	pagedCallPath := flag.String("paged-call", "", "path to the paged_call self-test page-14 payload (BUILD_TESTS only; plan-PR 1)")
 	clusterPath := flag.String("cluster", "", "path to the off-axis page-12 M5+misc encoder self-test cluster (build/test_cluster.bin; BUILD_TESTS only; M6 budget-relief)")
-	encFixPath := flag.String("enc-fix", "", "path to the off-axis page-11 encode_inst fixture data payload (build/enc_fix_payload.bin; BUILD_TESTS only; i69)")
+	encFixPath := flag.String("enc-fix", "", "path to the off-axis page-11 encode_inst fixture data payload (build/enc_fix_payload.bin; BUILD_TESTS_ENCODE / enc-tests variant only; i69/i234)")
 	sysregDataPath := flag.String("sysreg-data", "", "path to the page-13 sysreg lookup data (build/sysreg_data.bin; PRODUCTION + test; PR-2)")
 	disasmPath := flag.String("disasm", "", "path to the page-15 disassembler binary (build/disasm.bin; PRODUCTION + test; strand-B PR-3)")
 	zx0Path := flag.String("zx0", "", "path to the page-13 zx0 compressor+decoder payload (build/zx0.bin; PRODUCTION + test; i68)")
@@ -294,7 +297,7 @@ func main() {
 	netbootCodeAuto := flag.Bool("netboot-code-auto", false, "i332: compose the -netboot binary as ONE auto-executing CODE file (exec = load address) instead of the AUTO BASIC + CODE pair, baking any -netboot-config-map config into the file bytes; the record vessel B-DOS boot_record can boot (its ALHK runs the AUTO* CODE file directly — the BASIC-auto run leg never fires on that path). -netboot-name must start with \"AUTO\"")
 	var netbootExtras extraFileFlags
 	flag.Var(&netbootExtras, "netboot-extra", "i95b-b1: name=path of an extra CODE data file shipped in the -netboot disk's directory (repeatable). The netboot server's boot-time store walk indexes these and serves them by name over TFTP; a name over the 10-char B-DOS directory field is stored under a mangled store name and mapped back via the NBMANIFEST file (i346)")
-	variant := flag.String("variant", "none", "i207: assembler-disk boot-payload completeness guard — 'test' or 'prod' require every payload the boot loader HLOADs to be present (a missing one silently HANGS SimCoupé); 'none' (default) skips the check (minimal boot-test disks)")
+	variant := flag.String("variant", "none", "i207: assembler-disk boot-payload completeness guard — 'test', 'prod' or 'enc-tests' require every payload that variant's boot loader HLOADs to be present (a missing one silently HANGS SimCoupé); 'none' (default) skips the check (minimal boot-test disks)")
 	codeAuto := flag.Bool("code-auto", false, "i319b-b1: compose the assembler as ONE auto-executing CODE file 'AUTOasm' (exec = load &8000) instead of the AUTO BASIC + 'assembler' pair, keeping every HLOADed sibling file on the disk — the boot_record-bootable RECORD vessel for the assembler disk (B-DOS ALHK runs the record's AUTO* file directly; a BASIC-auto record never boots, i332). The BASIC-auto shape stays the floppy vessel")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr,
@@ -545,8 +548,9 @@ func main() {
 	// ENC_FIX_TABLE_RAM (&E100) via LDIR.  Holds enc_fix_table rows +
 	// operand streams (~528 B), assembled from src/test_encode_inst_payload.asm
 	// with org &E100 so row fixture ptrs are section-D absolute addresses.
-	// BUILD_TESTS variant only (i69 lever 3).  Recorded load address
-	// is documentary (the trampoline supplies HL = &8000 and target page = 11).
+	// BUILD_TESTS_ENCODE (enc-tests) variant only (i69 lever 3 / i234).
+	// Recorded load address is documentary (the trampoline supplies
+	// HL = &8000 and target page = 11).
 	if *encFixPath != "" {
 		encFixData, err := os.ReadFile(*encFixPath)
 		if err != nil {

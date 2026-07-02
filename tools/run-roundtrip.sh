@@ -111,27 +111,37 @@ echo "--- sam-aarch64 (assemble + emit compact .tbn) ---"
 #   - the paged_call self-test page-14 payload.
 # The disasm + zx0 self-tests run at boot only under BUILD_TESTS (the
 # test assembler), so the test disk ships disasm-test.bin + zx0-test.bin
-# and prod disks ship the stripped disasm.bin + zx0.bin.
+# and prod disks ship the stripped disasm.bin + zx0.bin.  The enc-tests
+# variant (BUILD_TESTS_ENCODE, i234) deposits the page-11 enc_fix
+# fixture payload on top of the prod set.
 echo "--- build-disk ---"
 test_variant_flags=()
 disasm_bin="$ROOT/build/disasm.bin"
 zx0_bin="$ROOT/build/zx0.bin"
 # i207: pass -variant so build-disk refuses to build a disk missing any payload
 # the boot loader HLOADs (a missing one silently HANGS SimCoupé — the i69 bug,
-# where this script once omitted -enc-fix). prod by default; test below.
+# where this script once omitted -enc-fix). prod by default; the self-test
+# variants below.
 disk_variant="prod"
 if [ "$ASSEMBLER_BIN" = "$ROOT/build/assembler.bin" ]; then
     disk_variant="test"
     # Test variant — needs the off-axis payloads + the self-test disasm + zx0.
-    # The enc-fix payload (page 11, i69) carries the encode_inst self-test
-    # fixtures off-axis; without it on the disk the boot self-test hangs.
-    make -s test-mem-offaxis paged-call-payload cluster-offaxis enc-fix-payload disasm-test-payload zx0-test-payload
+    make -s test-mem-offaxis paged-call-payload cluster-offaxis disasm-test-payload zx0-test-payload
     disasm_bin="$ROOT/build/disasm-test.bin"
     zx0_bin="$ROOT/build/zx0-test.bin"
     test_variant_flags=(
         -test-mem "$ROOT/build/test_mem.bin"
         -paged-call "$ROOT/build/paged_call_test_payload.bin"
         -cluster "$ROOT/build/test_cluster.bin"
+    )
+elif [ "$ASSEMBLER_BIN" = "$ROOT/build/assembler-enc-tests.bin" ]; then
+    # Encode self-test variant (i234) — needs the page-11 enc_fix fixture
+    # payload (without it on the disk the encode boot self-test hangs);
+    # disasm/zx0 stay the prod binaries (no disasm/zx0 self-test runs in
+    # this variant).
+    disk_variant="enc-tests"
+    make -s enc-fix-payload
+    test_variant_flags=(
         -enc-fix "$ROOT/build/enc_fix_payload.bin"
     )
 fi

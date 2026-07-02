@@ -51,8 +51,8 @@ func TestCheckVariantPayloads(t *testing.T) {
 	if err := checkVariantPayloads("bogus", full); err == nil {
 		t.Error("unknown variant should error")
 	}
-	// prod/test with the full set: pass.
-	for _, v := range []string{"prod", "test"} {
+	// prod/test/enc-tests with the full set: pass.
+	for _, v := range []string{"prod", "test", "enc-tests"} {
 		if err := checkVariantPayloads(v, full); err != nil {
 			t.Errorf("%s with full payloads should pass, got %v", v, err)
 		}
@@ -64,21 +64,46 @@ func TestCheckVariantPayloads(t *testing.T) {
 	} else if !strings.Contains(err.Error(), "-disasm") {
 		t.Errorf("error should name the missing -disasm flag, got %v", err)
 	}
-	// test missing -enc-fix (the actual i69 omission): error.
+	// enc-tests missing -enc-fix (the i69 omission class, now on the
+	// variant whose boot actually HLOADs it — i234): error.
 	noEncFix := map[string]string{
 		"-sysreg-data": "sd13.bin", "-disasm": "d15.bin", "-zx0": "zx0.bin",
-		"-test-mem": "tm.bin", "-paged-call": "p14.bin", "-cluster": "cl.bin",
 	}
-	if err := checkVariantPayloads("test", noEncFix); err == nil {
-		t.Error("test missing -enc-fix should error (the i69 omission)")
+	if err := checkVariantPayloads("enc-tests", noEncFix); err == nil {
+		t.Error("enc-tests missing -enc-fix should error (the i69 omission class)")
 	} else if !strings.Contains(err.Error(), "-enc-fix") {
 		t.Errorf("error should name the missing -enc-fix flag, got %v", err)
 	}
-	// prod does NOT require the test-only payloads.
+	// test missing -cluster: error (the off-axis suite set).
+	noCluster := map[string]string{
+		"-sysreg-data": "sd13.bin", "-disasm": "d15.bin", "-zx0": "zx0.bin",
+		"-test-mem": "tm.bin", "-paged-call": "p14.bin",
+	}
+	if err := checkVariantPayloads("test", noCluster); err == nil {
+		t.Error("test missing -cluster should error")
+	} else if !strings.Contains(err.Error(), "-cluster") {
+		t.Errorf("error should name the missing -cluster flag, got %v", err)
+	}
+	// prod does NOT require the self-test-only payloads.
 	if err := checkVariantPayloads("prod", map[string]string{
 		"-sysreg-data": "sd13.bin", "-disasm": "d15.bin", "-zx0": "zx0.bin",
 	}); err != nil {
 		t.Errorf("prod should not require test-only payloads, got %v", err)
+	}
+	// test does NOT require -enc-fix (its boot no longer HLOADs enc_fix;
+	// the encode family rides the enc-tests variant — i234). enc-tests
+	// does NOT require the off-axis test payloads.
+	if err := checkVariantPayloads("test", map[string]string{
+		"-sysreg-data": "sd13.bin", "-disasm": "d15.bin", "-zx0": "zx0.bin",
+		"-test-mem": "tm.bin", "-paged-call": "p14.bin", "-cluster": "cl.bin",
+	}); err != nil {
+		t.Errorf("test should not require -enc-fix, got %v", err)
+	}
+	if err := checkVariantPayloads("enc-tests", map[string]string{
+		"-sysreg-data": "sd13.bin", "-disasm": "d15.bin", "-zx0": "zx0.bin",
+		"-enc-fix": "ef.bin",
+	}); err != nil {
+		t.Errorf("enc-tests should not require the off-axis test payloads, got %v", err)
 	}
 }
 

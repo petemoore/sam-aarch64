@@ -112,12 +112,13 @@ encode_cond:
 ; Error:  value >= 1<<16 -> jp fail (via check_expr_hi48_zero).
 ; Clobbers: A, BC, DE, HL.
 ;
-; Gated BUILD_TESTS: the only caller, enc_do_imm16 (insn_encode.asm), is
-; itself BUILD_TESTS-only (encode_inst has no production caller yet — it is
-; wired in by a later compactor brick).  Gating keeps the unreferenced
-; routine out of the production binary, exactly as insn_encode.asm is.
+; Gated BUILD_TESTS_ENCODE: the only caller, enc_do_imm16
+; (insn_encode.asm), is itself BUILD_TESTS_ENCODE-only (encode_inst has
+; no production caller yet — it is wired in by a later compactor brick).
+; Gating keeps the unreferenced routine out of the other variants,
+; exactly as insn_encode.asm is.
 ; -----------------------------------------------------------------------
-if defined(BUILD_TESTS)
+if defined(BUILD_TESTS_ENCODE)
 encode_imm16:
                 call    check_expr_hi48_zero        ; bytes 2..7 must be 0
                 ld      a, (expr_result + 0)

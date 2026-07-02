@@ -231,10 +231,14 @@ OPMEM_OFF:      equ     &D100          ; 8 bytes — OpMem offset (s64 LE)
                 ; path: production pre-folds every instruction in the v2 overlay
                 ; (insn_run.asm) and reaches sysregs via sysreg_data.asm, so the
                 ; only callers left are the boot self-tests (test_ror_imm.asm,
-                ; test_sysname.asm). Include them under BUILD_TESTS only — they
-                ; cost production nothing (i73-L9 / q20).
+                ; test_sysname.asm) and encode_inst (insn_encode.asm's
+                ; enc_sysname reuses the sysname.asm encoders). Include them
+                ; only in the variants that carry those callers — they cost
+                ; production nothing (i73-L9 / q20).
                 if defined(BUILD_TESTS)
                 include "intercepts.asm"
+                endif
+                if defined(BUILD_TESTS) | defined(BUILD_TESTS_ENCODE)
                 include "sysname.asm"
                 endif
                 include "reader.asm"
@@ -331,10 +335,12 @@ endif
 ; existing diagnosed FAIL instead of a silent no-op / default halt.  &5BC0
 ; is in section B (the SAMDOS sysvar page, mapped at boot by BASIC's CALL
 ; 32768), so this write lands before any enctab_map_in swaps a section.
-; PRODUCTION only: the handler is a runtime error-diagnosis feature for the
-; shipped assembler (assembler-prod.bin); the BUILD_TESTS self-test variant
-; serves a complete disk and never triggers a file-I/O error, so it does not
-; need it — and it sits at the &C000 budget cliff with no room to spare.
+; Gated out of BUILD_TESTS only: the handler is a runtime error-diagnosis
+; feature for the shipped assembler (assembler-prod.bin); the BUILD_TESTS
+; self-test variant serves a complete disk and never triggers a file-I/O
+; error, so it does not need it — and it sits at the &C000 budget cliff
+; with no room to spare.  The enc-tests variant (BUILD_TESTS_ENCODE) has
+; ample headroom and carries the handler like prod.
                 if defined(BUILD_TESTS)==0
                 ; Copy the handler body into section B (LMPR-stable, so it
                 ; stays mapped under any HMPR — see DOSER_HANDLER_DST in
@@ -387,16 +393,23 @@ if defined(BUILD_TESTS)
 ; is free at boot-self-test time (IN doesn't occupy pages 7..12 until
 ; main_assemble).  M6 budget-relief PR (2026-05-29).
                 call    load_offaxis_cluster
+endif
 
-; -- BUILD_TESTS only: HLOAD the encode_inst fixture data payload into
-; physical page 11 (i69 lever 3).  Loaded here alongside the other
+; -- BUILD_TESTS_ENCODE only: HLOAD the encode_inst fixture data payload
+; into physical page 11 (i69 lever 3).  Loaded here alongside the other
 ; off-axis payloads so all HLOADs complete before the self-tests run.
 ; Page 11 is free at boot-self-test time (same reason as page 12 above).
 ; run_encode_inst_self_tests bulk-copies from page 11 into section-D RAM
 ; at ENC_FIX_TABLE_RAM (&E100) via LDIR before enctab_map_in, banking
 ; ~528 B of section-C headroom.  See src/test_encode_inst_payload.asm.
+; The encode_inst family lives in its own boot variant
+; (assembler-enc-tests.bin, i234) so section-C test memory is
+; time-multiplexed across two boot runs.
+if defined(BUILD_TESTS_ENCODE)
                 call    load_enc_fix_payload
+endif
 
+if defined(BUILD_TESTS)
 ; -- BUILD_TESTS only: HLOAD the paged_call self-test payload into
 ; physical page 14, then run the self-test.  Must happen AFTER
 ; enctab_trampoline_setup (paged_call body needs installing in
@@ -576,12 +589,18 @@ if defined(BUILD_TESTS)
                 ; https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/2026-05-28-reader-paged-self-test-investigation.md
                 ; (PR-6 resolution section at the foot).
                 call    run_reader_paged_self_tests
+endif
 
 ; -- encode_inst self-test: the standalone instruction encoder (i199 /
 ; i48c-b8e brick 1).  Runs here (after load_enctab) because encode_inst
 ; reads the form table from ENCTAB; it opens its own enctab_map_in /
 ; form_lookup_init / enctab_map_out bracket internally.  Must precede
 ; main_assemble so any failure is reported before the assemble loop.
+; Lives in the second boot variant (BUILD_TESTS_ENCODE,
+; assembler-enc-tests.bin, i234): the encode family is ENCTAB-coupled
+; and must stay inline in section C, so it gets a boot run of its own
+; instead of sharing variant 1's section-C test budget.
+if defined(BUILD_TESTS_ENCODE)
                 call    run_encode_inst_self_tests
 endif
 
@@ -702,8 +721,9 @@ fail:           ld      a, 2
 ; dier's `OUT (250),A` LMPR restore (comet.asm:1361): re-map the assembler's
 ; code into section C before jumping to the section-C fail handler.  `and a`
 ; and the push/pop af bracket leave A = the error number for fail_with_tag.
-; PRODUCTION only (gated): keeps the BUILD_TESTS self-test variant, which
-; sits at the &C000 budget cliff, byte-for-byte unchanged.
+; Gated out of BUILD_TESTS only: keeps that self-test variant, which sits
+; at the &C000 budget cliff, byte-for-byte unchanged; prod and the
+; enc-tests variant (BUILD_TESTS_ENCODE) both carry it.
 ; -----------------------------------------------------------------------
                 if defined(BUILD_TESTS)==0
 doser_handler_body:
@@ -748,18 +768,22 @@ LAST_FAIL_PC:   defw    0
 
 
 ; -----------------------------------------------------------------------
-; Boot-time self-test includes (BUILD_TESTS only).
+; Boot-time self-test includes (the two self-test variants only —
+; BUILD_TESTS carries every suite except the encode_inst family, which
+; lives in the BUILD_TESTS_ENCODE variant, i234).
 ;
 ; Placed AFTER `start:` and `fail:`.  Post-budget-lever, the test code
 ; can legitimately spill into the full &8000-&AFFF code window
 ; (ENCTAB no longer occupies section C); the production binary's code
 ; budget is now 12 KB total instead of 8 KB.
 ; -----------------------------------------------------------------------
-if defined(BUILD_TESTS)
+if defined(BUILD_TESTS) | defined(BUILD_TESTS_ENCODE)
                 ; Shared inline-literal assertion helper, resident in the
-                ; main binary so both inline and off-axis suites resolve it
-                ; (the off-axis cluster + test_mem reach it via importfile).
+                ; main binary so inline, off-axis (cluster + test_mem via
+                ; importfile), and encode-variant suites all resolve it.
                 include "test_assert_eq32.asm"
+endif
+if defined(BUILD_TESTS)
                 ; test_symbols.asm and test_local_labels.asm live off-axis
                 ; in the page-12 cluster (test_offaxis_cluster.asm).
                 ; test_expr_eval, test_slots, test_pc_rel, test_directives,
@@ -788,12 +812,17 @@ if defined(BUILD_TESTS)
                 include "test_reader_paged.asm"
                 include "test_paged_call.asm"
                 include "test_sysreg_paged.asm"
+endif
+if defined(BUILD_TESTS_ENCODE)
                 ; encode_inst (the standalone instruction encoder) + its
                 ; self-test (i199 / i48c-b8e brick 1).  Guarded under
-                ; BUILD_TESTS for now: nothing in the production assemble
-                ; path calls encode_inst yet (Compact wires it in a later
-                ; b8e brick), so keeping it out of the production binary
-                ; preserves the &C000 code budget until it has a caller.
+                ; BUILD_TESTS_ENCODE — the second self-test boot variant
+                ; (i234): the ~2.7 KB encode family is ENCTAB-coupled and
+                ; inline-only, so it time-multiplexes section-C test memory
+                ; with variant 1's suites across two boot runs.  Nothing in
+                ; the production assemble path calls encode_inst yet
+                ; (Compact wires it in a later b8e brick), so it stays out
+                ; of the production binary too.
                 include "insn_encode.asm"
                 include "test_encode_inst.asm"
 endif

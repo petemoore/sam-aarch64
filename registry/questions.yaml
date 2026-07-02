@@ -50,3 +50,8 @@
   body: |
     FUTURE write-path design for the TFTP-backing-storage feature (serve-WRQ / SAM-as-backing-storage for Pi PXE) -- captured 2026-07-01, NOT to be redesigned now (Pete). Two related options for when the TFTP-upload feature is next worked: (a) CONVERGE the serve-WRQ record-write onto the PROVEN own-CMD24 engine (sd_push / bd_record_write_hw) instead of the current unproven B-DOS-HWSAD path -- unifies the write engine and makes the feature actually work on hardware; (b) RAW-SD-SPACE storage -- for large/spanning firmware files (bigger than an 800KB record), consider raw read/write into the card wasted space (~10GB) OUTSIDE the BDOS 800KB-record structure, bypassing the record + manifest-spanning complexity (q16/i99). Decide the direction before reworking the serve-WRQ write path (i93b/i182b) or the firmware-spanning items. The feature itself is WANTED (Pi PXE firmware serving); this is purely about the storage mechanism.
   owner: pete
+
+- id: q69
+  body: |
+    Branch-protection required-checks list has drifted from ci.yml: netboot-z80, registry-sync, and registry-tests run in CI but are NOT in the required list (found 2026-07-03 while adding the new enc-tests job, which IS now required alongside its core/paged siblings). CLAUDE.md documents the protection as requiring 'the CI status checks defined in ci.yml'. Deliberate (e.g. jobs considered advisory) or drift to fix? If drift: add the three to the required list.
+  owner: pete
