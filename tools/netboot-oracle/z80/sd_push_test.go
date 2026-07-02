@@ -107,7 +107,7 @@ func setupSDPushMain(t *testing.T, csd [16]byte) (*z80h.Machine, *z80h.ENC28J60,
 	mac := loadSDPush(t)
 	enc := z80h.NewENC28J60()
 	enc.ProgramTrinityNetwork(spSAMMac, spSAMIp) // so the EEPROM config read succeeds
-	sd := enc.AttachSD(csd)                       // real CMD9/CMD17/CMD24 against sdcard.go
+	sd := enc.AttachSD(csd)                      // real CMD9/CMD17/CMD24 against sdcard.go
 	mac.AttachIO(enc)
 	rec := mac.AttachPrintRecorder() // model RST &10 (screen status + stage markers)
 	mac.StubReturn(0x06B5)           // CLSLOWER — hardware-only screen clear (i319a)
@@ -269,6 +269,72 @@ func TestSDPushLogic(t *testing.T) {
 		if !strings.Contains(printed, want) {
 			t.Errorf("screen output missing %q; printed=%q", want, printed)
 		}
+	}
+}
+
+// TestSDPushBlockSizeEdges pins the i338 source-select edges around the
+// straight-from-packet write path: a full 512-byte block streams from the packet;
+// a SHORT final block stages through the zero-filled buffer (its tail must read
+// zero on the card); an OVERSIZED block (a protocol violation) is clamped to its
+// first 512 bytes — the old copy would have LDIR'd past BD_WRITE_BUF's end.
+func TestSDPushBlockSizeEdges(t *testing.T) {
+	mac, enc, sd, _ := setupSDPushMain(t, z80h.CSDForV2(0x001D59))
+
+	full := make([]byte, 512)
+	for i := range full {
+		full[i] = byte((i*7 + 0x21) & 0xFF)
+	}
+	short := make([]byte, 100)
+	for i := range short {
+		short[i] = byte((i*11 + 0x33) & 0xFF)
+	}
+	oversized := make([]byte, 600)
+	for i := range oversized {
+		oversized[i] = byte((i*5 + 0x44) & 0xFF)
+	}
+
+	enc.InjectRX(sdPushFrame([]byte{'?'}))
+	enc.InjectRX(sdPushBlock(0, full))      // full: straight from the packet
+	enc.InjectRX(sdPushBlock(1, short))     // short: staged, zero-tailed
+	enc.InjectRX(sdPushBlock(2, oversized)) // oversized: clamped to 512
+	enc.InjectRX(sdPushFrame([]byte{'F'}))
+	if _, err := mac.RunBoot("sd_push_main", z80h.Entry{StepCap: 30_000_000}); err != nil {
+		t.Fatalf("RunBoot sd_push_main faulted: %v", err)
+	}
+
+	base := uint32(spCSDBase)
+	// Full block (linear 0): byte-exact outside the sector-0 metadata windows.
+	sec0, ok := sd.RecordDataSector(base, 1, 0)
+	if !ok {
+		t.Fatal("record 1 linear 0 absent from the SD store")
+	}
+	if !bytes.Equal(sec0[:210], full[:210]) {
+		t.Error("full block bytes [0,210) differ — the straight-from-packet write did not carry the payload")
+	}
+	if got := string(sec0[232:236]); got != "BDOS" {
+		t.Errorf("sector 0 +232 = %q, want \"BDOS\" (the in-place packet mutation must still land)", got)
+	}
+	// Short block (linear 1): the 100 payload bytes then a zero tail.
+	sec1, ok := sd.RecordDataSector(base, 1, 1)
+	if !ok {
+		t.Fatal("record 1 linear 1 absent from the SD store")
+	}
+	if !bytes.Equal(sec1[:100], short) {
+		t.Error("short block payload differs")
+	}
+	for i := 100; i < 512; i++ {
+		if sec1[i] != 0 {
+			t.Errorf("short block tail byte %d = %#x, want 0 (the staged sector must be zero-tailed)", i, sec1[i])
+			break
+		}
+	}
+	// Oversized block (linear 2): exactly the first 512 bytes.
+	sec2, ok := sd.RecordDataSector(base, 1, 2)
+	if !ok {
+		t.Fatal("record 1 linear 2 absent from the SD store")
+	}
+	if !bytes.Equal(sec2, oversized[:512]) {
+		t.Error("oversized block was not clamped to its first 512 bytes")
 	}
 }
 

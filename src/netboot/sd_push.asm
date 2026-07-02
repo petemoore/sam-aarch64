@@ -41,10 +41,12 @@
 ;                                program owns port 0xEDB0 (a stage-1 push retry once
 ;                                hit a live sd_push and streamed its '@' blocks into
 ;                                a record as junk — the i319a incident).
-;   '@'  data block           -> [linearSec LE16][<=512 data bytes]; copy the data into
-;                                the 512-byte buffer, mutate sector 0 if i==0, write it
-;                                to record-LBA csd_base+1600*(n-1)+i by own CMD24, then
-;                                ACK the 4-byte header.
+;   '@'  data block           -> [linearSec LE16][<=512 data bytes]; a full block is
+;                                written straight from the packet (a short final block
+;                                stages through the zero-filled buffer, i338), sector 0
+;                                mutated in place if i==0, written to record-LBA
+;                                csd_base+1600*(n-1)+i by own CMD24, then the 4-byte
+;                                header ACKed.
 ;   'F'  finalize             -> reply "D" (done) if the written-count == 1600
 ;                                (size-only: a record is exactly 1600 sectors =
 ;                                819200 bytes), else "E" — either way followed by the
@@ -493,8 +495,19 @@ sp_data_block:
                 ld      hl, (packet+43)        ; linearSec i (LE16)
                 ld      (BD_WRITE_START), hl
 
-                ; clear the sector buffer, then copy the <=512 data bytes into it (a
-                ; short final block leaves the tail zero — the record's last sector).
+                ; SOURCE SELECT (i338): a full 512-byte block is written STRAIGHT FROM
+                ; THE PACKET (packet+45) — no zero-fill, no copy (~3.6 ms/sector of
+                ; LDIR dropped; the block's bytes sit untouched in the RX buffer until
+                ; the next drv_read, which happens only after the write + ack, and the
+                ; ack itself reuses only bytes 0..45). An OVERSIZED block (BC > 512, a
+                ; protocol violation) is clamped to its first 512 bytes — the old copy
+                ; would have LDIR'd past BD_WRITE_BUF's end. A SHORT final block still
+                ; stages through BD_WRITE_BUF: zero-fill + copy, so the record's last
+                ; sector is zero-tailed exactly as before.
+                ld      a, b
+                cp      2
+                jr      nc, sp_src_packet      ; BC >= 512: full block, source = the packet
+                ; short block: zero-fill the staging buffer, copy the BC data bytes in
                 push    bc                     ; save data byte count
                 ld      hl, BD_WRITE_BUF
                 ld      de, BD_WRITE_BUF+1
@@ -502,14 +515,18 @@ sp_data_block:
                 ld      (hl), 0
                 ldir                           ; zero-fill 512 bytes
                 pop     bc                     ; restore data byte count
-
-                ; copy BC data bytes from the packet (packet+42+3 = packet+45).
+                ld      hl, BD_WRITE_BUF
+                ld      (sp_src), hl
                 ld      a, b
                 or      c
                 jr      z, sp_data_write       ; empty block: write a zero sector
                 ld      hl, packet+45          ; first data byte
                 ld      de, BD_WRITE_BUF
                 ldir
+                jr      sp_data_write
+sp_src_packet:
+                ld      hl, packet+45          ; first data byte, in place
+                ld      (sp_src), hl
 
 sp_data_write:
                 ; SECTOR-0 MUTATION (the SamDisk WriteRecord transformation): on the FIRST
@@ -530,16 +547,26 @@ sp_data_write:
                 ld      a, h
                 or      l
                 jr      nz, sp_data_lba        ; i != 0: no mutation, write as-is
-                ld      hl, BD_CLAIM_ENTRY     ; name[0..9] -> +210
-                ld      de, BD_WRITE_BUF+210
+                ; the mutation targets are relative to the SELECTED source (the packet
+                ; or the staging buffer, i338): DE walks src+210 -> +232 -> +250 using
+                ; the post-LDIR DE (each LDIR leaves DE just past its window).
+                ld      hl, (sp_src)
+                ld      de, 210
+                add     hl, de
+                ex      de, hl                 ; DE = src+210
+                ld      hl, BD_CLAIM_ENTRY     ; name[0..9] -> src+210
                 ld      bc, 10
-                ldir
-                ld      hl, bdos_id_str        ; "BDOS" -> +232
-                ld      de, BD_WRITE_BUF+232
+                ldir                           ; DE = src+220
+                ld      hl, 12
+                add     hl, de
+                ex      de, hl                 ; DE = src+232
+                ld      hl, bdos_id_str        ; "BDOS" -> src+232
                 ld      bc, 4
-                ldir
-                ld      hl, BD_CLAIM_ENTRY+10  ; name[10..15] -> +250
-                ld      de, BD_WRITE_BUF+250
+                ldir                           ; DE = src+236
+                ld      hl, 14
+                add     hl, de
+                ex      de, hl                 ; DE = src+250
+                ld      hl, BD_CLAIM_ENTRY+10  ; name[10..15] -> src+250
                 ld      bc, 6
                 ldir
 
@@ -564,7 +591,7 @@ sp_data_lba:
                 ld      hl, (BD_WRITE_START)   ; m = this block's .mgt linear sector
                 call    mgt_to_record_linear   ; HL = side-major record linear
                 ld      (BD_REC_WRITE_LINEAR), hl
-                ld      hl, BD_WRITE_BUF       ; 512-byte source sector
+                ld      hl, (sp_src)           ; the selected 512-byte source sector (i338)
                 call    bd_record_write_hw     ; own CMD24, absolute LBA
                 jr      c, sp_data_ack         ; write failed (after the core's in-core
                                                ; retries, i339): ack the block so the host
@@ -850,6 +877,9 @@ sp_record_name: defm "cj.mgt"                  ; DEFAULT; an 'N' message overwri
                 defb 0                          ; NUL terminator
                 defs 10                         ; room for a <=16-char pushed name + NUL (17 B)
 sp_claimed:     defb 0                          ; 0 until sp_claim_once registers the record
+sp_src:         defw 0                          ; this block's 512-byte write source: packet+45
+                                                ; for a full block, BD_WRITE_BUF for a staged
+                                                ; short/empty final block (i338)
 sp_recv_count:  defw 0                         ; sectors received AND written this session (i339)
 sp_next_dot:    defw 100                       ; next progress-dot threshold (i318)
 

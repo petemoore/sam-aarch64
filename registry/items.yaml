@@ -5704,9 +5704,11 @@
   title: "sd_push CMD24 bulk-phase optimization: auto-null &3F OUTI data phase + direct-from-packet copy (target ~50 ms/sector, ~10 KB/s)"
   description: |
     i323 MEASURED headroom (see trinity-capabilities.md "Measured on hardware"): the 74.2 ms/sector push is bit-bang-bound; the SD leg (48.5 ms) is dominated by our MANUAL-mode per-byte sdc_out sandwich (~195 T/byte, sd_csd.asm bd_cmd24_write_core) where Colin's B-DOS 1.5t bulk write runs &3F auto-null + wait+OUTI (~64 T/byte, bdos-trinity-fork-analysis.md / trinity-sd-z80-interface.md auto-null-for-SD VERIFIED); and sp_data_block double-copies the payload (511-byte zero-fill LDIR + 512-byte packet->BD_WRITE_BUF LDIR, ~3.6 ms) when the write could stream from packet+45 directly (zero-fill only the short final block). Port the data phase to the B-DOS-style auto-null OUTI loop (authority: bdos15t hd.svb-t &A918 bulk write; CLAUDE.md rule 8 - mark Trinity-HW provenance if a Go model changes) + drop the double copy. Estimated ~74 -> ~50 ms/sector; beyond that the PIC relay is the floor (not fixable SAM-side). Emulation gate: sd_push_faithful_test.go + sd_push_test.go must stay green; hardware re-measure via the i323 method (no-write + meter differential).
-  status: OPEN
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 816, role: completing}
 
 - id: i339
   title: "sd_push mid-stream degradation cascade: one CMD24 hiccup triggers full-init-ladder-per-block (~15 s/sector) + near-deaf ENC; fix the fail->reinit amplifier + raise the 256-poll busy budget"
