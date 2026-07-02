@@ -332,6 +332,93 @@ func TestResponderDORA(t *testing.T) {
 	}
 }
 
+// mutateVendorClass returns a copy of a golden DHCP request frame with its
+// vendor-class (option 60) TLV removed (val == nil) or its value replaced by
+// val. The option is located by walking the option tags — never a hardcoded
+// offset — and the frame is re-originated with BuildUDPFrame so the IP/UDP
+// lengths and checksums stay valid. The golden vectors are generated (DO NOT
+// EDIT), so non-conformant variants are derived here in test code.
+func mutateVendorClass(t *testing.T, orig, val []byte) []byte {
+	t.Helper()
+	u, ok := frame.ParseUDP(orig)
+	if !ok {
+		t.Fatal("golden frame did not parse as UDP")
+	}
+	body := u.Payload
+	out := append([]byte(nil), body[:dhcp.OffOptions]...)
+	found := false
+	for off := dhcp.OffOptions; off < len(body); {
+		code := body[off]
+		if code == dhcp.OptPad {
+			out = append(out, code)
+			off++
+			continue
+		}
+		if code == dhcp.OptEnd {
+			out = append(out, body[off:]...)
+			break
+		}
+		l := int(body[off+1])
+		if code == dhcp.OptVendorClass {
+			found = true
+			if val != nil {
+				out = append(out, code, byte(len(val)))
+				out = append(out, val...)
+			}
+		} else {
+			out = append(out, body[off:off+2+l]...)
+		}
+		off += 2 + l
+	}
+	if !found {
+		t.Fatal("golden frame carries no option 60 (helper bug)")
+	}
+	return frame.BuildUDPFrame(frame.UDP{
+		DstMAC: u.DstMAC, SrcMAC: u.SrcMAC,
+		SrcIP: u.SrcIP, DstIP: u.DstIP,
+		SrcPort: u.SrcPort, DstPort: u.DstPort,
+		Payload: out,
+	})
+}
+
+// TestResponderRequiresPXEVendorClass — rogue-DHCP protection: the responder
+// serves only PXE netboot clients, so a DISCOVER/REQUEST whose vendor class
+// (option 60) is absent or lacks the "PXEClient" prefix gets no reply. The
+// gate is a prefix match, not equality — the conformant Pi value is the
+// 32-byte "PXEClient:Arch:00000:UNDI:002001".
+func TestResponderRequiresPXEVendorClass(t *testing.T) {
+	newResponder := func() *dhcp.Responder {
+		return dhcp.NewResponder(
+			mask.ServerMAC, mask.ServerIP,
+			[4]byte{255, 255, 255, 0}, mask.Broadcast,
+			[4]byte{192, 0, 2, 100}, 8,
+			7200, 3600, 6300,
+		)
+	}
+
+	for _, tc := range []struct {
+		name string
+		req  []byte
+	}{
+		{"DISCOVER without option 60", mutateVendorClass(t, golden.DHCPDiscover, nil)},
+		{"DISCOVER with a non-PXE vendor class", mutateVendorClass(t, golden.DHCPDiscover, []byte("MSFT 5.0"))},
+		{"REQUEST without option 60", mutateVendorClass(t, golden.DHCPRequest, nil)},
+		{"REQUEST with a non-PXE vendor class", mutateVendorClass(t, golden.DHCPRequest, []byte("MSFT 5.0"))},
+	} {
+		if reply := newResponder().OnRequest(tc.req); reply != nil {
+			t.Errorf("%s: responder replied (%d bytes), want silence", tc.name, len(reply))
+		}
+	}
+
+	// Helper guard: the same mutation machinery keeping the conformant value
+	// must still be answered, so the silences above are the option-60 gate and
+	// not a broken rebuilt frame.
+	pi := []byte("PXEClient:Arch:00000:UNDI:002001")
+	if newResponder().OnRequest(mutateVendorClass(t, golden.DHCPDiscover, pi)) == nil {
+		t.Error("rebuilt conformant DISCOVER got no reply (mutateVendorClass broke the frame)")
+	}
+}
+
 // --- TFTP (i82 client + i83 server) -------------------------------------
 
 // TestRRQBuilderMatchesClientOptionSet asserts the i82 client's RRQ builder

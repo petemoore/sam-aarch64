@@ -1740,16 +1740,18 @@
 - id: i95b-b1
   title: "Integrated ARP+DHCP+TFTP server hardware shot: real Trinity, host-side simulated Pi client (DORA + TFTP fetch by name)"
   description: |
-    The agent-workable slice of the end-to-end Pi boot: run the i95a integrated dispatch-loop server (netboot_server) on the real SAM+Trinity and drive it from THIS host with a crafted PXE-style client reproducing the captured Pi 400 exchange (pi-netboot-capture-analysis.md): DHCP DISCOVER->OFFER, REQUEST->ACK (option-43 blob, siaddr, per-MAC lease), ARP, then TFTP RRQ->OACK->DATA fetch by name of small store-resident files. SAFETY PRECONDITION before serving DHCP on the shared LAN: verify dhcp_loop answers ONLY PXEClient-vendor-class (opt 60) DISCOVERs (add the filter if absent, matching the captured Pi behaviour) so no house device can take a bogus lease; otherwise do not run unisolated. Multi-MB spanned-firmware serving is NOT in scope (i70 serve-time-reassembly residuals). Real-Pi boot is the sibling (rig-gated, i345).
-  status: OPEN
+    DONE 2026-07-02: hardware-verified (autonomous shot). The integrated ARP+DHCP+TFTP server (netboot_server), stored as CODE-auto record 187 (KEPT on card, reusable) and booted via boot-record, served the full simulated Pi 400 session from THIS host: DISCOVER->OFFER (yiaddr .100, siaddr .75, opt-43 Raspberry Pi Boot + PXEClient echo), REQUEST->ACK stable lease, non-PXE DISCOVER SILENT (the new option-60 PXEClient prefix gate, in responder.go + dhcp_loop.asm + netboot_server.asm inline, negative-tested + mutation-tested), ARP, TFTP config.txt/start4.elf byte-verified + miss->ERROR(1). First-ever DHCP serve from real Trinity (i86 hardware leg). The B-DOS store walk (absent before) now fills STORE from the booted record via HRSAD dir scan + verbatim-name HGTHD/HLOAD into a RAM arena, IM2 serve-phase takeover; TestNetbootServerFaithful proves boot->walk->golden-session byte-for-byte under captured ROM + 1.5t. MEASURED serve throughput 16.8 KB/s / 37 ms per 1024B block (trinity-capabilities.md, RAM-arena caveat). Client: tools/hardware-shot/simulate-pi-client.py. Spawned i346 (name mapping, gates i95b-b2), i347 (serve-vessel IM2), i348 (sd-push retransmit).
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 822, role: completing}
   parent: i95b
 
 - id: i95b-b2
   title: "Real Pi netboots from the SAM end-to-end (rig-gated): DHCP + TFTP boot of the physical target Pi"
   description: |
-    The physical-client tail of the end-to-end Pi boot: with the i345 hub-isolated rig in place and the i95b-b1 simulated-client shot proven, power the netboot-enabled target Pi and confirm it DHCP-leases from the SAM, TFTP-fetches its boot file set from the Trinity store, and boots. Multi-MB firmware provisioning/serving (spanning) rides the i70 residuals.
+    The physical-client tail of the end-to-end Pi boot: with the i345 hub-isolated rig in place and the i95b-b1 simulated-client shot proven, power the netboot-enabled target Pi and confirm it DHCP-leases from the SAM, TFTP-fetches its boot file set from the Trinity store, and boots. Multi-MB firmware provisioning/serving (spanning) rides the i70 residuals. OPEN RISK (Pete, 2026-07-02): at the measured bit-bang throughput (~5-9 KB/s) a full Pi 400 fetch (start4.elf ~2.9 MB + kernel) plausibly takes 10-20 min; TFTP's per-block lock-step keeps per-block gaps ~60-110 ms (fine for retransmit timeouts), but whether the Pi 4/400 EEPROM bootloader has a GLOBAL watchdog that aborts a multi-minute TFTP phase is unknown - this shot is what answers it. Use the i95b-b1 measured serve throughput to set expectations before the rig session.
   status: OPEN
   depends_on: [i345, i95b-b1, i346]
   kind: leaf

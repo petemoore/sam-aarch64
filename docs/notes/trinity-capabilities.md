@@ -217,6 +217,8 @@ The ~1.55× gap between the nominal-6 MHz static account (31 ms) and the measure
 
 The i338 optimization acts on this attribution: the CMD24 data phase now runs B-DOS-style `&3F` auto-null + bounded-`wait`+`OUTI` (~65 T/byte instead of the ~195 T/byte manual `&31` `sdc_out` sandwich), and a full 512-byte block is written straight from the packet buffer (no zero-fill + copy LDIRs). **Measured after the fix (same method, same junk image): 87.2 s / 1600 sectors = 54.5 ms/sector = 9.2 KB/s.** The remaining SD leg (~29 ms/sector) is command overhead plus the PIC per-byte relay wait — the Trinity firmware floor, not fixable SAM-side; the network leg (25.6 ms) is likewise PIC-relay-dominated.
 
+**TFTP serve throughput (i95b-b1, 2026-07-02):** the integrated netboot server, booted from a Trinity record and serving RAM-arena-resident files over TFTP to a host client, measures **16.8 KB/s effective = 37 ms per 1024-byte block** (repeated `config.txt` fetches, DATA→ACK lock-step included). This is the ENC-TX + protocol cost only — the store walk preloads files (≤1518 B each) into RAM at boot, so no SD read sits in the serve loop. A future SD-backed multi-MB serve (i70 spanning) adds the SD-read leg (~29+ ms/512 B, above) per block: expect the 5–9 KB/s band. At those rates a real Pi 400 fetch of `start4.elf` (~2.9 MB) is ~3 min arena-impossible (too big) / ~6–10 min SD-backed, and the full boot set proportionally more — the Pi-bootloader global-timeout question this raises is tracked on i95b-b2.
+
 ---
 
 ## 6. Phase-3 TFTP: What We Can Rely On

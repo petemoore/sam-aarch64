@@ -19,7 +19,8 @@
 ;     dispatch (mirrors Server.OnFrame, in this order):
 ;       1. ARP request for our IP        -> an ARP reply       (build_arp_reply)
 ;       2. not IPv4/UDP                   -> ignore
-;       3. UDP dst 67  (DHCP DISCOVER/REQUEST) -> an OFFER/ACK  (dhcp dispatch + pool)
+;       3. UDP dst 67  (DHCP DISCOVER/REQUEST) -> an OFFER/ACK  (dhcp dispatch + pool;
+;          PXEClient vendor-class gate — non-PXE DHCP clients are ignored)
 ;       4. UDP dst 69  (TFTP RRQ)         -> an OACK (hit) / ERROR(1) (miss), arm xfer
 ;       5. UDP dst = our transfer TID (TFTP ACK) -> FirstData (ack 0) / next DATA
 ;       6. anything else                  -> ignore
@@ -47,9 +48,12 @@
 ;
 ; VERIFICATION: host-verifiable end-to-end under the i80 emulation — inject a full
 ; netboot session and assert every reply frame on the virtual wire matches the Go
-; authority byte-for-byte (netboot_server_test.go). NOT host-verifiable: an
-; end-to-end Pi boot, the real ENC28J60 silicon, and the B-DOS RST-8 hook dispatch
-; (the real src(name) Source) — gated on real Trinity hardware (CLAUDE.md §5).
+; authority byte-for-byte (netboot_server_test.go). The bootable path — boot from
+; a Trinity record, EEPROM config read, the B-DOS store walk (nb_fill_store)
+; through the real RST-8 hooks, then the full golden session — is verified under
+; the captured real ROM + B-DOS 1.5t (netboot_server_faithful_test.go, the
+; netboot-server-record vessel). NOT host-verifiable: an end-to-end Pi boot and
+; the real ENC28J60 silicon — gated on real Trinity hardware (CLAUDE.md §5).
 ; Emulation-verified is not hardware-verified.
 
                 org     &8000
@@ -300,6 +304,13 @@ dh_not_disc:
 dh_have_type:
                 ld      (DP_MSGTYPE), a
 
+                ; vendor class (option 60) must start "PXEClient" — rogue-DHCP
+                ; protection, port of responder.go::OnRequest's option-60 gate:
+                ; the SAM serves only PXE netboot clients, so any other DHCP
+                ; client on a shared LAN is ignored.
+                call    check_vendor_pxe       ; CY set if conformant
+                jp      nc, ns_none
+
                 ; echo request fields into the reply params.
                 ; xid (4)
                 ld      hl, RXBUF + RX_UDP_PAYLOAD + DH_XID
@@ -435,6 +446,72 @@ fmt_got53:
                 ret
 fmt_absent:
                 or      a
+                ret
+
+; check_vendor_pxe — scan the received DHCP options for option 60 (vendor class)
+; and require its value to carry the 9-byte "PXEClient" prefix. Port of
+; responder.go::OnRequest's option-60 gate (rogue-DHCP protection); textually
+; mirrors dhcp_loop.asm::check_vendor_pxe. Prefix match, not equality — the real
+; Pi 400 sends the 32-byte "PXEClient:Arch:00000:UNDI:002001". The compare
+; string is the included dhcp_reply.asm's pxeclient (the outbound echo).
+; Out: CY set if option 60 is present with the PXEClient prefix; CY clear
+;      otherwise. Bounded by RX_LEN like find_msgtype.
+check_vendor_pxe:
+                ld      hl, RXBUF + RX_UDP_PAYLOAD + DH_OPTIONS
+                ld      de, (RX_LEN)
+                push    hl
+                ld      hl, RXBUF
+                add     hl, de
+                ex      de, hl                 ; DE = RXBUF + RX_LEN (end)
+                pop     hl
+cvp_loop:
+                push    hl
+                or      a
+                sbc     hl, de
+                pop     hl
+                jr      nc, cvp_no
+                ld      a, (hl)                ; option code
+                cp      OPTPAD_
+                jr      z, cvp_pad
+                cp      OPTEND_
+                jr      z, cvp_no
+                ld      c, a
+                inc     hl                     ; -> length
+                push    hl
+                or      a
+                sbc     hl, de
+                pop     hl
+                jr      nc, cvp_no             ; length byte past end
+                ld      b, (hl)                ; length
+                inc     hl                     ; -> value
+                ld      a, c
+                cp      OPT_VCLASS
+                jr      z, cvp_got60
+                ld      c, b
+                ld      b, 0
+                add     hl, bc
+                jr      cvp_loop
+cvp_pad:
+                inc     hl
+                jr      cvp_loop
+cvp_got60:
+                ; prefix match: length >= 9 and the first 9 bytes = "PXEClient".
+                ld      a, b
+                cp      pxeclient_len
+                jr      c, cvp_no              ; value too short for the prefix
+                ld      de, pxeclient
+                ld      b, pxeclient_len
+cvp_cmp:
+                ld      a, (de)
+                cp      (hl)
+                jr      nz, cvp_no
+                inc     hl
+                inc     de
+                djnz    cvp_cmp
+                scf
+                ret
+cvp_no:
+                or      a                      ; clear CY
                 ret
 
 ; copy_uuid — find option 97 in the received DHCP and copy its value verbatim
@@ -635,6 +712,13 @@ rrq_hit:
                 ld      de, XFER_SIZE
                 ld      bc, 4
                 ldir
+                ; point SRC_PTR at the resolved file's bytes: NB_SRC_TABLE
+                ; parallels STORE (both filled by nb_fill_store from the booted
+                ; record's directory). A no-match leaves SRC_PTR/XFER_SIZE
+                ; untouched — the host harness fills STORE + SRC_PTR directly
+                ; and leaves the table empty (netboot_server_test.go), the same
+                ; contract as netboot_serve.asm's resolve_src.
+                call    resolve_src
                 ld      hl, 1
                 ld      (XFER_NEXT_BLK), hl
                 ld      hl, 0
@@ -999,14 +1083,14 @@ str_tsize:        defm "tsize"
 ; ===========================================================================
 
 ; netboot_main — read the SAM's MAC + IP from the Trinity EEPROM "Trinity Network"
-; chunk, fill the CONFIG block, init the ENC28J60, then loop forever serving the
-; netboot session. Mirrors trinload's startup + the smoke test's bring-up.
+; chunk, fill the CONFIG block, init the ENC28J60, fill the file store from the
+; booted record's directory (nb_fill_store, the B-DOS seam), then loop forever
+; serving the netboot session. Mirrors trinload's startup + the smoke test's
+; bring-up.
 ;
 ; The DHCP pool + lease/T1/T2 + the server TID are fixed here (a sane default
-; pool on the SAM's own subnet); the B-DOS flat store walk that fills STORE +
-; SRC_PTR for a resolved name is the i93 seam, wired on real hardware (not in the
-; host build). On any bring-up failure it sets a distinctive border colour and
-; halts so Pete sees which stage failed.
+; pool on the SAM's own subnet). On any bring-up failure it sets a distinctive
+; border colour and halts so Pete sees which stage failed.
 netboot_main:
                 di
                 ; --- locate + read the "Trinity Network " flash chunk ---
@@ -1084,6 +1168,51 @@ netboot_main:
                 or      c
                 jp      z, nb_fail_init
 
+                ; --- fill STORE + NB_SRC_TABLE from the booted record ---
+                ; The B-DOS store walk (ENC init first — the i242 come-up
+                ; order). An empty directory is not a failure: the serve loop
+                ; simply ERROR(1)s every RRQ. During the walk the machine is
+                ; still B-DOS's world (mid hook conversation), so the ROM IM1
+                ; frame chain stays armed — it is coherent there.
+                call    nb_fill_store
+
+                ; --- own the maskable interrupt for the serve phase -------
+                ; (IM 2 -> ei;reti). The vendored ENC driver re-enables
+                ; interrupts on every drv_* exit (encdrv.asm EI;RET), so the
+                ; forever serve loop WILL take frame interrupts. Left in IM 1
+                ; those run the ROM &0038 chain — including B-DOS's frame
+                ; hook, whose housekeeping (motor timeout et al) executes
+                ; every 20 ms against the frozen record-boot context and can
+                ; touch the shared &DC microcontroller between ENC
+                ; transactions (the i280b ENC/SD contention class) for as
+                ; long as the server runs. The canonical SAM
+                ; take-over-the-machine idiom removes that whole class: IM 2
+                ; with a 257-byte vector table of one repeated byte, so ANY
+                ; interrupt-acknowledge bus byte (&FF on real hardware, &FE
+                ; in the harness) lands on our ei;reti handler. Table +
+                ; handler live in OUR page 2 (section D under the stable
+                ; serve-phase map), far above the image tail — memory no
+                ; other party touches. Armed only NOW, after the last B-DOS
+                ; hook: mid-hook B-DOS repages and uses its own system-page
+                ; workspace, where a foreign vector table corrupts the hook
+                ; (observed under the captured 1.5t when the arm preceded the
+                ; walk: a mis-addressed sector read + DOS error longjmp).
+                ld      hl, NB_IM2_TABLE
+                ld      de, NB_IM2_TABLE + 1
+                ld      bc, 256
+                ld      a, NB_IM2_VEC
+                ld      (hl), a
+                ldir                           ; 257 bytes, all NB_IM2_VEC
+                ld      a, &FB                 ; ei
+                ld      (NB_IM2_HANDLER), a
+                ld      a, &ED                 ; reti (ED 4D)
+                ld      (NB_IM2_HANDLER + 1), a
+                ld      a, &4D
+                ld      (NB_IM2_HANDLER + 2), a
+                ld      a, NB_IM2_TABLE / 256
+                ld      i, a
+                im      2
+
 nb_serve_loop:
                 call    netboot_serve_once
                 jr      nb_serve_loop
@@ -1099,6 +1228,16 @@ nb_fail_init:
                 di
                 halt
 
+; IM 2 plumbing (see netboot_main's serve-phase arm): the 257-byte vector table
+; at a 256-aligned address, every byte NB_IM2_VEC, so the acknowledge-time
+; vector word always reads (NB_IM2_VEC, NB_IM2_VEC) = NB_IM2_HANDLER, where
+; netboot_main writes the 3-byte ei;reti handler. Both live in this program's
+; own page 2 (section D under the serve-phase map, HMPR = exec page 1), far
+; above the loaded image's tail (FILE_ARENA ends well below &E000).
+NB_IM2_TABLE:     equ &FD00              ; 257 bytes: &FD00..&FE00 inclusive
+NB_IM2_VEC:       equ &FE                ; every table byte
+NB_IM2_HANDLER:   equ &FEFE              ; = NB_IM2_VEC * &101 (ei ; reti)
+
 nb_chunk_name:    defm "Trinity Network "     ; the flash chunk holding MAC+IP
 nb_lease_vals:    defb 0, 0, &1c, &20         ; lease 7200
                   defb 0, 0, &0e, &10         ; T1 3600
@@ -1107,7 +1246,9 @@ nb_lease_vals:    defb 0, 0, &1c, &20         ; lease 7200
 ; ===========================================================================
 ; CONFIG + shared state. The harness writes CONFIG_* + the store + the source
 ; directly; on the bootable build netboot_main fills CONFIG from the EEPROM + the
-; fixed pool, and the B-DOS seam (i93) fills STORE + SRC_PTR for a resolved name.
+; fixed pool, and nb_fill_store fills STORE + NB_SRC_TABLE from the booted
+; record's directory through the B-DOS seam (resolve_src then sets SRC_PTR per
+; resolved name).
 ; ===========================================================================
 CONFIG_SERVERMAC: defs 6
 CONFIG_SERVERIP:  defs 4
@@ -1148,7 +1289,10 @@ RXBUF:            defs 1518              ; the single received-frame buffer
 ; The host-verified packet builders/parsers, composed into this one translation
 ; unit (their org is suppressed — no NETBOOT_STANDALONE — so this file's org
 ; governs). encdrv.asm is the real vendored ENC28J60 driver; eeprom.asm is the
-; real flash config reader (real-hardware path only).
+; real flash config reader; bdos_seam.asm supplies the RST-8 hook bodies +
+; UIFA/DIFA arithmetic the store walk below uses (no NETBOOT_REAL_LISTREAD, no
+; NETBOOT_WANT_CLAIM: the server never scans the free-record list nor writes a
+; record — the card is reached only via the read hooks).
 ; ===========================================================================
                 include "build_udp_frame.asm"
                 include "build_arp_reply.asm"
@@ -1157,3 +1301,372 @@ RXBUF:            defs 1518              ; the single received-frame buffer
                 include "tftp_parse.asm"
                 include "encdrv.asm"
                 include "eeprom.asm"
+                include "bdos_seam.asm"
+
+; ===========================================================================
+; The B-DOS store walk (i95b-b1) — fill STORE (the flat index resolve walks)
+; and NB_SRC_TABLE (the parallel name -> arena-pointer + size table) from the
+; directory of the record the server BOOTED FROM, staging each small file's
+; bytes into FILE_ARENA so the serve loop streams them with plain reads.
+;
+; NO RECORD NUMBER IS NEEDED: B-DOS's HRECORD selection PERSISTS from
+; boot_record's select through the ALHK boot into the running program — the
+; same ambient selection the assembler record vessel's post-boot HLOADs read
+; from (the #813 gate) — so every hook below operates on the booted record.
+;
+; The walk reads the 40 directory sectors (MGT tracks 0-3 side 0, two
+; 256-byte entries per sector) via bdos_read_sector (HRSAD), and for each
+; plain CODE entry whose size fits NB_FILE_MAX it runs the proven i93b hook
+; pair — HGTHD (nb_uifa_verbatim + bdos_lookup_hook) then HLOAD
+; (bdos_load_hook) — landing the body in RXBUF first (HLOAD's destination
+; must lie in section C, &8000-&BFFF — docs/specs/samdos-file-io.md; RXBUF is
+; idle until the serve loop starts), then LDIRs it up into FILE_ARENA (above
+; &BFFF, in the loaded image's second page — plain CPU writes, no paging).
+; Oversize files (the AUTO* server binary itself, samdos2) are skipped —
+; i70 owns spanning/large serves. This section sits AFTER the includes so
+; RXBUF keeps its sub-&C000 address.
+; ===========================================================================
+NB_FILE_MAX:      equ 1518               ; = RXBUF's size (the HLOAD bounce)
+NB_DIR_TRACKS:    equ 4                  ; MGT directory: tracks 0-3, side 0
+NB_ENTRY_PAGES:   equ &EF                ; dir entry: full-16K-pages count
+NB_ENTRY_LENMOD:  equ &F0                ; dir entry: length mod 16K (LE word)
+NB_TYPE_CODE:     equ 19                 ; dir entry type: CODE (bits 0-5)
+
+nb_fill_store:
+                ; write cursors for the three output regions.
+                ld      hl, STORE
+                ld      (NB_STORE_W), hl
+                ld      hl, NB_SRC_TABLE
+                ld      (NB_TBL_W), hl
+                ld      hl, FILE_ARENA
+                ld      (NB_ARENA_W), hl
+
+                xor     a
+                ld      (NB_WALK_TRACK), a
+nbfs_track:
+                ld      a, 1
+                ld      (NB_WALK_SECTOR), a
+nbfs_sector:
+                ; read one directory sector of the selected (booted) record.
+                ld      a, (NB_WALK_TRACK)
+                ld      (BD_READ_TRACK), a
+                ld      a, (NB_WALK_SECTOR)
+                ld      (BD_READ_SECTOR), a
+                call    bdos_read_sector       ; HRSAD -> BD_READ_BUF
+
+                ; two 256-byte directory entries per sector.
+                ld      hl, BD_READ_BUF
+                call    nb_walk_entry
+                ld      hl, BD_READ_BUF + 256
+                call    nb_walk_entry
+
+                ld      a, (NB_WALK_SECTOR)
+                inc     a
+                ld      (NB_WALK_SECTOR), a
+                cp      11
+                jr      c, nbfs_sector
+                ld      a, (NB_WALK_TRACK)
+                inc     a
+                ld      (NB_WALK_TRACK), a
+                cp      NB_DIR_TRACKS
+                jr      c, nbfs_track
+
+                ; terminate both tables (a single leading NUL = empty).
+                ld      hl, (NB_STORE_W)
+                ld      (hl), 0
+                ld      hl, (NB_TBL_W)
+                ld      (hl), 0
+                ret
+
+; nb_walk_entry — consider the 256-byte directory entry at HL: skip anything
+; that is not a plain small CODE file; otherwise HGTHD+HLOAD it into the arena
+; and append its name+size to STORE and name+ptr+size to NB_SRC_TABLE.
+nb_walk_entry:
+                ld      (NB_WALK_ENT), hl
+                ; CODE file? (type bits 0-5 == 19; 0 = unused/erased slot; the
+                ; hidden/protected flag bits 6-7 are masked off.)
+                ld      a, (hl)
+                and     &3F
+                cp      NB_TYPE_CODE
+                ret     nz
+
+                ; size pre-filter from the dir entry: full-16K pages must be 0
+                ; and 0 < lengthMod16K <= NB_FILE_MAX (small files only).
+                ld      de, NB_ENTRY_PAGES
+                add     hl, de
+                ld      a, (hl)
+                or      a
+                ret     nz                     ; >= 16K: skip (i70 owns spanning)
+                inc     hl                     ; -> lengthMod16K low
+                ld      e, (hl)
+                inc     hl
+                ld      a, (hl)
+                and     &3F                    ; lengthMod16K is 14 bits
+                ld      d, a                   ; DE = size
+                ld      a, d
+                or      e
+                ret     z                      ; empty file: skip
+                ld      hl, NB_FILE_MAX
+                or      a
+                sbc     hl, de
+                ret     c                      ; size > NB_FILE_MAX: skip
+                ld      (NB_WALK_SIZE), de
+
+                ; copy the 10-byte name field into NB_WALK_NAME as a
+                ; NUL-terminated string, stopping at the first space (the
+                ; directory pads short names with spaces).
+                ld      hl, (NB_WALK_ENT)
+                inc     hl                     ; -> the name field (+1..+10)
+                ld      de, NB_WALK_NAME
+                ld      b, 10
+nbwe_name:
+                ld      a, (hl)
+                cp      &21
+                jr      c, nbwe_name_end       ; space/control: end of name
+                ld      (de), a
+                inc     hl
+                inc     de
+                djnz    nbwe_name
+nbwe_name_end:
+                xor     a
+                ld      (de), a                ; NUL-terminate
+                ld      a, 10
+                sub     b                      ; A = name length (djnz fall-
+                                               ; through leaves B = 0 => 10)
+                ret     z                      ; empty name: skip
+                ld      (NB_WALK_NLEN), a
+
+                ; room checks — skip the entry if any output region is full.
+                ; STORE needs nlen + 6 (NUL + 4-byte size + the terminator);
+                ; NB_SRC_TABLE needs nlen + 8 (NUL + ptr + size + terminator);
+                ; FILE_ARENA needs the file's size.
+                ld      e, a
+                ld      d, 0
+                ld      hl, (NB_STORE_W)
+                add     hl, de
+                ld      de, 6
+                add     hl, de
+                ex      de, hl                 ; DE = STORE cursor + need
+                ld      hl, STORE + 1024       ; STORE's capacity (tftp_parse.asm)
+                or      a
+                sbc     hl, de
+                ret     c                      ; STORE full: skip
+                ld      a, (NB_WALK_NLEN)
+                ld      e, a
+                ld      d, 0
+                ld      hl, (NB_TBL_W)
+                add     hl, de
+                ld      de, 8
+                add     hl, de
+                ex      de, hl
+                ld      hl, NB_SRC_TABLE + NB_SRC_TABLE_LEN
+                or      a
+                sbc     hl, de
+                ret     c                      ; table full: skip
+                ld      hl, (NB_ARENA_W)
+                ld      de, (NB_WALK_SIZE)
+                add     hl, de
+                ex      de, hl
+                ld      hl, FILE_ARENA + NB_ARENA_LEN
+                or      a
+                sbc     hl, de
+                ret     c                      ; arena full: skip
+
+                ; HGTHD: build the UIFA from the name VERBATIM (dots kept —
+                ; the on-record name IS the request name, e.g. "config.txt";
+                ; bdos_name_to_uifa's dotted-suffix drop is the client
+                ; write-out convention and would miss these entries).
+                ld      hl, NB_WALK_NAME
+                ld      (BD_NAME_PTR), hl
+                call    nb_uifa_verbatim
+                call    bdos_lookup_hook       ; HGTHD -> BD_DIFA
+
+                ; DIFA guard: the header must agree with the directory entry
+                ; (pages 0, lengthMod16K == the dir size) — a disagreement
+                ; means this is not the plain small file the entry claimed
+                ; (or the lookup was not served, e.g. the flat harness's
+                ; unmodelled HGTHD), so skip rather than overrun the bounce.
+                ld      a, (BD_DIFA + BD_OFF_PAGES)
+                or      a
+                ret     nz
+                ld      a, (BD_DIFA + BD_OFF_LENGTH + 1)
+                and     BD_DIFA_MARKER
+                ld      d, a
+                ld      a, (BD_DIFA + BD_OFF_LENGTH)
+                ld      e, a                   ; DE = DIFA lengthMod16K
+                ld      hl, (NB_WALK_SIZE)
+                or      a
+                sbc     hl, de
+                ret     nz
+
+                ; HLOAD into the bounce, then LDIR up into the arena.
+                ld      c, 0                   ; pages = 0 (guarded above)
+                ld      hl, RXBUF              ; DE = lengthMod16K (from above)
+                call    bdos_load_hook
+                ld      hl, RXBUF
+                ld      de, (NB_ARENA_W)
+                ld      bc, (NB_WALK_SIZE)
+                ldir
+
+                ; append the STORE entry: name\0 + 4-byte LE size.
+                ld      hl, NB_WALK_NAME
+                ld      de, (NB_STORE_W)
+                call    copy_cstr_incl_nul
+                ld      hl, (NB_WALK_SIZE)
+                call    nb_put_size32
+                ld      (NB_STORE_W), de
+
+                ; append the NB_SRC_TABLE entry: name\0 + ptr + 4-byte LE size.
+                ld      hl, NB_WALK_NAME
+                ld      de, (NB_TBL_W)
+                call    copy_cstr_incl_nul
+                ld      hl, (NB_ARENA_W)       ; the file's arena address
+                ld      a, l
+                ld      (de), a
+                inc     de
+                ld      a, h
+                ld      (de), a
+                inc     de
+                ld      hl, (NB_WALK_SIZE)
+                call    nb_put_size32
+                ld      (NB_TBL_W), de
+
+                ; advance the arena cursor past the staged file.
+                ld      hl, (NB_ARENA_W)
+                ld      de, (NB_WALK_SIZE)
+                add     hl, de
+                ld      (NB_ARENA_W), hl
+                ret
+
+; nb_put_size32 — write HL at DE as a 4-byte little-endian size (high word 0;
+; NB_FILE_MAX bounds every staged file well below 64K). DE advances by 4.
+nb_put_size32:
+                ld      a, l
+                ld      (de), a
+                inc     de
+                ld      a, h
+                ld      (de), a
+                inc     de
+                xor     a
+                ld      (de), a
+                inc     de
+                ld      (de), a
+                inc     de
+                ret
+
+; nb_uifa_verbatim — build the 48-byte UIFA name block for HGTHD from the
+; NUL-terminated name at BD_NAME_PTR copied VERBATIM (no dotted-suffix drop —
+; the assembler's fill_uifa convention for dotted on-disk names like
+; "enctab.enc", src/io.asm). Same field layout as bdos_name_to_uifa: type 19 +
+; 10-char space-padded name + 4-space ext + 0xFF filler.
+nb_uifa_verbatim:
+                ld      a, BD_TYPE_CODE
+                ld      (BD_UIFA + BD_OFF_TYPE), a
+                ld      hl, (BD_NAME_PTR)
+                ld      de, BD_UIFA + BD_OFF_NAME
+                ld      b, BD_NAME_LEN
+nbuv_copy:
+                ld      a, (hl)
+                or      a
+                jr      z, nbuv_pad            ; NUL: pad the remainder
+                ld      (de), a
+                inc     hl
+                inc     de
+                djnz    nbuv_copy
+                jr      nbuv_ext
+nbuv_pad:
+                ld      a, BD_SPACE
+nbuv_pad_loop:
+                ld      (de), a
+                inc     de
+                djnz    nbuv_pad_loop
+nbuv_ext:
+                ld      de, BD_UIFA + BD_OFF_EXT
+                ld      b, BD_EXT_LEN
+                ld      a, BD_SPACE
+nbuv_ext_loop:
+                ld      (de), a
+                inc     de
+                djnz    nbuv_ext_loop
+                ld      de, BD_UIFA + BD_OFF_EXT + BD_EXT_LEN
+                ld      b, BD_UIFA_LEN - (BD_OFF_EXT + BD_EXT_LEN)
+                ld      a, &FF
+nbuv_fill:
+                ld      (de), a
+                inc     de
+                djnz    nbuv_fill
+                ret
+
+; ===========================================================================
+; resolve_src — set SRC_PTR + XFER_SIZE for the resolved filename by walking
+; NB_SRC_TABLE, which parallels STORE (netboot_serve.asm's resolve_src,
+; retargeted at the walk-filled table). Entries: name (NUL-terminated) |
+; 2-byte LE arena pointer | 4-byte LE size, terminated by a single 0 byte.
+; The name to look up is the one resolve already matched, at (PARSE_FILENAME).
+; On a match: SRC_PTR/XFER_SIZE set, CY set. No match: SRC_PTR/XFER_SIZE left
+; as-is (the host harness presets them and leaves the table empty), CY clear.
+; ===========================================================================
+resolve_src:
+                ld      hl, NB_SRC_TABLE
+rsv_entry:
+                ld      a, (hl)
+                or      a
+                jr      z, rsv_nomatch         ; end-of-table sentinel
+                ; compare this entry's name with (PARSE_FILENAME)
+                ld      de, (PARSE_FILENAME)
+                push    hl
+rsv_name_cmp:
+                ld      a, (de)
+                cp      (hl)
+                jr      nz, rsv_next
+                or      a
+                jr      z, rsv_found           ; both hit NUL together: match
+                inc     hl
+                inc     de
+                jr      rsv_name_cmp
+rsv_next:
+                ; not this entry: advance HL past name NUL + 2 (ptr) + 4 (size).
+                pop     hl
+                call    skip_cstr              ; HL past the name's NUL
+                ld      de, 6
+                add     hl, de
+                jr      rsv_entry
+rsv_found:
+                pop     de                     ; discard the entry-start copy
+                inc     hl                     ; past the matched NUL
+                ld      e, (hl)
+                inc     hl
+                ld      d, (hl)
+                inc     hl
+                ld      (SRC_PTR), de          ; SRC_PTR = arena pointer
+                ld      e, (hl)
+                inc     hl
+                ld      d, (hl)
+                inc     hl
+                ld      (XFER_SIZE), de
+                ld      e, (hl)
+                inc     hl
+                ld      d, (hl)
+                ld      (XFER_SIZE+2), de
+                scf
+                ret
+rsv_nomatch:
+                or      a
+                ret
+
+; --- store-walk state + the staged-file regions -----------------------------
+NB_STORE_W:       defs 2                 ; STORE write cursor
+NB_TBL_W:         defs 2                 ; NB_SRC_TABLE write cursor
+NB_ARENA_W:       defs 2                 ; FILE_ARENA write cursor
+NB_WALK_ENT:      defs 2                 ; current directory entry pointer
+NB_WALK_SIZE:     defs 2                 ; current entry's byte size
+NB_WALK_NLEN:     defs 1                 ; current entry's name length
+NB_WALK_TRACK:    defs 1                 ; directory walk: track 0-3
+NB_WALK_SECTOR:   defs 1                 ; directory walk: sector 1-10
+NB_WALK_NAME:     defs 11                ; current entry's name + NUL
+
+NB_SRC_TABLE_LEN: equ 256
+NB_SRC_TABLE:     defs NB_SRC_TABLE_LEN  ; name\0 + ptr + size records + 0
+
+NB_ARENA_LEN:     equ 4096
+FILE_ARENA:       defs NB_ARENA_LEN      ; the staged file bytes SRC_PTR serves

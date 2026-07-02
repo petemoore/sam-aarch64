@@ -39,7 +39,10 @@ const (
 
 	nbServerTID = 40136  // the SAM's transfer source port
 	nbClientTID = 30574  // the captured client RRQ source port
-	nbSrcOrg    = 0xC000 // where the test stages the file source bytes in Z80 RAM
+	nbSrcOrg    = 0xE000 // where the test stages the file source bytes in Z80 RAM
+	                     // (above the server image, which ends at FILE_ARENA's
+	                     // tail ~&D2DC — staging lower overwrote the i95b-b1
+	                     // walk code + NB_SRC_TABLE)
 )
 
 // nbConfig is the SAM's fixed identity + DHCP pool, shared by the Z80 CONFIG_*
@@ -117,7 +120,13 @@ func fillServerConfig(t *testing.T, mac *z80h.Machine, name string, file []byte)
 	store.WriteByte(0)
 	put("STORE", store.Bytes())
 
-	// Source bytes at nbSrcOrg; SRC_PTR points there.
+	// Source bytes at nbSrcOrg; SRC_PTR points there. Guard the staging area
+	// against the image growing under it (FILE_ARENA + NB_ARENA_LEN is the
+	// image's last reserved byte; staging into the image corrupted the walk
+	// code once).
+	if end := symAddr(t, mac, "FILE_ARENA") + 4096; uint16(nbSrcOrg) < end {
+		t.Fatalf("nbSrcOrg &%04X is inside the server image (reserved through &%04X) — move it up", nbSrcOrg, end)
+	}
 	mac.Write(nbSrcOrg, file)
 	mac.WriteU16LE(symAddr(t, mac, "SRC_PTR"), nbSrcOrg)
 
@@ -334,6 +343,33 @@ func TestServerIgnoresUnrelated(t *testing.T) {
 	})
 	if r := serveServer(t, mac, enc, unrelated); r != nil {
 		t.Errorf("dispatch replied to an unrelated UDP port: %x", r)
+	}
+}
+
+// TestServerIgnoresNonPXE confirms the integrated dispatch answers only PXE
+// netboot clients on its DHCP port — rogue-DHCP protection, the netboot_server.asm
+// check_vendor_pxe port of responder.go's option-60 gate: a DISCOVER/REQUEST
+// whose vendor class is absent or lacks the "PXEClient" prefix gets no reply,
+// and the conformant golden DISCOVER is still served afterwards.
+func TestServerIgnoresNonPXE(t *testing.T) {
+	mac := loadServer(t)
+	_, refDHCP, _, _ := fillServerConfig(t, mac, "config.txt", makeFile(512))
+	enc := z80h.NewENC28J60()
+	initServerDriver(t, mac, enc)
+
+	for _, tc := range nonPXEDHCPVariants(t) {
+		if r := serveServer(t, mac, enc, tc.req); r != nil {
+			t.Errorf("%s: dispatch replied (%d bytes), want silence", tc.name, len(r))
+		}
+	}
+
+	// The conformant golden DISCOVER is still answered, byte-for-byte the Go
+	// authority — the silences above are the gate, not a wedged dispatch, and
+	// the ignored frames allocated no lease.
+	got := serveServer(t, mac, enc, golden.DHCPDiscover)
+	want := refDHCP.OnRequest(golden.DHCPDiscover)
+	if got == nil || !bytes.Equal(got, want) {
+		t.Errorf("conformant DISCOVER after non-PXE frames != Go authority\n  z80 %x\n  go  %x", got, want)
 	}
 }
 

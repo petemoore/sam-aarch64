@@ -1,0 +1,4 @@
+start4.elf STAND-IN -- not a real Pi GPU firmware blob. A short
+single-block TFTP payload for the i95b-b1 faithful serve gate: the SAM
+netboot server stages it from the booted Trinity record's directory and
+serves it by name; the test byte-compares the DATA block.
