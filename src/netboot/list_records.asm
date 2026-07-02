@@ -124,9 +124,16 @@ list_records_main:
                 ; --- number of list sectors = ceil(BD_RECORDS / 32) ----------------
                 ; The card's record-list entries live 32-per-sector in card-absolute
                 ; sectors 1..N; entries past BD_RECORDS are padding the host ignores.
+                ; Computed as (BD_RECORDS >> 5) + (1 if BD_RECORDS mod 32 != 0) — NOT
+                ; the usual (n+31)>>5, which OVERFLOWS 16 bits for BD_RECORDS >= 65505.
+                ; That is not theoretical: B-DOS 1.5t's >51GB clamp makes a 64GB card
+                ; (Pete's real card) decode to records = 65535 EXACTLY, and the +31
+                ; form wrapped nlist to 0 there, refusing every query (found on real
+                ; hardware, i319a; pinned by TestListRecords64GBCard).
                 ld      hl, (BD_RECORDS)
-                ld      de, 31
-                add     hl, de
+                ld      a, l
+                and     31                     ; the mod-32 remainder
+                ld      c, a                   ; C != 0 -> a partial last list sector
                 srl     h
                 rr      l                      ; /2
                 srl     h
@@ -137,6 +144,11 @@ list_records_main:
                 rr      l                      ; /16
                 srl     h
                 rr      l                      ; /32
+                ld      a, c
+                or      a
+                jr      z, lr_nlist_whole
+                inc     hl                     ; round the partial sector up
+lr_nlist_whole:
                 ; The list-read seam addresses sectors with ONE byte (BD_LIST_SECTOR,
                 ; bdos_seam.asm), so this tool serves list sectors 1..255 (records
                 ; 1..8160). Clamp nlist so a bigger card's higher sectors are REFUSED
