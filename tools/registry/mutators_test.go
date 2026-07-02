@@ -1059,20 +1059,20 @@ func TestPriorityAutoMaintain_OrderPreservation(t *testing.T) {
 	assertPriorityValid(t, paths)
 }
 
-// TestAddLandsAtTop_NoDepItem verifies that a newly added OPEN no-dep item
-// becomes the tip of the ready queue (ready-position 1 among agent-actionable
-// items) after add.
+// TestAddLandsAtTail_NoDepItem verifies that a newly added OPEN no-dep item
+// lands at the TAIL of the priority queue — the i341 default: landing new
+// items at the front silently preempted the active thrust every time an item
+// was captured mid-session.
 //
 // Setup: priority starts as [i1b, i2]. A new item (i6) is added with no deps.
-// Expected: after add, i6 is at index 0 in the priority queue (topo repair has
-// nothing to move past, so it stays at the front).
-func TestAddLandsAtTop_NoDepItem(t *testing.T) {
+// Expected: after add, i6 is the LAST entry and the curated order is intact.
+func TestAddLandsAtTail_NoDepItem(t *testing.T) {
 	// Testdata pullable set: {i1b, i2}. Start with that curated order.
 	paths := setupMutatorFixtureWithPriority(t, []string{"i1b", "i2"})
 
 	newID := expectedNextItemID(t, paths)
 	runAdd([]string{
-		"--title", "Should land at top of backlog",
+		"--title", "Should land at tail of backlog",
 		"--status", "OPEN",
 		"--owner", "agent",
 	}, paths)
@@ -1082,16 +1082,66 @@ func TestAddLandsAtTop_NoDepItem(t *testing.T) {
 	if len(ids) == 0 {
 		t.Fatal("priority queue is empty after add")
 	}
-	// The new item must be at position 0 (the front / highest priority).
+	if ids[len(ids)-1] != newID {
+		t.Errorf("after add of no-dep item, expected %s at the tail; got queue %v", newID, ids)
+	}
+	// The curated order of the existing items is untouched.
+	if ids[0] != "i1b" || ids[1] != "i2" {
+		t.Errorf("curated order disturbed by add: expected [i1b i2 %s]; got %v", newID, ids)
+	}
+	assertPriorityValid(t, paths)
+}
+
+// TestAddToTop_LandsAtFront verifies the explicit `add --to-top` opt-in: the
+// new item is seeded at the front of the queue and stays there (no in-queue
+// dependencies to hold it back).
+func TestAddToTop_LandsAtFront(t *testing.T) {
+	paths := setupMutatorFixtureWithPriority(t, []string{"i1b", "i2"})
+
+	newID := expectedNextItemID(t, paths)
+	runAdd([]string{
+		"--title", "Should land at front of backlog",
+		"--status", "OPEN",
+		"--owner", "agent",
+		"--to-top",
+	}, paths)
+
+	ids := loadPriorityFromPaths(t, paths)
+
+	if len(ids) == 0 {
+		t.Fatal("priority queue is empty after add")
+	}
 	if ids[0] != newID {
-		t.Errorf("after add of no-dep item, expected %s at position 0 (top of queue); got queue %v", newID, ids)
+		t.Errorf("after add --to-top, expected %s at position 0; got queue %v", newID, ids)
 	}
-	// Existing items must still follow it.
-	if !containsStr(ids, "i1b") {
-		t.Errorf("priority missing i1b after add; got %v", ids)
+	assertPriorityValid(t, paths)
+}
+
+// TestSplitChildTakesParentRank verifies that a split child inherits the
+// parent's queue rank: the parent leaves the queue (it becomes an umbrella)
+// and the child appears at the parent's old position, not at the tail — the
+// remaining work keeps its priority.
+//
+// Setup: priority starts as [i1b, i2]. i1b is split. Expected queue after:
+// [i1b-<child>, i2].
+func TestSplitChildTakesParentRank(t *testing.T) {
+	paths := setupMutatorFixtureWithPriority(t, []string{"i1b", "i2"})
+
+	runSplit([]string{
+		"--parent", "i1b",
+		"--title", "Child should take the parent's rank",
+	}, paths)
+
+	ids := loadPriorityFromPaths(t, paths)
+
+	if len(ids) != 2 {
+		t.Fatalf("expected a 2-entry queue after split (child + i2); got %v", ids)
 	}
-	if !containsStr(ids, "i2") {
-		t.Errorf("priority missing i2 after add; got %v", ids)
+	if !strings.HasPrefix(ids[0], "i1b-") {
+		t.Errorf("expected the split child (i1b-*) at the parent's old rank (position 0); got queue %v", ids)
+	}
+	if ids[1] != "i2" {
+		t.Errorf("expected i2 to keep its rank after the split; got queue %v", ids)
 	}
 	assertPriorityValid(t, paths)
 }

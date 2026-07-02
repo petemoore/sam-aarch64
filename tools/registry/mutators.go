@@ -26,15 +26,20 @@ type mutatorPaths struct {
 // while preserving Pete's curated ordering of items that are still pullable.
 // The algorithm:
 //  1. Keep every id in the current priority that is still pullable, in order.
-//  2. Prepend every pullable id NOT already listed, in canonical id sort order,
-//     at the FRONT of the queue (new items land at the top where they are most
-//     visible and immediately actionable; Pete can demote them with `move` if needed).
+//     This is also the placement hook: a mutator that wants a specific rank
+//     for a new id PRE-SEEDS it into reg.Priority at that position before
+//     applyAndCommit (add --to-top seeds the front; split seeds the child at
+//     the parent's rank).
+//  2. Append every pullable id NOT already listed, in canonical id sort
+//     order, at the TAIL of the queue. Landing new items at the front
+//     silently preempted the active thrust every time an item was captured
+//     mid-session (i341) — the tail is the safe default, and the printed
+//     ready-position line makes the landing spot visible.
 //  3. Topo-repair the result so every item appears after its in-queue deps.
 //
-// Effect on `add`: a newly-added item with no in-queue dependencies lands at
-// ready-position 1. An item added with a `--dep` on an in-queue item lands just
-// after that dependency (topo repair pulls the dep forward, or holds the new item
-// back — whichever achieves correctness with minimal perturbation).
+// Effect on `add`: a newly-added item lands at the queue tail (or at the
+// front with --to-top). An item whose `--dep` targets an in-queue item is
+// kept after that dependency by the topo repair regardless of seeding.
 //
 // The result satisfies validatePriority's strict-permutation invariant:
 // exactly the pullable set, each id once, no closed/umbrella ids.
@@ -63,11 +68,10 @@ func reconcilePriority(reg *Registry) {
 		}
 	}
 
-	// Prepend new ids so they land at the top of the queue. Topo repair below
-	// then slides each new id after its in-queue dependencies if needed — so a
-	// no-dep new item reaches ready-position 1, and a dep-gated one sits just
-	// after its last in-queue prerequisite.
-	combined := append(newIDs, kept...)
+	// Append new ids at the tail of the queue (see the placement rationale in
+	// the doc comment). Topo repair below still pulls a dependency forward if
+	// a kept item depends on a newly-appended one.
+	combined := append(kept, newIDs...)
 
 	// Repair ordering so the queue is a valid topological extension of the
 	// dependency DAG. Membership reconciliation above preserves Pete's ranking
@@ -239,14 +243,31 @@ func applyAndCommit(reg *Registry, paths mutatorPaths) {
 			os.Exit(1)
 		}
 	}
-	// Re-load from disk and regenerate the three views.
+	// Re-load from disk and regenerate the views (silently in stdout mode —
+	// the pipeline runs as a consistency check; mutations never dump views).
 	// Re-loading ensures the canonical serializer's output round-trips cleanly.
 	reg2, err := loadReg(paths)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	genToOutDirOrStdout(reg2, paths)
+	genToOutDirOrStdout(reg2, paths, false)
+}
+
+// printStageHint ends every mutation's output with the exact follow-up
+// commands: regenerate the views, then stage the complete file set a mutation
+// can touch (git add of an unchanged file is a no-op, so the one canonical
+// list is always safe). Staging a subset — items.yaml alone — has produced a
+// registry-sync CI failure and near-misses (i341); printing the exact line at
+// the point of use is the fix. When outDir is set the views were already
+// written in place, so the `make registry` step is dropped.
+func printStageHint(paths mutatorPaths) {
+	const files = "registry/items.yaml registry/questions.yaml registry/priority.yaml registry/.id-ledger.txt docs/notes/item-registry-open.md docs/notes/item-registry-closed.md docs/notes/question-registry-open.md docs/notes/backlog.md"
+	if paths.outDir == "" {
+		fmt.Printf("registry: stage with: make registry && git add %s\n", files)
+	} else {
+		fmt.Printf("registry: stage with: git add %s\n", files)
+	}
 }
 
 // deriveUmbrellaStatuses recomputes every umbrella's status from its children,
@@ -326,10 +347,14 @@ func loadReg(paths mutatorPaths) (*Registry, error) {
 
 // genToOutDirOrStdout runs the gen pipeline. When paths.outDir is set, it
 // writes the four .md files into that directory (in-place mode). When outDir
-// is empty, it prints the four views to stdout (dormant/stdout mode).
+// is empty, it prints the four views to stdout (dormant/stdout mode) — but
+// only when stdoutDump is true: the explicit `gen` command wants the dump,
+// while mutations run the pipeline purely as a consistency check and print
+// nothing (a bare mutation used to spill all four full views (~hundreds of
+// KB) into the caller's output — i341).
 // The four views are: item-open, item-closed, question-open, backlog.
 // backlog.md is only written when reg.Priority is non-empty.
-func genToOutDirOrStdout(reg *Registry, paths mutatorPaths) {
+func genToOutDirOrStdout(reg *Registry, paths mutatorPaths, stdoutDump bool) {
 	var itemsOpen, itemsClosed, qOpen bytes.Buffer
 	if err := genItemsOpenClosed(reg, &itemsOpen, &itemsClosed); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -350,15 +375,17 @@ func genToOutDirOrStdout(reg *Registry, paths mutatorPaths) {
 	}
 
 	if paths.outDir == "" {
-		fmt.Print("=== item-registry-open ===\n")
-		os.Stdout.Write(itemsOpen.Bytes())
-		fmt.Print("\n=== item-registry-closed ===\n")
-		os.Stdout.Write(itemsClosed.Bytes())
-		fmt.Print("\n=== question-registry-open ===\n")
-		os.Stdout.Write(qOpen.Bytes())
-		if hasBacklog {
-			fmt.Print("\n=== backlog ===\n")
-			os.Stdout.Write(backlog.Bytes())
+		if stdoutDump {
+			fmt.Print("=== item-registry-open ===\n")
+			os.Stdout.Write(itemsOpen.Bytes())
+			fmt.Print("\n=== item-registry-closed ===\n")
+			os.Stdout.Write(itemsClosed.Bytes())
+			fmt.Print("\n=== question-registry-open ===\n")
+			os.Stdout.Write(qOpen.Bytes())
+			if hasBacklog {
+				fmt.Print("\n=== backlog ===\n")
+				os.Stdout.Write(backlog.Bytes())
+			}
 		}
 		return
 	}
@@ -475,6 +502,7 @@ func runAdd(args []string, paths mutatorPaths) {
 	kind := fs.String("kind", "leaf", "item kind: leaf|umbrella (items only)")
 	prNum := fs.Int("pr", 0, "completing PR number to attach (items only; required for a DONE leaf)")
 	prRole := fs.String("role", "completing", "role for --pr: completing|followup")
+	toTop := fs.Bool("to-top", false, "place the new item at the front of the priority queue (default: tail; items only)")
 	var deps, refs multiFlag
 	fs.Var(&deps, "dep", "depends_on edge (repeatable; items only)")
 	fs.Var(&refs, "ref", "ref entry (repeatable; items only)")
@@ -556,16 +584,27 @@ func runAdd(args []string, paths mutatorPaths) {
 		os.Exit(1)
 	}
 
+	// --to-top: pre-seed the new id at the front of the priority queue so
+	// reconcilePriority keeps it there (its step 1 preserves listed pullable
+	// ids in order); without the seed the id is appended at the tail. Topo
+	// repair still holds it after any in-queue dependency.
+	if *toTop && *space == "items" && paths.priorityYAML != "" {
+		reg.Priority = append([]string{newID}, reg.Priority...)
+	}
+
 	applyAndCommit(reg, paths)
 	fmt.Printf("registry: added %s\n", newID)
 	// For item adds, report the resulting ready-queue position so the caller
-	// can see immediately where it landed (i279: make priority self-explanatory).
+	// can see immediately where it landed (i279: make priority self-explanatory)
+	// — with the tail-default placement this line is what makes the landing
+	// spot visible.
 	if *space == "items" && paths.priorityYAML != "" {
 		reg2, err := loadReg(paths)
 		if err == nil {
 			reportReadyPosition(reg2, newID)
 		}
 	}
+	printStageHint(paths)
 }
 
 // runSplit implements `split --parent iN --title … [--desc …] [--status …] [--owner …] [--kind …] [--pr N [--role …]] [--dep …]… [--ref …]…`.
@@ -684,6 +723,35 @@ func runSplit(args []string, paths mutatorPaths) {
 		os.Exit(1)
 	}
 
+	// Seed the child's queue placement: a split replaces the parent (which
+	// leaves the queue as an umbrella) with its child at the SAME rank — the
+	// remaining work keeps its priority rather than dropping to the tail
+	// (reconcilePriority's default for unseeded new ids). For an additional
+	// child of an existing umbrella, place it after its last in-queue
+	// sibling; with no anchor at all it goes to the tail.
+	if paths.priorityYAML != "" {
+		anchor := -1
+		for i, id := range reg.Priority {
+			if id == *parentID {
+				anchor = i // the parent's rank (the parent drops out as an umbrella)
+				break
+			}
+		}
+		if anchor == -1 {
+			for i, id := range reg.Priority {
+				for _, sib := range existingChildren {
+					if id == sib && i+1 > anchor {
+						anchor = i + 1 // after the last in-queue sibling
+					}
+				}
+			}
+		}
+		if anchor != -1 {
+			rest := append([]string{childID}, reg.Priority[anchor:]...)
+			reg.Priority = append(reg.Priority[:anchor:anchor], rest...)
+		}
+	}
+
 	// All children of this parent after the split (existing + new).
 	allChildren := append(existingChildren, childID)
 
@@ -711,6 +779,15 @@ func runSplit(args []string, paths mutatorPaths) {
 	applyAndCommit(reg, paths)
 	fmt.Printf("registry: split %s → umbrella; added child %s; rewrote dependents onto %v\n",
 		*parentID, childID, allChildren)
+	// Report where the child landed in the ready queue (it takes the parent's
+	// rank when the parent was ranked; see the placement seed above).
+	if paths.priorityYAML != "" {
+		reg2, err := loadReg(paths)
+		if err == nil {
+			reportReadyPosition(reg2, childID)
+		}
+	}
+	printStageHint(paths)
 }
 
 // runSetStatus implements `set-status --id iN --status … [--pr N]`.
@@ -753,6 +830,7 @@ func runSetStatus(args []string, paths mutatorPaths) {
 
 	applyAndCommit(reg, paths)
 	fmt.Printf("registry: %s status → %s\n", *id, *status)
+	printStageHint(paths)
 }
 
 // runSetTitle implements `set-title --id iN --title "…"` (items only). The title
@@ -779,6 +857,7 @@ func runSetTitle(args []string, paths mutatorPaths) {
 			reg.Items[i].Title = *title
 			applyAndCommit(reg, paths)
 			fmt.Printf("registry: %s title updated\n", *id)
+			printStageHint(paths)
 			return
 		}
 	}
@@ -817,6 +896,7 @@ func runSetOwner(args []string, paths mutatorPaths) {
 			reg.Items[i].Owner = *owner
 			applyAndCommit(reg, paths)
 			fmt.Printf("registry: %s owner → %s\n", *id, *owner)
+			printStageHint(paths)
 			return
 		}
 	}
@@ -846,6 +926,7 @@ func runSetDesc(args []string, paths mutatorPaths) {
 			reg.Items[i].Description = *desc
 			applyAndCommit(reg, paths)
 			fmt.Printf("registry: %s description updated\n", *id)
+			printStageHint(paths)
 			return
 		}
 	}
@@ -854,6 +935,7 @@ func runSetDesc(args []string, paths mutatorPaths) {
 			reg.Questions[i].Body = *desc
 			applyAndCommit(reg, paths)
 			fmt.Printf("registry: %s body updated\n", *id)
+			printStageHint(paths)
 			return
 		}
 	}
@@ -896,6 +978,7 @@ func runSetPR(args []string, paths mutatorPaths) {
 	reg.Items[idx].AddPR(*prNum, PRRole(*role))
 	applyAndCommit(reg, paths)
 	fmt.Printf("registry: attached PR #%d (role:%s) to %s\n", *prNum, *role, *id)
+	printStageHint(paths)
 }
 
 // warnDoneLeafDep prints a non-blocking warning when `target` is a DONE leaf of
@@ -1029,6 +1112,7 @@ func runDep(args []string, paths mutatorPaths) {
 
 	applyAndCommit(reg, paths)
 	fmt.Printf("registry: dep %s --id %s --on %s\n", action, *id, *on)
+	printStageHint(paths)
 }
 
 // runAnswer implements `answer --id qN`.
@@ -1093,6 +1177,7 @@ func runAnswer(args []string, paths mutatorPaths) {
 
 	applyAndCommit(reg, paths)
 	fmt.Printf("registry: deleted question %s (all dependents curated)\n", *id)
+	printStageHint(paths)
 }
 
 // multiFlag is a flag.Value that accumulates repeated --flag values into a slice.

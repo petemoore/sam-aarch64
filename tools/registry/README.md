@@ -22,7 +22,7 @@ The data source is resolved explicitly: an explicit `REGISTRY_*` env var wins; o
 | `REGISTRY_PRIORITY` | sibling of items.yaml | priority queue path |
 | `REGISTRY_DIR` | the live `registry/` dir | directory for `.id-ledger.txt` |
 | `REGISTRY_TEMPLATES` | `<repo>/tools/registry/templates` | `*.head.md` template files |
-| `REGISTRY_OUTDIR` | _(empty = stdout)_ | write generated `.md` files here |
+| `REGISTRY_OUTDIR` | _(empty = stdout for `gen`; mutations regen silently)_ | write generated `.md` files here |
 
 ## Makefile targets
 

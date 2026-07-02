@@ -5736,9 +5736,11 @@
   title: "registry CLI UX round 2: --quiet mutation output, stage-list output, and visible/controllable add placement"
   description: |
     i324 retro-mining P3 (5+ independent sessions): three small UX gaps on build/registry that each caused real friction. (1) NOISY MUTATION OUTPUT: mutating calls print large table/queue context; a 06-20 session spilled ~400KB into a tool result when a grep filter was defeated by descriptions containing the search term, and 07-01e needed extra view round-trips to confirm operations succeeded. Add --quiet (or make it default): mutations print '<id>: <result>' + the ready-position line only. (2) STAGING FOOTGUN: a mutation touches items.yaml + priority.yaml + .id-ledger.txt + regenerated views, but nothing tells the agent the full file list; staging items.yaml alone caused a registry-sync CI failure (06-22) and a near-miss (07-01-i315, caught by git status). Mutation output should end with the exact 'git add <files>' line (or add a make registry-stage target). (3) ADD PLACEMENT: add places the new item at ready-position 1 by default - it silently preempts the active thrust (hit 07-02 with i334, again 2026-07-02 evening with i338/i340); either default new items to the queue tail with an explicit --to-top opt-in, or keep top-default but require confirmation of the position line. All three are one cohesive CLI PR; tools/registry is the module.
-  status: OPEN
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 819, role: completing}
 
 - id: i342
   title: "Cut feature branches from origin/main, not local main - keep session-local IN_PROGRESS registry commits off PR branches"

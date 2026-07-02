@@ -292,6 +292,7 @@ func runPrioritize(args []string, paths mutatorPaths) {
 	if err == nil {
 		reportReadyPosition(reg2, *id)
 	}
+	printStageHint(paths)
 }
 
 // runMove implements `move --id iN --before iM` and `move --id iN --after iM`:
@@ -371,6 +372,7 @@ func runMove(args []string, paths mutatorPaths) {
 	if err == nil {
 		reportReadyPosition(reg2, *id)
 	}
+	printStageHint(paths)
 }
 
 // applyPriorityChange validates the new priority order, writes priority.yaml,
@@ -401,9 +403,10 @@ func applyPriorityChange(reg *Registry, newOrder []string, paths mutatorPaths) {
 		os.Exit(1)
 	}
 
-	// Re-load with the new priority and regenerate all views.
+	// Re-load with the new priority and regenerate all views (silently in
+	// stdout mode — mutations never dump views).
 	reg.Priority = newOrder
-	genToOutDirOrStdout(reg, paths)
+	genToOutDirOrStdout(reg, paths, false)
 }
 
 // reportReadyPosition prints a self-explanatory position summary for id after
