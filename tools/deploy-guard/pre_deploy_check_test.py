@@ -76,6 +76,11 @@ class MustNotFire(unittest.TestCase):
         'covered by pure verdict tests in\ntest_trinpush.py."',
         'echo "a; b; tools/trinload-push/sd-push.py"',
         "git commit -m 'ran tools/trinload-push/sd-push.py earlier; see notes'",
+        # i337: filenames that merely EMBED a pusher name are not pushers —
+        # the guard's own test module is the everyday case (run constantly).
+        "cd tools/trinload-push && python3 -m unittest test_trinpush -v",
+        "python3 test_trinpush.py",
+        'cat > x.md <<EOF\n"see test_trinpush.py for the loopback tests"\nEOF',
     ]
 
     def test_must_not_fire(self):
@@ -105,6 +110,11 @@ class MustFire(unittest.TestCase):
         # even with a newline inside the quotes.
         'bash -c "python3 tools/trinload-push/sd-push.py 192.168.2.75 x.mgt"',
         'sh -c "echo hi\npython3 tools/trinload-push/trinload-push.py 192.168.2.75 f.bin"',
+        # i337: an UNCLOSED quote must not swallow a chained deploy — bash still
+        # executes statements after a heredoc body's stray apostrophe.
+        "cat > /tmp/x <<EOF\ndon't worry\nEOF\n"
+        "python3 tools/trinload-push/trinload-push.py 192.168.2.75 f.bin",
+        'echo "oops\npython3 tools/trinload-push/trinload-push.py 192.168.2.75 f.bin',
     ]
 
     def test_must_fire(self):
