@@ -407,6 +407,12 @@ endif
 ; time-multiplexed across two boot runs.
 if defined(BUILD_TESTS_ENCODE)
                 call    load_enc_fix_payload
+                ; The overlay-suite code payload (i204b) HLOADs into
+                ; physical page 12 — free in this variant for the same
+                ; reason page 11 is (the BUILD_TESTS cluster is absent;
+                ; IN claims pages 7..12 only at main_assemble).  Executed
+                ; later from section-D RAM by the boot stub below.
+                call    load_overlay_suite
 endif
 
 if defined(BUILD_TESTS)
@@ -602,6 +608,33 @@ endif
 ; instead of sharing variant 1's section-C test budget.
 if defined(BUILD_TESTS_ENCODE)
                 call    run_encode_inst_self_tests
+                ; overlay_classify / literal_word / compact_inst (i204b) —
+                ; the compactor half that reuses encode_inst, so it runs in
+                ; the same variant, right after the encoder suite.  The
+                ; suite code is too large for this variant's section-C
+                ; budget, so it rides the page-12 "ovl12" payload
+                ; (src/test_overlay_suite.asm) and executes from section-D
+                ; RAM — see OVERLAY_SUITE_RAM in src/trampoline.asm.  The
+                ; payload is self-describing: [code_len u16 LE][code], with
+                ; the code org'd at OVERLAY_SUITE_RAM.  Copy it there and
+                ; call its fixed entry (the first copied byte).
+                ; Must run after run_encode_inst_self_tests: that routine's
+                ; LDIR stages the shared page-11 enc_fix payload (incl. the
+                ; toc_* overlay fixture tables) into section D at
+                ; ENC_FIX_TABLE_RAM.
+                ld      a, (LMPR_DEFAULT_RUNTIME)
+                push    af                      ; save current LMPR
+                ld      a, LMPR_OVERLAY_SUITE
+                out     (250), a                ; section A = page 12
+                ld      hl, (&0000)             ; code length (payload header)
+                ld      b, h
+                ld      c, l                    ; BC = LDIR count
+                ld      hl, &0002               ; source: code after the header
+                ld      de, OVERLAY_SUITE_RAM   ; dest: free section-D RAM
+                ldir
+                pop     af
+                out     (250), a                ; restore LMPR
+                call    OVERLAY_SUITE_RAM       ; run_overlay_classify_self_tests
 endif
 
 ; -- Run the assemble: pass 1 (table build) + pass 2 (emit) -----------

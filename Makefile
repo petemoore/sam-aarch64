@@ -1562,7 +1562,7 @@ test-encoder: sam-aarch64 tables-gen release-unstripped-tbn
 
 ci-encoder: test-encoder
 
-.PHONY: assembler assembler-prod assembler-enc-tests build-disk disk test-mem-offaxis cluster-offaxis paged-call-payload enc-fix-payload sysreg-data disasm-payload disasm-test-payload test-core ci-core check-budget
+.PHONY: assembler assembler-prod assembler-enc-tests build-disk disk test-mem-offaxis cluster-offaxis paged-call-payload enc-fix-payload overlay-suite sysreg-data disasm-payload disasm-test-payload test-core ci-core check-budget
 
 # check-budget — fail if any assembler variant has grown into the
 # &C000 stack page (the silent boot-hang cliff; see
@@ -1697,6 +1697,30 @@ $(BUILD)/enc_fix_payload.bin $(BUILD)/enc_fix_payload.sym: src/test_encode_inst_
 	    src/test_encode_inst_payload.asm
 
 enc-fix-payload: $(BUILD)/enc_fix_payload.bin
+
+# overlay_classify boot-self-test suite payload (BUILD_TESTS_ENCODE only
+# — i204b).
+#
+# src/test_overlay_suite.asm wraps the insn_overlay.asm routines + their
+# fixture driver (test_overlay_classify.asm) into a self-describing
+# [code_len u16][code] payload, org'd at OVERLAY_SUITE_RAM (imported
+# from the main binary's sym).  It is CODE executed from section-D RAM:
+# HLOADed at boot into physical page 12 by
+# src/loader.asm::load_overlay_suite, then LDIR'd to OVERLAY_SUITE_RAM
+# and called there by the boot stub in src/assembler.asm.  See
+# src/trampoline.asm (OVERLAY_SUITE_RAM) for the design rationale.
+#
+# Imports assembler-enc-tests.sym (encode_inst, insn_fold, fail, ... and
+# OVERLAY_SUITE_RAM) and enc_fix_payload.sym (the toc_* fixture tables
+# staged at ENC_FIX_TABLE_RAM).  Build order is acyclic: the main binary
+# imports only enc_fix_payload.sym; this suite imports the main sym.
+$(BUILD)/overlay_suite.bin: src/test_overlay_suite.asm $(asm_deps/src/test_overlay_suite.asm) $(BUILD)/assembler-enc-tests.sym $(BUILD)/enc_fix_payload.sym
+	pyz80 --importfile=$(BUILD)/assembler-enc-tests.sym \
+	    --importfile=$(BUILD)/enc_fix_payload.sym \
+	    --obj=$(BUILD)/overlay_suite.bin \
+	    src/test_overlay_suite.asm
+
+overlay-suite: $(BUILD)/overlay_suite.bin
 
 # paged_call self-test payload (BUILD_TESTS only).
 #
@@ -1860,7 +1884,7 @@ disk-record: assembler test-mem-offaxis cluster-offaxis paged-call-payload sysre
 # need an external zx0 compressor on PATH / a corpus sweep, and their
 # consuming tests fail with an instructive message when absent.
 .PHONY: harness-artifacts
-harness-artifacts: assembler assembler-prod assembler-enc-tests enctab cluster-offaxis test-mem-offaxis enc-fix-payload paged-call-payload sysreg-data disasm-payload disasm-test-payload zx0-payload zx0-test-payload zx0-compress-payload sam-aarch64
+harness-artifacts: assembler assembler-prod assembler-enc-tests enctab cluster-offaxis test-mem-offaxis enc-fix-payload overlay-suite paged-call-payload sysreg-data disasm-payload disasm-test-payload zx0-payload zx0-test-payload zx0-compress-payload sam-aarch64
 
 harness-sweep: harness-artifacts
 	cd tools/z80-test-harness-go && go test -count=1 ./...
@@ -1881,7 +1905,7 @@ ci-core: test-core
 # value is the encode_inst boot self-test family, which runs identically
 # on every boot — so one boot is the whole signal and a corpus sweep
 # would add cost without coverage.
-test-enc-tests: assembler-enc-tests enc-fix-payload enctab $(BUILD)/build-disk sam-aarch64
+test-enc-tests: assembler-enc-tests enc-fix-payload overlay-suite enctab $(BUILD)/build-disk sam-aarch64
 	ASSEMBLER_BIN=$(CURDIR)/$(BUILD)/assembler-enc-tests.bin ./tools/run-roundtrip.sh core tests/core/sources/inst_nop_ret.s
 
 ci-enc-tests: test-enc-tests

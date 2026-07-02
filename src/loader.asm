@@ -507,4 +507,34 @@ name_enc_fix:   defb    19
                 defm    "enc_fix   "   ; 10 chars (7 + 3 trailing spaces)
                 defm    "    "         ; 4-char ext (unused)
 
+
+; -----------------------------------------------------------------------
+; load_overlay_suite — HLOAD the i204b overlay-suite CODE payload
+; (build/overlay_suite.bin, src/test_overlay_suite.asm) into physical
+; page 12 via the trampoline.
+;
+; Unlike enc_fix (pure data), this payload is executable code: the boot
+; stub in assembler.asm later LDIRs it from page 12 into section-D RAM
+; at OVERLAY_SUITE_RAM and calls it there.  See src/trampoline.asm
+; (OVERLAY_SUITE_RAM) for the placement rationale.
+;
+; Structural twin of load_enc_fix_payload above; only the file name
+; ("ovl12") and target page (OVERLAY_SUITE_PAGE = 12) differ.
+;
+; Input:  none (precondition: enctab_trampoline_setup has been called).
+; Output: overlay_suite.bin content sits at physical page 12.
+; Clobbers: A, BC, DE, HL, IX (everything except SP).
+; -----------------------------------------------------------------------
+load_overlay_suite:
+                ld      hl, name_ovl_suite
+                ld      a, OVERLAY_SUITE_PAGE
+                jp      load_payload_generic
+
+
+; UIFA name block for "ovl12" (BUILD_TESTS_ENCODE only).  The on-disk
+; catalogue entry is created by build-disk when invoked with -ovl-suite.
+name_ovl_suite: defb    19
+                defm    "ovl12     "   ; 10 chars (5 + 5 trailing spaces)
+                defm    "    "         ; 4-char ext (unused)
+
 endif

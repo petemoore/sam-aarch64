@@ -41,7 +41,8 @@ func testDosPath(t *testing.T) string {
 func TestCheckVariantPayloads(t *testing.T) {
 	full := map[string]string{
 		"-sysreg-data": "sd13.bin", "-disasm": "d15.bin", "-zx0": "zx0.bin",
-		"-test-mem": "tm.bin", "-paged-call": "p14.bin", "-cluster": "cl.bin", "-enc-fix": "ef.bin",
+		"-test-mem": "tm.bin", "-paged-call": "p14.bin", "-cluster": "cl.bin",
+		"-enc-fix": "ef.bin", "-ovl-suite": "ovl.bin",
 	}
 	// none: never errors, even with nothing supplied.
 	if err := checkVariantPayloads("none", map[string]string{}); err != nil {
@@ -68,11 +69,22 @@ func TestCheckVariantPayloads(t *testing.T) {
 	// variant whose boot actually HLOADs it — i234): error.
 	noEncFix := map[string]string{
 		"-sysreg-data": "sd13.bin", "-disasm": "d15.bin", "-zx0": "zx0.bin",
+		"-ovl-suite": "ovl.bin",
 	}
 	if err := checkVariantPayloads("enc-tests", noEncFix); err == nil {
 		t.Error("enc-tests missing -enc-fix should error (the i69 omission class)")
 	} else if !strings.Contains(err.Error(), "-enc-fix") {
 		t.Errorf("error should name the missing -enc-fix flag, got %v", err)
+	}
+	// enc-tests missing -ovl-suite (same omission class, i204b): error.
+	noOvlSuite := map[string]string{
+		"-sysreg-data": "sd13.bin", "-disasm": "d15.bin", "-zx0": "zx0.bin",
+		"-enc-fix": "ef.bin",
+	}
+	if err := checkVariantPayloads("enc-tests", noOvlSuite); err == nil {
+		t.Error("enc-tests missing -ovl-suite should error (the i69 omission class)")
+	} else if !strings.Contains(err.Error(), "-ovl-suite") {
+		t.Errorf("error should name the missing -ovl-suite flag, got %v", err)
 	}
 	// test missing -cluster: error (the off-axis suite set).
 	noCluster := map[string]string{
@@ -101,7 +113,7 @@ func TestCheckVariantPayloads(t *testing.T) {
 	}
 	if err := checkVariantPayloads("enc-tests", map[string]string{
 		"-sysreg-data": "sd13.bin", "-disasm": "d15.bin", "-zx0": "zx0.bin",
-		"-enc-fix": "ef.bin",
+		"-enc-fix": "ef.bin", "-ovl-suite": "ovl.bin",
 	}); err != nil {
 		t.Errorf("enc-tests should not require the off-axis test payloads, got %v", err)
 	}

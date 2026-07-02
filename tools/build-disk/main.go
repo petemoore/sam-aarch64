@@ -242,11 +242,12 @@ func serveConfigAddr(mapText string) (uint32, error) {
 //   - test boot (BUILD_TESTS) HLOADs those plus the off-axis self-test payloads
 //     test-mem, paged-call (p14), cluster.
 //   - enc-tests boot (BUILD_TESTS_ENCODE, i234) HLOADs the prod set plus the
-//     page-11 encode_inst fixture payload enc-fix.
+//     page-11 encode_inst fixture payload enc-fix and the page-12
+//     overlay_classify suite payload ovl-suite (i204b).
 var variantRequiredFlags = map[string][]string{
 	"prod":      {"-sysreg-data", "-disasm", "-zx0"},
 	"test":      {"-sysreg-data", "-disasm", "-zx0", "-test-mem", "-paged-call", "-cluster"},
-	"enc-tests": {"-sysreg-data", "-disasm", "-zx0", "-enc-fix"},
+	"enc-tests": {"-sysreg-data", "-disasm", "-zx0", "-enc-fix", "-ovl-suite"},
 }
 
 // checkVariantPayloads enforces the i207 boot-payload completeness guard. paths
@@ -286,6 +287,7 @@ func main() {
 	pagedCallPath := flag.String("paged-call", "", "path to the paged_call self-test page-14 payload (BUILD_TESTS only; plan-PR 1)")
 	clusterPath := flag.String("cluster", "", "path to the off-axis page-12 M5+misc encoder self-test cluster (build/test_cluster.bin; BUILD_TESTS only; M6 budget-relief)")
 	encFixPath := flag.String("enc-fix", "", "path to the off-axis page-11 encode_inst fixture data payload (build/enc_fix_payload.bin; BUILD_TESTS_ENCODE / enc-tests variant only; i69/i234)")
+	ovlSuitePath := flag.String("ovl-suite", "", "path to the page-12 overlay_classify boot-self-test suite payload (build/overlay_suite.bin; BUILD_TESTS_ENCODE / enc-tests variant only; i204b)")
 	sysregDataPath := flag.String("sysreg-data", "", "path to the page-13 sysreg lookup data (build/sysreg_data.bin; PRODUCTION + test; PR-2)")
 	disasmPath := flag.String("disasm", "", "path to the page-15 disassembler binary (build/disasm.bin; PRODUCTION + test; strand-B PR-3)")
 	zx0Path := flag.String("zx0", "", "path to the page-13 zx0 compressor+decoder payload (build/zx0.bin; PRODUCTION + test; i68)")
@@ -391,6 +393,7 @@ func main() {
 		"-paged-call":  *pagedCallPath,
 		"-cluster":     *clusterPath,
 		"-enc-fix":     *encFixPath,
+		"-ovl-suite":   *ovlSuitePath,
 	}); err != nil {
 		log.Fatal(err)
 	}
@@ -562,6 +565,27 @@ func main() {
 		}
 	}
 
+	// Slot 5d (optional): overlay_classify boot-self-test suite payload
+	// (ovl12, i204b).  CODE, not data: loaded at boot by
+	// src/loader.asm::load_overlay_suite via HGTHD+trampoline into
+	// physical page 12, then LDIR'd by the boot stub in src/assembler.asm
+	// to section-D RAM at OVERLAY_SUITE_RAM (&F080) and executed there.
+	// Self-describing wire format [code_len u16][code]; assembled from
+	// src/test_overlay_suite.asm against the main binary's sym export.
+	// BUILD_TESTS_ENCODE (enc-tests) variant only.  Recorded load address
+	// is documentary (the trampoline supplies HL = &8000 and target
+	// page = 12).
+	if *ovlSuitePath != "" {
+		ovlSuiteData, err := os.ReadFile(*ovlSuitePath)
+		if err != nil {
+			log.Fatalf("read ovl-suite payload: %v", err)
+		}
+		const OvlSuiteLoadAddress uint32 = 0x8000
+		if err := disk.AddCodeFile("ovl12", ovlSuiteData, OvlSuiteLoadAddress, 0); err != nil {
+			log.Fatalf("AddCodeFile(ovl12): %v", err)
+		}
+	}
+
 	// Slot 6 (optional): paged_call self-test payload (p14).  Loaded at
 	// boot by src/loader.asm::load_page14_payload via HGTHD +
 	// trampoline into physical page 14, then exercised by
@@ -676,6 +700,10 @@ func main() {
 	if *encFixPath != "" {
 		encFixSize, _ := os.Stat(*encFixPath)
 		fmt.Printf("enc_fix:    %d bytes\n", encFixSize.Size())
+	}
+	if *ovlSuitePath != "" {
+		ovlSuiteSize, _ := os.Stat(*ovlSuitePath)
+		fmt.Printf("ovl12:      %d bytes\n", ovlSuiteSize.Size())
 	}
 	if *sysregDataPath != "" {
 		sysregDataSize, _ := os.Stat(*sysregDataPath)

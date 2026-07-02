@@ -3929,7 +3929,7 @@
   title: "i48c-b8e-4: overlayClassify + literalWord (overlay mirror + PC-invariance probe)"
   description: |
     Fourth/final brick of i48c-b8e (see umbrella). Port the overlay/literal wiring that REUSES the b8e dispatcher. overlayClassify (overlay.go:82-163) mirrors encodeInst but returns {relocated-slot,expr,isLitpool,litWidth,rt} instead of a base word - classifyMem (overlay.go:177-220), classifyMovImm (overlay.go:230-254); special/compound symbolic forms with no overlay support return error. literalWord (compact.go:354-370) probes encodeInst at pcProbeA=0 and pcProbeB=0x40000: either errors -> keep symbolic; wA!=wB -> PC-dependent (keep symbolic); wA==wB -> bare 4-byte literal. ~100-150 LOC, decision trees over brick1/2/3 dispatcher. Depends on bricks 1-3. Faithful port (CLAUDE.md s6); Go authority overlay.go overlayClassify + compact.go literalWord. Completes b8e: text->.tbn can encode symbolic INST records on the SAM. SCOPE NOTE (from PR #561 review): the form-table path also has a bare Imm16 SlotKind (0x08, used only by udf/mnemonic 89) that brick-1 (i199) does NOT encode — encode_inst cleanly fail-tags it (ENC_TAG_BADSLOT) rather than mis-encoding. encode_imm_n caps at 7-bit width, so Imm16 needs its own 16-bit placement encoder. Ensure full SlotKind coverage (incl. plain Imm16) before closing b8e.
-  status: OPEN
+  status: DONE
   depends_on: [i199, i203, i201]
   kind: umbrella
   owner: agent
@@ -3948,11 +3948,13 @@
 - id: i204b
   title: "i48c-b8e-4b: overlay_classify + literal_word + compact_inst (Z80 port + boot self-test)"
   description: |
-    Faithful Z80 port of overlay.go::overlayClassify (+classifyMem/classifyMovImm/exprContextDep/foldSlotPCDependent), compact.go::literalWord + compactInst, litinsts.go::IsFullyLiteral, and aarch64enc::ZeroSlot, wired as a BUILD_TESTS boot self-test asserting Z80 output against Go-authority-computed values. The port is WRITTEN, Go-authority-verified, and staged (scratchpad i204b-insn_overlay.asm / i204b-test_overlay_classify.asm; Go authority test tools/sam-aarch64/assemble/overlay_classify_fixtures_test.go landed by the i204a PR). BLOCKED ON BUDGET: the routines are ~1300 B and, like encode_inst, MUST be inline in section C (they call encode_inst which reads ENCTAB in section A, so they cannot be evicted off-axis — the registry's i69/i205 analysis confirms lever-1 is exhausted for ENCTAB-coupled code). The test-variant assembler.bin has ~11 B of &C000 headroom; commoning recovers tens of bytes, not 1300. Depends on i234 (a budget-relief item) which must free section-C space (serial test bay / multiple-boot variant / page-pool memory model per q36/i2) before these can land + the boot self-test runs green.
-  status: OPEN
+    DONE 2026-07-03 (PR 826): overlayClassify/classifyMem/classifyMovImm/exprContextDep/foldSlotPCDependent + literalWord/compactInst + IsFullyLiteral + ZeroSlot ported faithfully (each routine cites its Go source; staged-port re-verification caught a real BC-clobber bug in is_fully_literal). Wired as a boot self-test in the enc-tests variant asserting the 16 Go-authority fixtures. Budget: the routines (1251 B) exceeded the 1077 B inline headroom, so the suite rides its own page-12 payload (ovl12) executing from section-D RAM &F080 - HMPR-controlled, so LMPR-immune inside the ENCTAB bracket (satisfies the i69/i205 constraint, which bars the LMPR-swapped A/B cluster, not section D); net inline cost 53 B, enc-tests headroom 1015 B. Fixtures ride the enc_fix payload tail past the litpool clobber zone. Harness: encode+overlay to OK + FAILc2 negative control; SimCoupé ci-enc-tests PASS.
+  status: DONE
   depends_on: [i234]
   kind: leaf
   owner: agent
+  prs:
+    - {num: 826, role: completing}
   parent: i204
 
 - id: i205

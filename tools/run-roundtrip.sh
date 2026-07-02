@@ -136,13 +136,14 @@ if [ "$ASSEMBLER_BIN" = "$ROOT/build/assembler.bin" ]; then
     )
 elif [ "$ASSEMBLER_BIN" = "$ROOT/build/assembler-enc-tests.bin" ]; then
     # Encode self-test variant (i234) — needs the page-11 enc_fix fixture
-    # payload (without it on the disk the encode boot self-test hangs);
-    # disasm/zx0 stay the prod binaries (no disasm/zx0 self-test runs in
-    # this variant).
+    # payload and the page-12 overlay-suite code payload (i204b); without
+    # either on the disk the boot self-tests hang.  disasm/zx0 stay the
+    # prod binaries (no disasm/zx0 self-test runs in this variant).
     disk_variant="enc-tests"
-    make -s enc-fix-payload
+    make -s enc-fix-payload overlay-suite
     test_variant_flags=(
         -enc-fix "$ROOT/build/enc_fix_payload.bin"
+        -ovl-suite "$ROOT/build/overlay_suite.bin"
     )
 fi
 "$ROOT/build/build-disk" \

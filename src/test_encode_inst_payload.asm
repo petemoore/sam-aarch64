@@ -550,6 +550,178 @@ enc_fix_mem_str_w:      defb    &02, &16, &08, &01, &17, &02, &00, &01, &04
 ; op0: IMM_EXPR (&05), len 3, PUSH_IMM16 (&02), 0x1234 LE
 enc_fix_udf:            defb    &05, &03, &00, &02, &34, &12
 
+; =======================================================================
+; i204b overlay_classify / compact_inst fixtures (test_overlay_classify.asm)
+;
+; Every row mirrors one case in tools/sam-aarch64/assemble/
+; overlay_classify_fixtures_test.go::TestOverlayClassifyFixtures — that Go
+; test is the authority (CLAUDE.md §6) and the drift guard: it re-derives
+; each expected slot / flag / base word from overlayClassify + compactInst
+; and logs them (go test -run TestOverlayClassifyFixtures -v); the values
+; below are those logged bytes.
+;
+; PLACEMENT: this block sits at the payload tail, past offset &280.  The
+; first &180 bytes of the section-D copy (&E100-&E27F) are LITPOOL_PC_MAP,
+; which run_encode_litpool_dispatch_test (the tail of
+; run_encode_inst_self_tests) overwrites via litpool_init BEFORE the
+; overlay suite runs — data below offset &280 would be clobbered.
+; =======================================================================
+
+; -- compact_inst fixture table (12-byte rows; see TOC_CI_ROW_LEN) -------
+;   +0 pc_lo16 (LE)   PASS_PC seed (high 16 bits := 0)
+;   +2 fixture ptr    -> operand stream (0 = end of table)
+;   +4 opcount
+;   +5 mnemonic id (LE)
+;   +7 expected ovl_is_literal (1 = bare literal, 0 = overlay)
+;   +8 expected base word (4 LE bytes)
+toc_ci_table:
+; lit_nop: literal
+                defw    &0000
+                defw    toc_op_nop
+                defb    0
+                defw    0
+                defb    1
+                defb    &1f, &20, &03, &d5
+; lit_add_x0_x1_5: literal
+                defw    &0000
+                defw    toc_op_add5
+                defb    3
+                defw    1
+                defb    1
+                defb    &20, &14, &00, &91
+; sym_b_const (b 0x1010 @0x1000): PC-variant -> overlay, Branch26 zeroed
+                defw    &1000
+                defw    toc_op_b
+                defb    1
+                defw    9
+                defb    0
+                defb    &00, &00, &00, &14
+; b_branch26 (same fixture, the generic-slot PC-dependent case)
+                defw    &1000
+                defw    toc_op_b
+                defb    1
+                defw    9
+                defb    0
+                defb    &00, &00, &00, &14
+; cbz_branch19 (cbz x0,0x1008 @0x1000)
+                defw    &1000
+                defw    toc_op_cbz
+                defb    2
+                defw    20
+                defb    0
+                defb    &00, &00, &00, &b4
+; adrp_slot (adrp x0,0x3000 @0x1000)
+                defw    &1000
+                defw    toc_op_adrp
+                defb    2
+                defw    13
+                defb    0
+                defb    &00, &00, &00, &90
+; adr_slot (adr x0,0x1004 @0x1000)
+                defw    &1000
+                defw    toc_op_adr
+                defb    2
+                defw    48
+                defb    0
+                defb    &00, &00, &00, &10
+; ldr_lit_branch19 (ldr x0,0x1008 @0x1000)
+                defw    &1000
+                defw    toc_op_ldrlit
+                defb    2
+                defw    5
+                defb    0
+                defb    &00, &00, &00, &58
+; sentinel
+                defw    &0000
+                defw    0
+                defb    0
+                defw    0
+                defb    0
+                defb    0, 0, 0, 0
+
+; -- overlay_classify fixture table (10-byte rows; TOC_OC_ROW_LEN) -------
+;   +0 fixture ptr    -> operand stream (0 = end of table)
+;   +2 opcount
+;   +3 pc_lo16 (LE)   PASS_PC seed
+;   +5 mnemonic id (LE)
+;   +7 expected slot
+;   +8 expected is_litpool
+;   +9 expected litwidth
+toc_oc_table:
+; add_lo12: slot 6 (FoldAddSubImm12)
+                defw    toc_op_add_lo12
+                defb    3
+                defw    &0000
+                defw    1
+                defb    6, 0, 0
+; ldr_memimm12: slot 7 (FoldMemImm12)
+                defw    toc_op_ldr_mem
+                defb    2
+                defw    &0000
+                defw    5
+                defb    7, 0, 0
+; stur_memimm9: slot 8 (FoldMemImm9)
+                defw    toc_op_stur_mem
+                defb    2
+                defw    &0000
+                defw    74
+                defb    8, 0, 0
+; ldp_pairimm7: slot 11 (FoldPairImm7)
+                defw    toc_op_ldp_mem
+                defb    3
+                defw    &0000
+                defw    7
+                defb    11, 0, 0
+; mov_movz: slot 13 (FoldMovzAuto)
+                defw    toc_op_mov_movz
+                defb    2
+                defw    &0000
+                defw    3
+                defb    13, 0, 0
+; mov_logical: slot 10 (FoldLogical)
+                defw    toc_op_mov_log
+                defb    2
+                defw    &0000
+                defw    3
+                defb    10, 0, 0
+; litpool: slot 12 (FoldLitpool19), is_litpool=1, width 8, rt 0
+                defw    toc_op_litpool
+                defb    2
+                defw    &0000
+                defw    5
+                defb    12, 1, 8
+; sentinel
+                defw    0
+                defb    0
+                defw    0
+                defw    0
+                defb    0, 0, 0
+
+; -- i204b operand streams (exact Go OperandWriter bytes) ----------------
+toc_op_nop:                                         ; (no operands)
+toc_op_add5:    defb    &03, &00, &03, &01, &05, &02, &00, &01, &05
+toc_op_b:       defb    &05, &03, &00, &02, &10, &10
+toc_op_cbz:     defb    &01, &00, &05, &03, &00, &02, &08, &10
+toc_op_adrp:    defb    &01, &00, &05, &03, &00, &02, &00, &30
+toc_op_adr:     defb    &01, &00, &05, &03, &00, &02, &04, &10
+toc_op_ldrlit:  defb    &01, &00, &05, &03, &00, &02, &08, &10
+; add x0,x1,:lo12:sym (PUSH_SYM id 0, REL_LO12)
+toc_op_add_lo12: defb   &03, &00, &03, &01, &05, &04, &00, &05, &00, &00, &30
+; ldr x0,[x1,#sym]  (MemBaseOff, expr = PUSH_SYM id 0)
+toc_op_ldr_mem: defb    &01, &00, &08, &01, &01, &03, &00, &05, &00, &00
+; stur x0,[x1,#sym]
+toc_op_stur_mem: defb   &01, &00, &08, &01, &01, &03, &00, &05, &00, &00
+; ldp x0,x1,[x2,#sym]
+toc_op_ldp_mem: defb    &01, &00, &01, &01, &08, &01, &02, &03, &00, &05, &00, &00
+; mov x0,#0x12340000  (movz autoselect)
+toc_op_mov_movz: defb   &01, &00, &05, &05, &00, &03, &00, &00, &34, &12
+; mov x2,#0x5555555555555555  (logical)
+toc_op_mov_log: defb    &01, &02, &05, &09, &00, &04, &55, &55, &55, &55, &55, &55, &55, &55
+; ldr x0,=sym  (litpool width 8, expr PUSH_SYM id 0)
+toc_op_litpool: defb    &01, &00, &0c, &08, &03, &00, &05, &00, &00
+; lsl x0,x1,#sym  (loud gap)
+toc_op_loud_lsl: defb   &01, &00, &01, &01, &05, &03, &00, &05, &00, &00
+
 ; Total payload size: the LDIR in run_encode_inst_self_tests uses this
 ; count as BC.  Computed by the assembler so no manual update is needed
 ; when fixtures are added.
