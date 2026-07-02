@@ -38,8 +38,13 @@ SECTOR = 512
 ENTRIES_PER_SECTOR = 32
 
 
-def discover_inventory(sock, sam, attempts=5):
-    """Run list_records' '?' handshake; return (sam_addr, record_count) or (None, None)."""
+def discover_inventory(sock, sam, attempts=15):
+    """Run list_records' '?' handshake; return (sam_addr, record_count) or (None, None).
+
+    The pushed program's startup (EEPROM read + ENC init + CSD ladder + list
+    scan) takes ~12 s on a 64 GB card, so the stage-2 window must outlast it:
+    15 attempts x 2 s timeout = 30 s (i330).
+    """
     for attempt in range(attempts):
         sock.sendto(b"?", (sam, PORT))
         try:

@@ -109,11 +109,15 @@ def push_mgt(sam, mgt_path, sd_push_bin):
         print("FAILED: could not push/run sd_push (is TrinLoad listening on the SAM?)")
         return False
 
-    # Stage 2: talk sd_push's own protocol on the same port.
+    # Stage 2: talk sd_push's own protocol on the same port. sd_push's startup
+    # (EEPROM read + ENC init + CSD ladder + free-record list scan) takes ~12 s
+    # on a 64 GB card, so the discovery window must outlast it: 15 attempts x
+    # 2 s timeout = 30 s (i330; 5 x 2 s declared failure while it was still
+    # coming up).
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.settimeout(2.0)
-    dst = discover(sock, sam)
+    dst = discover(sock, sam, attempts=15)
     if dst is None:
         print("FAILED: sd_push did not answer discovery (it may not have come up)")
         return False
