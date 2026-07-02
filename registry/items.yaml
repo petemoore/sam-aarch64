@@ -5664,9 +5664,11 @@
   title: "boot-record.py: refuse/warn when the target record's image overlaps the record-boot continuation stack (&7FE0-&7FFF)"
   description: |
     i331 finding: B-DOS's record-boot continuation runs its working stack at &7FFx (SP descends from &8000 through the hook dispatch + ROM1 load-continuation). A pushed boot_record for a record whose AUTO image load range covers &7FE0-&7FFF (a StartPage-0 image larger than &1FE0 bytes, e.g. trinload's 11KB at &6000 = record 3) interleaves sector deposits with live stack frames -- both corrupt, control pops image bytes as return addresses, and the boot wanders into a deaf polling orbit instead of exec'ing (emulation-reproduced in trinload_first_boot_faithful_test.go; hardware-consistent with the i319a-b2 instant-return probe). The launcher can read the target record's directory entry (StartPage + length) and refuse -- or at minimum warn -- before pushing a boot for an overlapping image. Images loading at &8000+ (the i332 serve/feature vessel class) are unaffected.
-  status: OPEN
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 814, role: completing}
 
 - id: i335
   title: "sd-push.py finalize is single-shot: a lost 'D'/'E' UDP reply misreports a completed push as failure"
