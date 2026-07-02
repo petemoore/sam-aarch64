@@ -64,6 +64,13 @@ ci-disasm-roundtrip: test-disasm
 ci-netboot-oracle:
 	cd tools/netboot-oracle && SKIP_PRIVATE_TESTS=true go test ./...
 
+# ci-build-disk — the disk-composer's Go unit tests (variant guard, serve
+# config overlay/vessel shapes, the i319b-b1 assembler vessel shapes). Pure
+# Go; composes disks in temp dirs against the in-repo reference DOS.
+.PHONY: ci-build-disk
+ci-build-disk:
+	cd tools/build-disk && go test ./...
+
 # ci-registry — run the registry CLI's Go unit tests (id-allocation / nextSubID,
 # parent invariants, gate column, in-progress, and the live-registry conformance
 # test). The registry-sync job validates the LIVE data during gen; this gates the
@@ -1287,7 +1294,7 @@ sysreg-sync-check:
 # modules to STATICCHECK_MODULES as they appear.
 .PHONY: staticcheck
 STATICCHECK := honnef.co/go/tools/cmd/staticcheck@v0.7.0
-STATICCHECK_MODULES := comment-bench sam-aarch64-format sam-aarch64 aarch64enc aarch64dec tables-gen z80-test-harness-go zx0-greedy editor-prototype netboot-oracle netboot-oracle/z80 registry sampage
+STATICCHECK_MODULES := build-disk comment-bench sam-aarch64-format sam-aarch64 aarch64enc aarch64dec tables-gen z80-test-harness-go zx0-greedy editor-prototype netboot-oracle netboot-oracle/z80 registry sampage
 staticcheck:
 	for m in $(STATICCHECK_MODULES); do \
 	    echo "=== staticcheck (U1000) $$m ==="; \
@@ -1695,6 +1702,26 @@ disk: assembler test-mem-offaxis cluster-offaxis enc-fix-payload paged-call-payl
 	    -disasm $(BUILD)/disasm-test.bin \
 	    -zx0 $(BUILD)/zx0-test.bin \
 	    $(BUILD)/assembler.bin $(BUILD)/enctab.enc $(BUILD)/test.mgt
+
+# disk-record (i319b-b1) — the assembler test disk as a boot_record-bootable
+# RECORD vessel: the AUTO BASIC + "assembler" pair becomes ONE auto-executing
+# "AUTOasm" CODE file (B-DOS ALHK runs the record's AUTO* file directly; a
+# BASIC-auto record never boots, i332); every HLOADed sibling payload ships
+# unchanged. Store with sd-push, boot with boot-record.py. The floppy vessel
+# (build/test.mgt) is unchanged.
+.PHONY: disk-record
+disk-record: assembler test-mem-offaxis cluster-offaxis enc-fix-payload paged-call-payload sysreg-data disasm-test-payload zx0-test-payload enctab $(BUILD)/build-disk
+	$(BUILD)/build-disk \
+	    -variant test \
+	    -code-auto \
+	    -test-mem $(BUILD)/test_mem.bin \
+	    -cluster $(BUILD)/test_cluster.bin \
+	    -enc-fix $(BUILD)/enc_fix_payload.bin \
+	    -paged-call $(BUILD)/paged_call_test_payload.bin \
+	    -sysreg-data $(BUILD)/sysreg_data.bin \
+	    -disasm $(BUILD)/disasm-test.bin \
+	    -zx0 $(BUILD)/zx0-test.bin \
+	    $(BUILD)/assembler.bin $(BUILD)/enctab.enc $(BUILD)/test_record.mgt
 
 # harness-sweep — one-shot "build every artefact the koron-go/z80 harness
 # reads, then run its full Go test suite" (tools/z80-test-harness-go).

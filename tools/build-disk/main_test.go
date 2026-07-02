@@ -361,3 +361,106 @@ func TestBuildServeRecordVesselCodeAuto(t *testing.T) {
 		t.Errorf("Length = %d, want %d", got, bigLen)
 	}
 }
+
+// TestAddAssemblerSlotsCodeAuto — the i319b-b1 assembler RECORD vessel: one
+// auto-executing "AUTOasm" CODE file (load = exec = &8000) replaces the AUTO
+// BASIC + "assembler" pair, so B-DOS boot_record's ALHK can run it directly.
+func TestAddAssemblerSlotsCodeAuto(t *testing.T) {
+	body := make([]byte, 2048)
+	for i := range body {
+		body[i] = byte((i*7 + 3) & 0xFF)
+	}
+
+	disk := samfile.NewDiskImage()
+	auto, err := addAssemblerSlots(disk, true, body)
+	if err != nil {
+		t.Fatalf("addAssemblerSlots(codeAuto): %v", err)
+	}
+	if auto != nil {
+		t.Error("record vessel should not compose an AUTO BASIC file")
+	}
+
+	out := filepath.Join(t.TempDir(), "vessel.mgt")
+	if err := disk.Save(out); err != nil {
+		t.Fatal(err)
+	}
+	di, err := samfile.Load(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Neither floppy-vessel file rides the record vessel.
+	if _, err := di.File("auto"); err == nil {
+		t.Error("record vessel should not ship a BASIC auto file")
+	}
+	if _, err := di.File("assembler"); err == nil {
+		t.Error("record vessel should not ship a separate 'assembler' file")
+	}
+
+	f, err := di.File("AUTOasm")
+	if err != nil {
+		t.Fatalf("File(AUTOasm): %v", err)
+	}
+	if !bytes.Equal(f.Body, body) {
+		t.Error("AUTOasm body differs from the padded assembler image")
+	}
+
+	// Dir entry: load &8000, auto-exec ARMED at &8000 (the CODE-auto invariant).
+	var fe *samfile.FileEntry
+	for _, e := range di.DiskJournal() {
+		if e.Name.String() == "AUTOasm" {
+			fe = e
+			break
+		}
+	}
+	if fe == nil {
+		t.Fatal("AUTOasm missing from the directory")
+	}
+	if got := fe.StartAddress(); got != LoadAddress {
+		t.Errorf("StartAddress = &%04X, want &%04X", got, LoadAddress)
+	}
+	if fe.ExecutionAddressDiv16K == 0xFF {
+		t.Fatal("ExecutionAddressDiv16K = &FF — auto-exec is not armed")
+	}
+	if got := fe.ExecutionAddress(); got != LoadAddress {
+		t.Errorf("ExecutionAddress = &%04X, want &%04X", got, LoadAddress)
+	}
+}
+
+// TestAddAssemblerSlotsFloppyShape — the codeAuto=false floppy vessel is
+// unchanged: AUTO BASIC + a NON-auto-exec "assembler" CODE file.
+func TestAddAssemblerSlotsFloppyShape(t *testing.T) {
+	body := make([]byte, 2048)
+	disk := samfile.NewDiskImage()
+	auto, err := addAssemblerSlots(disk, false, body)
+	if err != nil {
+		t.Fatalf("addAssemblerSlots(floppy): %v", err)
+	}
+	if auto == nil {
+		t.Fatal("floppy vessel must compose the AUTO BASIC file")
+	}
+
+	out := filepath.Join(t.TempDir(), "floppy.mgt")
+	if err := disk.Save(out); err != nil {
+		t.Fatal(err)
+	}
+	di, err := samfile.Load(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := di.File("auto"); err != nil {
+		t.Errorf("File(auto): %v", err)
+	}
+	if _, err := di.File("AUTOasm"); err == nil {
+		t.Error("floppy vessel should not ship an AUTOasm file")
+	}
+	for _, e := range di.DiskJournal() {
+		if e.Name.String() == "assembler" {
+			if e.ExecutionAddressDiv16K != 0xFF {
+				t.Error("floppy 'assembler' file must NOT be auto-exec (BASIC CALLs it)")
+			}
+			return
+		}
+	}
+	t.Fatal("'assembler' missing from the directory")
+}

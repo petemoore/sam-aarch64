@@ -271,6 +271,7 @@ func main() {
 	netbootConfigName := flag.String("netboot-config-name", "cfg", "i121i: directory-entry name for the SERVE_CONFIG CODE file (the AUTO BASIC LOADs this name)")
 	netbootCodeAuto := flag.Bool("netboot-code-auto", false, "i332: compose the -netboot binary as ONE auto-executing CODE file (exec = load address) instead of the AUTO BASIC + CODE pair, baking any -netboot-config-map config into the file bytes; the record vessel B-DOS boot_record can boot (its ALHK runs the AUTO* CODE file directly — the BASIC-auto run leg never fires on that path). -netboot-name must start with \"AUTO\"")
 	variant := flag.String("variant", "none", "i207: assembler-disk boot-payload completeness guard — 'test' or 'prod' require every payload the boot loader HLOADs to be present (a missing one silently HANGS SimCoupé); 'none' (default) skips the check (minimal boot-test disks)")
+	codeAuto := flag.Bool("code-auto", false, "i319b-b1: compose the assembler as ONE auto-executing CODE file 'AUTOasm' (exec = load &8000) instead of the AUTO BASIC + 'assembler' pair, keeping every HLOADed sibling file on the disk — the boot_record-bootable RECORD vessel for the assembler disk (B-DOS ALHK runs the record's AUTO* file directly; a BASIC-auto record never boots, i332). The BASIC-auto shape stays the floppy vessel")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr,
 			"usage: %s [-dos <path>] [-dos-name <name>] [-dos-load <addr>] [-test-mem <path>] [-paged-call <path>] [-cluster <path>] [-enc-fix <path>] [-sysreg-data <path>] [-disasm <path>] [-zx0 <path>] <assembler.bin> <enctab.enc> [<in.tbn>] <output.mgt>\n   or: %s -netboot <code.bin> [-netboot-name <name>] [-dos ...] <output.mgt>\n",
@@ -398,37 +399,8 @@ func main() {
 		log.Fatalf("SetStartAddressPageUnusedBits(%s): %v", *dosName, err)
 	}
 
-	// Slot 1: AUTO BASIC.
-	// StartLine=10 marks the entry as auto-RUN (SAM ROM checks dir byte 0xF2=0
-	// to dispatch BASIC start-line auto-RUN; inherited from the original M0
-	// build-disk tool, since deleted — see git history).
-	auto := &sambasic.File{
-		StartLine: 10,
-		Lines: []sambasic.Line{
-			{Number: 10, Tokens: []sambasic.Token{
-				sambasic.CLEAR,
-				sambasic.Number(uint16(LoadAddress - 1)),
-			}},
-			{Number: 20, Tokens: []sambasic.Token{
-				sambasic.LOAD,
-				sambasic.String(`"assembler"`),
-				sambasic.CODE,
-				sambasic.Number(uint16(LoadAddress)),
-			}},
-			{Number: 30, Tokens: []sambasic.Token{
-				sambasic.CALL,
-				sambasic.Number(uint16(LoadAddress)),
-			}},
-		},
-	}
-	if err := disk.AddBasicFile("auto", auto); err != nil {
-		log.Fatalf("AddBasicFile(auto): %v", err)
-	}
-
-	// Slot 2: assembler CODE file (M3 Z80 binary).
-	//
-	// Pad the body so the FILE occupies an integer number of full tracks
-	// from the point where it starts (T6S3).  This guarantees the next
+	// The assembler CODE body is padded so the FILE occupies an integer number
+	// of full tracks from the point where it starts.  This guarantees the next
 	// file (enctab.enc) starts at the beginning of a new track, which in
 	// turn guarantees no track-step occurs during enctab.enc's HLOAD —
 	// a prerequisite to keep the HLOAD destination invariant tight (see
@@ -455,8 +427,10 @@ func main() {
 	}
 	padded := make([]byte, targetBodyLen)
 	copy(padded, assemblerBin)
-	if err := disk.AddCodeFile("assembler", padded, LoadAddress, 0); err != nil {
-		log.Fatalf("AddCodeFile(assembler): %v", err)
+
+	auto, err := addAssemblerSlots(disk, *codeAuto, padded)
+	if err != nil {
+		log.Fatal(err)
 	}
 
 	// Slot 3: enctab.enc CODE file. Loaded at startup by src/loader.asm
@@ -637,11 +611,16 @@ func main() {
 	}
 
 	fmt.Printf("%-12s%d bytes  T4S1-T5S10\n", *dosName+":", len(dosBin))
-	fmt.Printf("auto:       %d bytes   T6S1-T6S2  (PROG=%d, +VARS=%d, +GAP=%d)\n",
-		len(auto.Bytes()), auto.NVARSOffset(),
-		auto.NUMENDOffset()-auto.NVARSOffset(),
-		auto.SAVARSOffset()-auto.NUMENDOffset())
-	fmt.Printf("assembler:  %d bytes     T6S3\n", len(assemblerBin))
+	if *codeAuto {
+		fmt.Printf("AUTOasm:    %d bytes (%d code + pad, two-page)  auto-exec &%04X (record vessel)\n",
+			len(padded), len(assemblerBin), LoadAddress)
+	} else {
+		fmt.Printf("auto:       %d bytes   T6S1-T6S2  (PROG=%d, +VARS=%d, +GAP=%d)\n",
+			len(auto.Bytes()), auto.NVARSOffset(),
+			auto.NUMENDOffset()-auto.NVARSOffset(),
+			auto.SAVARSOffset()-auto.NUMENDOffset())
+		fmt.Printf("assembler:  %d bytes     T6S3\n", len(assemblerBin))
+	}
 	fmt.Printf("enctab.enc: %d bytes     T6S4\n", len(enctabData))
 	if inPath != "" {
 		inSize, _ := os.Stat(inPath)
@@ -694,6 +673,60 @@ type netbootConfig struct {
 	addr     uint32
 	data     []byte
 	strategy string
+}
+
+// addAssemblerSlots writes the assembler disk's boot slot(s) after the DOS.
+// The floppy vessel (codeAuto=false) ships the AUTO BASIC + "assembler" CODE
+// pair; the record vessel (codeAuto=true, i319b-b1) ships ONE auto-executing
+// "AUTOasm" CODE file instead — B-DOS boot_record's ALHK runs the record's
+// AUTO* file directly and never fires a BASIC RUN leg (i332). The BASIC's
+// CLEAR/LOAD/CALL carries nothing load-bearing here: the assembler's start:
+// sets its own SP and CAPTURES the boot LMPR/HMPR rather than assuming
+// BASIC's (src/assembler.asm), so exec = load &8000 lands in a state it
+// already handles. Every sibling file the assembler HLOADs by name post-exec
+// (enctab.enc, sd13, d15, zx013, the BUILD_TESTS payloads) ships as usual —
+// a booted record IS the mounted disk those HLOADs read from. Returns the
+// AUTO BASIC file (nil for the record vessel) for the build log.
+func addAssemblerSlots(disk *samfile.DiskImage, codeAuto bool, padded []byte) (*sambasic.File, error) {
+	if codeAuto {
+		if err := disk.AddCodeFile("AUTOasm", padded, LoadAddress, LoadAddress); err != nil {
+			return nil, fmt.Errorf("AddCodeFile(AUTOasm): %w", err)
+		}
+		return nil, nil
+	}
+
+	// Slot 1: AUTO BASIC.
+	// StartLine=10 marks the entry as auto-RUN (SAM ROM checks dir byte 0xF2=0
+	// to dispatch BASIC start-line auto-RUN; inherited from the original M0
+	// build-disk tool, since deleted — see git history).
+	auto := &sambasic.File{
+		StartLine: 10,
+		Lines: []sambasic.Line{
+			{Number: 10, Tokens: []sambasic.Token{
+				sambasic.CLEAR,
+				sambasic.Number(uint16(LoadAddress - 1)),
+			}},
+			{Number: 20, Tokens: []sambasic.Token{
+				sambasic.LOAD,
+				sambasic.String(`"assembler"`),
+				sambasic.CODE,
+				sambasic.Number(uint16(LoadAddress)),
+			}},
+			{Number: 30, Tokens: []sambasic.Token{
+				sambasic.CALL,
+				sambasic.Number(uint16(LoadAddress)),
+			}},
+		},
+	}
+	if err := disk.AddBasicFile("auto", auto); err != nil {
+		return nil, fmt.Errorf("AddBasicFile(auto): %w", err)
+	}
+
+	// Slot 2: assembler CODE file (M3 Z80 binary).
+	if err := disk.AddCodeFile("assembler", padded, LoadAddress, 0); err != nil {
+		return nil, fmt.Errorf("AddCodeFile(assembler): %w", err)
+	}
+	return auto, nil
 }
 
 // codeAuto (i332) selects the record-vessel shape: the binary ships as ONE
