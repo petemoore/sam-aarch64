@@ -72,6 +72,12 @@ sam_ip:         equ chunk+6                    ; SAM IP
 ; ===========================================================================
 list_records_main:
                 di
+                ; Clear the lower screen + home the print position (CLSLOWER, stock
+                ; ROM &06B5) BEFORE any RST &10 print — a CR printed at the screen
+                ; bottom sends the ROM into its scroll key-wait prompt, wedging an
+                ; unattended tool (the i319a sd_push hardware wedge; see
+                ; rom_print_scroll_test.go). CLS resets the scroll count first.
+                call    &06b5
                 ld      hl, lr_str_banner      ; CR + "SD-LIST " — announce the tool;
                 call    lr_print_str           ; the stage markers follow on the line
 

@@ -75,6 +75,7 @@ func TestListRecords(t *testing.T) {
 	sd := enc.AttachSD(z80h.CSDForV2(0x001D59))  // real CMD9/CMD17 against sdcard.go
 	mac.AttachIO(enc)
 	rec := mac.AttachPrintRecorder()
+	mac.StubReturn(0x06B5) // CLSLOWER — hardware-only screen clear (i319a)
 
 	// Seed the record list: sector 1 holds records 1..32 (record 1 = "alpha",
 	// record 3 = "beta" write-protected), sector 3 holds records 65..96 (record 65
@@ -177,6 +178,7 @@ func TestListRecordsBigCardClamp(t *testing.T) {
 	sd := enc.AttachSD(z80h.CSDForV2(0x3200)) // 12801 * 512 KiB ≈ 6.7 GB — records > 8160
 	mac.AttachIO(enc)
 	mac.AttachPrintRecorder()
+	mac.StubReturn(0x06B5) // CLSLOWER — hardware-only screen clear (i319a)
 
 	enc.InjectRX(sdPushFrame([]byte{'?'}))
 	enc.InjectRX(lrQuery(255))
@@ -248,6 +250,7 @@ func TestListRecords64GBCard(t *testing.T) {
 	sd := enc.AttachSD(realCSD)
 	mac.AttachIO(enc)
 	mac.AttachPrintRecorder()
+	mac.StubReturn(0x06B5) // CLSLOWER — hardware-only screen clear (i319a)
 
 	enc.InjectRX(sdPushFrame([]byte{'?'}))
 	enc.InjectRX(lrQuery(1))   // pre-fix: refused ('E') because nlist wrapped to 0

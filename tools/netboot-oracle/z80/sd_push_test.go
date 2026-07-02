@@ -110,6 +110,7 @@ func setupSDPushMain(t *testing.T, csd [16]byte) (*z80h.Machine, *z80h.ENC28J60,
 	sd := enc.AttachSD(csd)                       // real CMD9/CMD17/CMD24 against sdcard.go
 	mac.AttachIO(enc)
 	rec := mac.AttachPrintRecorder() // model RST &10 (screen status + stage markers)
+	mac.StubReturn(0x06B5)           // CLSLOWER — hardware-only screen clear (i319a)
 	return mac, enc, sd, rec
 }
 
