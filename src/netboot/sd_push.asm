@@ -45,7 +45,7 @@
 ;                                the 512-byte buffer, mutate sector 0 if i==0, write it
 ;                                to record-LBA csd_base+1600*(n-1)+i by own CMD24, then
 ;                                ACK the 4-byte header.
-;   'F'  finalize             -> reply "D" (done) if the received-count == 1600
+;   'F'  finalize             -> reply "D" (done) if the written-count == 1600
 ;                                (size-only: a record is exactly 1600 sectors =
 ;                                819200 bytes), else "E" — either way followed by the
 ;                                claimed record number (BD_FREE_RECORD, LE16; i308) so
@@ -566,8 +566,13 @@ sp_data_lba:
                 ld      (BD_REC_WRITE_LINEAR), hl
                 ld      hl, BD_WRITE_BUF       ; 512-byte source sector
                 call    bd_record_write_hw     ; own CMD24, absolute LBA
+                jr      c, sp_data_ack         ; write failed (after the core's in-core
+                                               ; retries, i339): ack the block so the host
+                                               ; is not stalled, but do NOT count it —
+                                               ; finalize then answers 'E', never a false
+                                               ; 'D' over a hole in the record
 
-                ; count the received sector (finalize checks the total == 1600).
+                ; count the successfully WRITTEN sector (finalize checks the total == 1600).
                 ld      hl, (sp_recv_count)
                 inc     hl
                 ld      (sp_recv_count), hl
@@ -661,7 +666,7 @@ m2r_addsec1:
                 ret
 
 ; ---------------------------------------------------------------------------
-; sp_finalize — an 'F' message: validate the received sector count (size-only:
+; sp_finalize — an 'F' message: validate the written sector count (size-only:
 ; a Trinity record is exactly 1600 sectors = 819200 bytes — the
 ; bdos_validate_disk_record contract), reply "D" (done) or "E" (error) followed
 ; by the claimed record number (BD_FREE_RECORD, LE16; i308 — so the host learns
@@ -845,7 +850,7 @@ sp_record_name: defm "cj.mgt"                  ; DEFAULT; an 'N' message overwri
                 defb 0                          ; NUL terminator
                 defs 10                         ; room for a <=16-char pushed name + NUL (17 B)
 sp_claimed:     defb 0                          ; 0 until sp_claim_once registers the record
-sp_recv_count:  defw 0                         ; sectors received this session
+sp_recv_count:  defw 0                         ; sectors received AND written this session (i339)
 sp_next_dot:    defw 100                       ; next progress-dot threshold (i318)
 
 ; Screen-status strings (i318) — NUL-terminated for sp_print_str; 13 = CR (the

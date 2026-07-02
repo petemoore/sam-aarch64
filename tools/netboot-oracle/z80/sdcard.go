@@ -65,6 +65,10 @@ const (
 	// (&04 = data accepted, &05 = its idle-bit-set sibling — both map to &04). We
 	// return &05, matching the doc's "accepted == &04/&05".
 	sdWriteAccept = 0x05
+	// sdWriteError is the write-error data-response token (xxx01101): `and &1e`
+	// gives &0C != &04, so the driver rejects the write. Returned for a transaction
+	// armed by FailWriteResp (the i339 transient-glitch model).
+	sdWriteError = 0x0D
 	// sdWriteBusy / sdWriteDone are the busy-poll bytes after the data-response: the
 	// tail busy-waits `in a,(&df); inc a; jr z` (&A8AB-&A8AE) — it loops while the
 	// card drives a non-&FF (busy) MISO and breaks when MISO releases to &FF (done).
@@ -195,6 +199,24 @@ type SDCard struct {
 	crcLeft  int
 	busyLeft int
 	respStep int // walks the CMD24 post-data 3-read handshake (gap, data-response, busy)
+
+	// Transient write-failure injection (i339). FailWriteResp(skip, count) lets
+	// skip write transactions complete normally, then fails the next count: a
+	// failed transaction is NOT committed (the real card discards a block whose
+	// data-response is an error) and its data-response token reads sdWriteError.
+	// writeGlitched carries the pending error from the data phase to the
+	// respStep==1 read. Models the one-shot data-response glitch that triggered
+	// the hardware cascade (the i339 registry item).
+	skipWrites    int
+	failWrites    int
+	writeGlitched bool
+}
+
+// FailWriteResp arms transient CMD24 write failures: the next skip write
+// transactions complete normally, then the following count transactions are
+// rejected at the data-response read (and not committed). See the field docs.
+func (s *SDCard) FailWriteResp(skip, count int) {
+	s.skipWrites, s.failWrites = skip, count
 }
 
 // SetCSD installs the 16 CSD register bytes the card reports via CMD9 and arms
@@ -550,16 +572,27 @@ func (s *SDCard) outDataPhase(v uint8) {
 		s.writeBuf[s.writeIdx] = v
 		s.writeIdx++
 		if s.writeIdx == sdSectorSz {
-			// All 512 captured: commit to the backing store at the addressed block.
-			if s.store == nil {
-				s.store = make(map[uint32][]byte)
-			}
-			sec := make([]byte, sdSectorSz)
-			copy(sec, s.writeBuf)
-			s.store[s.addr] = sec
-			s.writtenSectors = append(s.writtenSectors, s.addr)
-			if s.woken {
-				s.cmd24AfterInit++ // this write paid for a full &38 init this transaction (i301)
+			if s.skipWrites == 0 && s.failWrites > 0 {
+				// An armed transient failure (i339): discard the block (a real
+				// card does not commit a data-error write) and arm the error
+				// data-response token for the respStep==1 read.
+				s.failWrites--
+				s.writeGlitched = true
+			} else {
+				if s.skipWrites > 0 {
+					s.skipWrites--
+				}
+				// All 512 captured: commit to the backing store at the addressed block.
+				if s.store == nil {
+					s.store = make(map[uint32][]byte)
+				}
+				sec := make([]byte, sdSectorSz)
+				copy(sec, s.writeBuf)
+				s.store[s.addr] = sec
+				s.writtenSectors = append(s.writtenSectors, s.addr)
+				if s.woken {
+					s.cmd24AfterInit++ // this write paid for a full &38 init this transaction (i301)
+				}
 			}
 			s.crcLeft = 2 // 2 trailing dummy CRC bytes (&A881/&A88B dec a; out)
 			s.phase = phaseWriteCRC
@@ -593,6 +626,10 @@ func (s *SDCard) inWriteResp() uint8 {
 		return sdIdleMISO // gap byte before the data-response (discarded by the driver)
 	case s.respStep == 1:
 		s.respStep++
+		if s.writeGlitched {
+			s.writeGlitched = false
+			return sdWriteError // armed transient failure (i339): the driver rejects
+		}
 		return sdWriteAccept // the data-response token the driver checks (and &1e == 4)
 	case s.busyLeft > 0:
 		s.busyLeft--

@@ -43,6 +43,8 @@ SDC_INIT:         equ &38                       ; microcontroller "SD init" wake
 SDC_DATATOK:      equ &FE                       ; start-of-data token preceding the CSD
 SDC_IDLE:         equ &FF                       ; SPI-idle MISO
 SDC_BUSY_LIMIT:   equ &FFFF                     ; busy-wait poll budget (~65535, ~0.5s) before sdc_wait_ready gives up
+BCW_MAX_ATTEMPTS: equ 3                         ; CMD24 tries per sector: 1 + 2 in-core retries (i339)
+BCW_BUSY_POLLS:   equ 4608                      ; CMD24 busy-poll budget: >= the SD-spec 250 ms write-busy allowance (i339)
 
 ; The 16-byte CSD read target. This module ships as a section-D overlay (i145b-b2),
 ; so CSD_STAGE lives wherever the module lands in the boot image (section C or D);
@@ -118,8 +120,10 @@ scwr_ready:     pop     bc
 sdc_timed_out:  defb    0                      ; set once an SD busy-wait exhausts its budget
 sdc_card_ready: defb    0                      ; 0 until the push's first write runs the full init
                                                ; ladder; then subsequent writes re-select only
-                                               ; (init-once, bdos15t hd.svb-t; i301). Cleared on a
-                                               ; failed write so the next call re-inits.
+                                               ; (init-once, bdos15t hd.svb-t; i301). NEVER cleared
+                                               ; mid-stream — a failure-triggered re-init is the
+                                               ; i339 cascade amplifier (bd_cmd24_write_core header).
+bcw_attempts:   defb    0                      ; CMD24 attempts used for the current sector (i339)
 
 ; sdc_cmd — send the 6-byte command frame, poll R1 (bit7 clear = valid) <=256.
 ; In: A=opcode|&40, BC=arg[31:16], DE=arg[15:0], (sdc_cmd_crc) preset.
@@ -498,19 +502,34 @@ blwr_shl:
 ; sd.cmd-with-address (&A81F: DI, select &31, CMD24) and NEVER the init ladder
 ; (&A623, run only at HDINIT boot / RESTORE DEVICE). A per-write init would also
 ; re-issue the &38 SD-wake that disturbs the shared PIC / ENC RX (enc28j60.go
-; sdInitSettling, i242), so init-once is both faster and safer. A failed write
-; clears sdc_card_ready so the next write re-inits (self-heals a transient glitch).
+; sdInitSettling, i242), so init-once is both faster and safer.
+;
+; TRANSIENT-FAILURE HANDLING (i339): a failed CMD24 (command reject / data-
+; response reject / busy timeout) is retried IN-CORE — a clean deselect/reselect
+; bracket, then the same CMD24 re-issued (idempotent: same LBA, same data) — up
+; to BCW_MAX_ATTEMPTS, and sdc_card_ready is NEVER cleared mid-stream. The old
+; shape (clear sdc_card_ready so the next write re-inits) amplified one glitch
+; into a full-init-ladder-per-block cascade on real hardware: the &38 wake's
+; seconds-long PIC settling (i242) made the NEXT write fail too, degrading a
+; push from ~74 ms/sector to ~15 s/sector and near-deafening ENC RX (evidence
+; in the i339 registry item; the in-binary meters proved the card was never
+; busy). B-DOS 1.5t never re-inits mid-stream either — recovery from a truly
+; dead card is the next push's fresh init (the binary reload zeroes the flag).
 ; Used by both bd_list_write_hw (record-list claim) and bd_record_write_hw (record
 ; data write), so the CMD24 handshake lives in ONE tested place.
 ;
 ; In:  bd_list_lba  4 bytes  32-bit LE block/byte address (already v1-shifted).
 ;      HL                    pointer to the 512-byte source buffer.
-; Out: CY clear on success, CY set on failure (command reject / not-accepted /
-;      busy timeout). Card deselected + EI on every path.
+; Out: CY clear on success, CY set on failure (every retry exhausted). The caller
+;      must not count a CY-set sector as written (sp_data_block skips its count,
+;      so finalize answers 'E', never a false 'D'). Card deselected + EI on every
+;      path.
 ; Clobbers: AF, BC, DE, HL.
 ; ===========================================================================
 bd_cmd24_write_core:
                 ld      (bd_cmd24_src), hl     ; latch the source pointer for the data phase
+                xor     a
+                ld      (bcw_attempts), a      ; fresh retry budget for this sector (i339)
                 ; Establish the card: full init on the first write of the push, a
                 ; light &31 re-select on every subsequent write (see header).
                 ld      a, (sdc_card_ready)
@@ -538,7 +557,7 @@ bcw_cmd24:
                 ld      e, a
                 ld      a, &58                  ; CMD24
                 call    sdc_cmd                 ; R1 consumed; on entry CY set = fail
-                jr      c, blwr_done            ; command failed: bail (sdc_deselect not yet called)
+                jr      c, bcw_retry            ; command failed: bounded in-core retry (i339)
                 ; Protocol step 2: dummy &FF (the gap before the &FE token).
                 ld      a, SDC_IDLE
                 call    sdc_out
@@ -570,26 +589,44 @@ blwr_wd2:
                 call    sdc_in
                 and     &1E
                 sub     4
-                jr      nz, blwr_reject         ; not accepted: deselect with CY set
+                jr      nz, bcw_retry           ; not accepted: bounded in-core retry (i339)
                 ; Protocol step 8: busy poll. Card drives &00 while writing, releases &FF when done.
                 ; `inc a; jr z` loops on the &00 -> 1 path and exits on the &FF -> 0 path.
-                ; Bounded at 256 iterations (B=0): matches the sdil_wake_poll idiom.
-                ld      b, 0
+                ; Bounded at BCW_BUSY_POLLS (~260 ms at ~56 us/poll), covering the SD-spec
+                ; 250 ms write-busy allowance — the old 256-poll (~14 ms) budget read a
+                ; legitimately slow write as failure, feeding the i339 cascade.
+                ld      de, BCW_BUSY_POLLS
 blwr_busy:
                 call    sdc_in
                 inc     a
                 jr      z, blwr_ok              ; &FF -> 0: write done, card released MISO
-                djnz    blwr_busy
-                ; Timed out waiting for ready — treat as failure.
-blwr_reject:
+                dec     de
+                ld      a, d
+                or      e
+                jr      nz, blwr_busy
+                ; Timed out waiting for ready — fall through to the retry.
+bcw_retry:
+                ; Bounded in-core retry (i339): a clean deselect/reselect bracket, then
+                ; the SAME CMD24 re-issued from the latched bd_list_lba/bd_cmd24_src —
+                ; never a mid-stream &38 re-init (see the header). sdc_deselect also
+                ; resets a de-synced card, and sdc_cmd's leading &FF flush re-frames
+                ; the retried command after the fresh &31 select.
+                ld      a, (bcw_attempts)
+                inc     a
+                ld      (bcw_attempts), a
+                cp      BCW_MAX_ATTEMPTS
+                jr      nc, blwr_fail           ; every attempt used: give up on this sector
+                call    sdc_deselect            ; clean 4-step close (EIs; CY irrelevant here)
+                di                              ; the CMD24 transaction runs under DI
+                ld      a, SDC_SEL              ; &31 re-select the still-inited card
+                out     (SDC_PORT), a
+                jp      bcw_cmd24               ; re-issue the same CMD24
+blwr_fail:
+                ; Persistent failure: CY to the caller (which must not count the
+                ; sector). sdc_card_ready is deliberately LEFT SET — a mid-stream
+                ; re-init is the cascade amplifier (header); a fresh push re-inits
+                ; anyway. sdc_deselect preserves the CY we set here.
                 scf
-blwr_done:
-                ; write failed: force a full re-init on the next call (self-heal a
-                ; transient glitch). sdc_deselect preserves the CY we set here.
-                push    af
-                xor     a
-                ld      (sdc_card_ready), a
-                pop     af
                 jp      sdc_deselect
 blwr_ok:
                 or      a                       ; CY clear: success
