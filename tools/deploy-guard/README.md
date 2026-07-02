@@ -30,8 +30,13 @@ to expose the real verb; and a statement counts as a deploy only if its verb
 actually **executes a push** to the SAM:
 
 1. an interpreter (`python`/`python3`/`sh`/`bash`/`perl`) invoking a pusher
-   script (`trinload-push*.py|.sh`, `trinpush-serve*`, `trinpush*`), or the
-   pusher script run directly (`./trinpush.py`, an absolute path, the bare name);
+   script — any push-and-run launcher, matched at the **start of the basename**
+   (`trinload-push*`, `trinpush-serve*`, `trinpush*`, `sd-push*`, `boot-record*`,
+   `delete-record*`, `list-records*`, `.py|.sh`) — or the pusher script run
+   directly (`./trinpush.py`, an absolute path, the bare name). A token
+   appearing only in a *directory* component (`tools/trinload-push/helper.py`)
+   does not match, and `python3 -m <module>` fires only when the *module* is a
+   pusher (`-m py_compile <pusher>` merely compiles it — i340);
 2. a TFTP client — verb `tftp`/`atftp` (a bare `tftp://` URL *named* by another
    verb — a `grep`, a `go test`, a heredoc path — is a mention, not an execution,
    and is caught by rule 3 only when it is an actual upload);

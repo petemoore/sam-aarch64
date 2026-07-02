@@ -81,6 +81,22 @@ class MustNotFire(unittest.TestCase):
         "cd tools/trinload-push && python3 -m unittest test_trinpush -v",
         "python3 test_trinpush.py",
         'cat > x.md <<EOF\n"see test_trinpush.py for the loopback tests"\nEOF',
+        # i340: `python3 -m py_compile <pusher>` COMPILES the pusher, it does
+        # not run it — this exact shape false-fired in three retro-corpus
+        # sessions (2026-07-01/-02), each time via the DIRECTORY name
+        # "trinload-push" matching the old un-anchored arg regex.
+        "python3 -m py_compile tools/trinload-push/sd-push.py",
+        "python3 -m py_compile tools/trinload-push/boot-record.py",
+        "python3 -m compileall tools/trinload-push/",
+        # i340: a grep whose PATTERN or target names pushers / deploy tokens
+        # (the 2026-07-01e registry-view grep shape).
+        "grep -iE 'record|tftp|push' docs/notes/item-registry-open.md",
+        "grep -n 'sd-push.py' tools/trinload-push/sd-push.py",
+        "git show HEAD -- tools/trinload-push/sd-push.py",
+        # i340: a non-pusher helper that merely LIVES in the pusher directory
+        # must not read as a pusher (the directory-name hole, closed by the
+        # basename anchor).
+        "python3 tools/trinload-push/some_helper.py",
     ]
 
     def test_must_not_fire(self):
@@ -115,6 +131,17 @@ class MustFire(unittest.TestCase):
         "cat > /tmp/x <<EOF\ndon't worry\nEOF\n"
         "python3 tools/trinload-push/trinload-push.py 192.168.2.75 f.bin",
         'echo "oops\npython3 tools/trinload-push/trinload-push.py 192.168.2.75 f.bin',
+        # i340: the push-and-run launchers that were previously caught only by
+        # accident (via their directory name) — each stage-1-pushes a program
+        # to the SAM and must fire by BASENAME, from any path.
+        "python3 tools/trinload-push/sd-push.py 192.168.2.75 junk.mgt build/sd_push.bin",
+        "python3 tools/trinload-push/boot-record.py 192.168.2.75 186",
+        "python3 tools/trinload-push/delete-record.py 192.168.2.75 187",
+        "python3 tools/trinload-push/list-records.py 192.168.2.75",
+        "python3 /tmp/scratch/sd-push-timing.py 192.168.2.75 junk.mgt sd_push_meter.bin",
+        "./sd-push.py 192.168.2.75 x.mgt",
+        # i340: -m runs the MODULE — a pusher module fires, a stdlib one doesn't.
+        "cd tools/trinload-push && python3 -m trinpush 192.168.2.75 f.bin 1 0x8000",
     ]
 
     def test_must_fire(self):

@@ -5724,9 +5724,11 @@
   title: "Deploy-guard matcher round 2: fire only on actual pusher EXECUTION shapes — the i268 fix did not cover the recurring false-positive class"
   description: |
     i324 retro-mining P1 (top recurring papercut still live): the deploy-guard hook false-fired in 7+ independent sessions, INCLUDING 4+ sessions AFTER the i268 fix (#739, 2026-06-26, which only fixed the tftp://-URL-named-by-non-transfer-verb shape). Post-fix false-positive shapes observed (each grounded in a retro report): python3 -m py_compile sd-push.py (a syntax check; hit in 3 sessions, blocked 2 attempts in one), read-only grep/git-grep whose PATTERN contains 'tftp' or a pusher path (07-01e registry-view grep; 06-25 git grep/ls-tree x3 + a heredoc retro-file write), and a plain 'go test' containing the substring 'tftp' (06-26, the original i268 shape). Each costs a re-run/workaround and dulls the gate's signal for real deployments. FIX SHAPE: rewrite the matcher to key on actual EXECUTION of a push tool - e.g. an argv-shaped match like 'python3? .*(trinpush|trinload-push|sd-push|boot-record|delete-record)[.]py( .*)?( 192[.]168[.]|<ip>)' or invocation of curl -T/tftp put against the SAM - never a bare substring anywhere in the command text; add a test corpus of the observed false-positive commands (py_compile, grep -iE '...tftp...', heredocs naming pusher paths) that must pass un-blocked, plus the true-positive shapes that must still block. The hook lives in the settings/hooks config (see .claude/settings.json + the deploy-guard hook script i252 added).
-  status: OPEN
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 817, role: completing}
 
 - id: i341
   title: "registry CLI UX round 2: --quiet mutation output, stage-list output, and visible/controllable add placement"

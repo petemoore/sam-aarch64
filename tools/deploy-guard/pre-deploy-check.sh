@@ -51,19 +51,34 @@ import sys
 
 SAM_IP = "192.168.2.75"
 
-# Pusher scripts run via an interpreter, or invoked directly.
+# Pusher scripts run via an interpreter, or invoked directly. The token list is
+# every push-and-run launcher in tools/trinload-push/ — the trinload pushers
+# PLUS sd-push / boot-record / delete-record / list-records (i340: these were
+# previously caught only by ACCIDENT via their directory name, see below).
+_PUSHER_TOKENS = (
+    r"(?:trinload-push|trinpush-serve|trinpush"
+    r"|sd-push|boot-record|delete-record|list-records)"
+)
+# Both regexes anchor the pusher token to the START OF THE BASENAME (a path
+# separator or string/token start immediately before it, and no further /
+# inside the match): a token appearing only in a DIRECTORY component must not
+# match — `tools/trinload-push/<anything>.py` reading as a pusher was the i340
+# false-positive mechanism (`python3 -m py_compile tools/trinload-push/
+# sd-push.py` fired the guard in three sessions). The basename anchor also
+# keeps filenames that merely EMBED a token mid-name from matching —
+# test_trinpush.py, the guard's own test module (i337).
 _PUSHER_SCRIPT_RE = re.compile(
-    r"(?:^|/)(?:trinload-push|trinpush-serve|trinpush)\S*\.(?:py|sh)$",
+    r"(?:^|/)" + _PUSHER_TOKENS + r"[^/\s]*\.(?:py|sh)$",
     re.IGNORECASE,
 )
-# The same, anywhere in a statement's argument list (interpreter case). The
-# leading \b keeps unrelated filenames that merely EMBED a pusher name from
-# matching — test_trinpush.py (word char before "trinpush") is the guard's
-# own test module, not a pusher, and false-fired without it (i337).
+# The same, anywhere in a statement's argument list (interpreter case).
 _PUSHER_SCRIPT_ARG_RE = re.compile(
-    r"\b(?:trinload-push|trinpush-serve|trinpush)\S*\.(?:py|sh)\b",
+    r"(?:^|[/\s\"'=])" + _PUSHER_TOKENS + r"[^/\s]*\.(?:py|sh)\b",
     re.IGNORECASE,
 )
+# Pusher MODULE names for `python3 -m <module>` (an importable module name has
+# no dash, so only the dash-free pusher can be -m-run from its directory).
+_PUSHER_MODULES = {"trinpush"}
 
 _INTERPRETERS = {"python", "python3", "sh", "bash", "perl"}
 
@@ -206,10 +221,18 @@ def _statement_is_deploy(stmt: str):
 
     # 1. Interpreter invoking a pusher script, OR the verb itself is a pusher
     #    script (./trinpush.py, /path/to/trinload-push.py, bare trinpush.py).
+    #    `python3 -m <module> …` executes the MODULE, not any file argument:
+    #    `python3 -m py_compile tools/trinload-push/sd-push.py` only COMPILES
+    #    the pusher (the i340 false-positive shape), so under -m the deploy
+    #    test is on the module name alone.
     if verb_base in _INTERPRETERS:
-        for a in args:
-            if _PUSHER_SCRIPT_ARG_RE.search(a):
-                return "a pusher script run via " + verb_base
+        if args and args[0] == "-m":
+            if len(args) > 1 and args[1].lower() in _PUSHER_MODULES:
+                return "a pusher module run via " + verb_base + " -m"
+        else:
+            for a in args:
+                if _PUSHER_SCRIPT_ARG_RE.search(a):
+                    return "a pusher script run via " + verb_base
     if _PUSHER_SCRIPT_RE.search(verb) or _PUSHER_SCRIPT_ARG_RE.search(verb_base):
         return "a pusher script executed directly (" + verb_base + ")"
 
