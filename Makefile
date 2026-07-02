@@ -871,6 +871,12 @@ netboot-serve-trinload: $(BUILD)/netboot_serve_boot.bin $(BUILD)/netboot_serve_b
 netboot-trinpush-test: $(BUILD)/netboot_serve_boot.bin $(BUILD)/netboot_serve_boot.map
 	cd tools/trinload-push && python3 -m unittest test_trinpush -v
 
+# deploy-guard-test (i336) — the SAM deploy guard's execution-only detection:
+# real deploys fire, quoted/mention-only shapes don't. Pure host Python.
+.PHONY: deploy-guard-test
+deploy-guard-test:
+	cd tools/deploy-guard && python3 -m unittest pre_deploy_check_test -v
+
 # trinpush-help (i277) — print the canonical SAM-push invocations so the exact
 # command never has to be looked up. Print-only (no deploy): the actual push still
 # goes through the deploy-guard (DEPLOY_CHECKED=1 + the hardware-readiness checklist).
