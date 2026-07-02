@@ -40,9 +40,10 @@ This makes both historical gotchas structural rather than advisory:
 
 - **Off-axis payloads rebuild automatically.** The off-axis cluster
   (`test_cluster.bin`) and `test_mem.bin` bake *main-binary* routine addresses
-  in via `--importfile=assembler.sym`; the TestMain sweep includes
-  `assembler cluster-offaxis test-mem-offaxis`, so they rebuild together
-  whenever the main binary changes — no more stale-address self-test crashes.
+  in via `--importfile=assembler.sym`; the TestMain sweep builds the
+  Makefile's `harness-artifacts` aggregate (the single source of truth for
+  the artifact set this suite reads), so they rebuild together whenever the
+  main binary changes — no more stale-address self-test crashes.
 - **A stale `build/*.bin` can't survive into a read.** Go's test cache keys on
   Go sources, not the `build/*.bin` the harness reads at runtime, so a bare
   re-run *could* report a cached `ok` against an old binary. The TestMain build

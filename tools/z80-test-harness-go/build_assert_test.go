@@ -31,27 +31,12 @@ import (
 	"testing"
 )
 
-// harnessArtifactTargets is the set of `make` targets that produce every
-// SAM-side artifact the Go test suite reads from build/. It mirrors the
-// prerequisite list of the `harness-sweep` target in the Makefile (the
-// one-shot "build everything the harness reads" target). Keep the two in sync:
-// a new build/*.bin read by a test must be added here AND to harness-sweep.
-var harnessArtifactTargets = []string{
-	"assembler",
-	"assembler-prod",
-	"enctab",
-	"cluster-offaxis",
-	"test-mem-offaxis",
-	"enc-fix-payload",
-	"paged-call-payload",
-	"sysreg-data",
-	"disasm-payload",
-	"disasm-test-payload",
-	"zx0-payload",
-	"zx0-test-payload",
-	"zx0-compress-payload",
-	"sam-aarch64",
-}
+// harnessArtifactTargets invokes the Makefile's harness-artifacts aggregate —
+// the single source of truth for the artifact set the Go test suite reads
+// from build/. A new build/* artifact read by a test must be added to that
+// aggregate's prerequisites in the Makefile; nothing is listed here (a
+// duplicated per-target list drifted out of sync with the Makefile — i309).
+var harnessArtifactTargets = []string{"harness-artifacts"}
 
 // findRepoRoot walks up from the current working directory to the repo root,
 // identified by the presence of a Makefile. Unlike repoRoot(t) it takes no
