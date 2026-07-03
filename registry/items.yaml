@@ -404,10 +404,12 @@
   title: "i27b: Z80 port — Cortex-A53 835769 NOP insertion"
   description: |
     Faithful Z80 port (CLAUDE.md s6) of the i27a 835769 fix into the SAM-side assembler (src/). Detect a memory op immediately followed by a 64-bit multiply-accumulate (Ra!=XZR) and insert a NOP between them, off by default behind the SAM toggle. Mirror the Go authority's mask predicates + erratum_sequence RAW carve-out. NOP insertion shifts addresses, so it must be done in a way that PC-relative refs stay correct — detect in the record/IR stream (pass1) so the inserted NOP word is accounted for in PC assignment across both passes (the Go authority establishes the exact decision). SimCoupe-gated; add a boot self-test fixture. Go authority: errata.go (i27a).
-  status: OPEN
+  status: DONE
   depends_on: [i27a, i234]
   kind: leaf
   owner: agent
+  prs:
+    - {num: 845, role: completing}
   parent: i27
 
 - id: i27c

@@ -194,7 +194,13 @@ OPMEM_OFF:      equ     &D100          ; 8 bytes — OpMem offset (s64 LE)
 ;   &D3C2         LITPOOL_SEGMENT_ALLOC (1 byte)
 ;   &D3C3         LITPOOL_SEGMENT_FLUSH (1 byte)
 ;   &D3C4..&D3C7  LITPOOL_SAVED_PC    (4 bytes)
-;   &D3C8..&D4FF  free (312 B between counters and STAGING_BUF at &D500)
+;   &D3C8..&D3D5  i27b: Cortex-A53 erratum 835769 state (15 B)
+;     &D3C8  FIX_835769_ENABLED   (1 byte: 0=off, 1=on for A53/Pi3 targeting)
+;     &D3C9  ERRATA_PREV_VALID    (1 byte: 1 when prev insn state is valid)
+;     &D3CA  ERRATA_INSN1         (4 bytes: previous instruction word, LE)
+;     &D3CE  ERRATA_PREV_PC       (4 bytes: PASS_PC after processing prev insn)
+;     &D3D2  ERRATA_INSN2         (4 bytes: current instruction word, scratch)
+;   &D3D6..&D4FF  free (298 B between 835769 state and STAGING_BUF at &D500)
 ;   &E100..&E27F  LITPOOL_PC_MAP      (64 entries × 6 bytes = 384 B;
 ;                                     moved to &E100+ on 2026-05-28 to
 ;                                     fit the bumped 64-entry cap —
@@ -243,6 +249,9 @@ OPMEM_OFF:      equ     &D100          ; 8 bytes — OpMem offset (s64 LE)
                 include "reader.asm"
                 include "main_loop.asm"
                 include "insn_run.asm"
+                ; i27b: Cortex-A53 erratum 835769 NOP-insertion fix. Predicates,
+                ; per-instruction hazard gate, and mode-0 per-word processing path.
+                include "errata_835769.asm"
                 include "symbols.asm"
                 include "local_labels.asm"
                 include "litpool.asm"
