@@ -608,19 +608,23 @@ endif
 ; instead of sharing variant 1's section-C test budget.
 if defined(BUILD_TESTS_ENCODE)
                 call    run_encode_inst_self_tests
-                ; overlay_classify / literal_word / compact_inst (i204b) —
-                ; the compactor half that reuses encode_inst, so it runs in
-                ; the same variant, right after the encoder suite.  The
-                ; suite code is too large for this variant's section-C
-                ; budget, so it rides the page-12 "ovl12" payload
-                ; (src/test_overlay_suite.asm) and executes from section-D
-                ; RAM — see OVERLAY_SUITE_RAM in src/trampoline.asm.  The
-                ; payload is self-describing: [code_len u16 LE][code], with
-                ; the code org'd at OVERLAY_SUITE_RAM.  Copy it there and
-                ; call its fixed entry (the first copied byte).
+                ; The section-D suite payload: overlay_classify /
+                ; literal_word / compact_inst (i204b) plus the compact
+                ; encoder adapter + its full-pipeline self-test
+                ; (i48c-b8e) — the compactor half that reuses
+                ; encode_inst, so it runs in the same variant, right
+                ; after the encoder suite.  The suite code is too large
+                ; for this variant's section-C budget, so it rides the
+                ; page-12 "ovl12" payload (src/test_overlay_suite.asm)
+                ; and executes from section-D RAM — see
+                ; OVERLAY_SUITE_RAM in src/trampoline.asm.  The payload
+                ; is self-describing: [code_len u16 LE][code], with the
+                ; code org'd at OVERLAY_SUITE_RAM.  Copy it there and
+                ; call its fixed entry (the first copied byte — a stub
+                ; running both suites in order).
                 ; Must run after run_encode_inst_self_tests: that routine's
                 ; LDIR stages the shared page-11 enc_fix payload (incl. the
-                ; toc_* overlay fixture tables) into section D at
+                ; toc_* / cadapt_* fixture tables) into section D at
                 ; ENC_FIX_TABLE_RAM.
                 ld      a, (LMPR_DEFAULT_RUNTIME)
                 push    af                      ; save current LMPR
@@ -634,7 +638,7 @@ if defined(BUILD_TESTS_ENCODE)
                 ldir
                 pop     af
                 out     (250), a                ; restore LMPR
-                call    OVERLAY_SUITE_RAM       ; run_overlay_classify_self_tests
+                call    OVERLAY_SUITE_RAM       ; overlay + compact-adapter suites
 endif
 
 ; -- Run the assemble: pass 1 (table build) + pass 2 (emit) -----------

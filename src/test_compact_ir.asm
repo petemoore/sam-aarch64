@@ -19,11 +19,19 @@
 ;   * LABEL_DEF / LOCAL_DEF drop out of the record stream (compact.go:99-102 —
 ;     captured by pass1, never re-emitted here);
 ;   * INST records emit a SKELETON KindInsnRun element (placeholder base word, no
-;     patches). The base word + overlay patches are i48c-b8e's job; here only the
-;     element COUNT and the 4-byte PC accounting matter, so a mode-0 frame of
-;     placeholder words is emitted. The run is flushed on the same record kinds
-;     host Compact flushes on (flushInst before a data run, flushData before an
-;     inst / at a label / on a different-directive data run).
+;     patches). Here only the element COUNT and the 4-byte PC accounting matter,
+;     so a mode-0 frame of placeholder words is emitted. The run is flushed on
+;     the same record kinds host Compact flushes on (flushInst before a data run,
+;     flushData before an inst / at a label / on a different-directive data run).
+;
+;     THE SEAM (i48c-b8e): the real INST emission — compact_inst per record,
+;     mode-0/mode-1 frame packing — is src/compact_emit.asm. It is ENCTAB-coupled
+;     (compact_inst -> encode_inst reads ENCTAB via LMPR paging), so it cannot
+;     run in THIS flat harness; it is verified as a boot self-test in the paged
+;     enc-tests variant instead (src/test_compact_adapter.asm, byte-compared
+;     against assemble.Compact). This flat walk keeps the skeleton emission for
+;     the non-encoder outputs; the production compactor composes this walk's
+;     dispatch with the compact_emit adapter (the b8c serializer's input).
 ;
 ; DESIGN — include the b8a pass1-ir harness, add the compact-core walk on top.
 ;
@@ -764,8 +772,10 @@ compact_ecd_copy:
 ; compact_flush_inst — materialise the open inst run as mode-0 KindInsnRun
 ; frames of placeholder base words (compact.go:57-60 flushInst →
 ; emitInsnRunFrames; with no patches every frame is mode-0, split at maxWords =
-; (1016-1)/4 = 253 words). The base words are placeholders (0) — the real words
-; are i48c-b8e's job; only the element count + PC accounting matter here.
+; (1016-1)/4 = 253 words). The base words are placeholders (0) — the real
+; emission is the ENCTAB-coupled adapter src/compact_emit.asm (i48c-b8e),
+; verified in the paged enc-tests boot; only the element count + PC accounting
+; matter here (see THE SEAM note in the file header).
 ;
 ; A KindInsnRun mode-0 record is [REC_KIND_INSN_RUN][len:2 LE][mode=0][word:4]*.
 ; Clobbers: everything.

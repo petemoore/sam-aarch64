@@ -1698,27 +1698,41 @@ $(BUILD)/enc_fix_payload.bin $(BUILD)/enc_fix_payload.sym: src/test_encode_inst_
 
 enc-fix-payload: $(BUILD)/enc_fix_payload.bin
 
-# overlay_classify boot-self-test suite payload (BUILD_TESTS_ENCODE only
-# — i204b).
+# Section-D suite payload for the enc-tests boot (BUILD_TESTS_ENCODE):
+# the i204b overlay_classify self-test + the i48c-b8e compact encoder
+# adapter (compact_emit.asm) and its self-test.
 #
-# src/test_overlay_suite.asm wraps the insn_overlay.asm routines + their
-# fixture driver (test_overlay_classify.asm) into a self-describing
-# [code_len u16][code] payload, org'd at OVERLAY_SUITE_RAM (imported
-# from the main binary's sym).  It is CODE executed from section-D RAM:
-# HLOADed at boot into physical page 12 by
-# src/loader.asm::load_overlay_suite, then LDIR'd to OVERLAY_SUITE_RAM
-# and called there by the boot stub in src/assembler.asm.  See
-# src/trampoline.asm (OVERLAY_SUITE_RAM) for the design rationale.
+# src/test_overlay_suite.asm wraps the insn_overlay.asm + compact_emit.asm
+# routines and their fixture drivers (test_overlay_classify.asm,
+# test_compact_adapter.asm) into a self-describing [code_len u16][code]
+# payload, org'd at OVERLAY_SUITE_RAM (imported from the main binary's
+# sym).  It is CODE executed from section-D RAM: HLOADed at boot into
+# physical page 12 by src/loader.asm::load_overlay_suite, then LDIR'd to
+# OVERLAY_SUITE_RAM and called there by the boot stub in
+# src/assembler.asm.  See src/trampoline.asm (OVERLAY_SUITE_RAM) for the
+# design rationale.
 #
 # Imports assembler-enc-tests.sym (encode_inst, insn_fold, fail, ... and
-# OVERLAY_SUITE_RAM) and enc_fix_payload.sym (the toc_* fixture tables
-# staged at ENC_FIX_TABLE_RAM).  Build order is acyclic: the main binary
-# imports only enc_fix_payload.sym; this suite imports the main sym.
+# OVERLAY_SUITE_RAM) and enc_fix_payload.sym (the toc_*/cadapt_* fixture
+# tables staged at ENC_FIX_TABLE_RAM).  Build order is acyclic: the main
+# binary imports only enc_fix_payload.sym; this suite imports the main sym.
+#
+# The size guard enforces the section-D layout: the suite code is copied
+# to OVERLAY_SUITE_RAM (&F080) and must end below CEMIT_ELEMS (&FD00),
+# where the adapter's runtime buffers start (src/compact_emit.asm).
+# Cap = (&FD00 - &F080) + 2 header bytes = 3202.
 $(BUILD)/overlay_suite.bin: src/test_overlay_suite.asm $(asm_deps/src/test_overlay_suite.asm) $(BUILD)/assembler-enc-tests.sym $(BUILD)/enc_fix_payload.sym
 	pyz80 --importfile=$(BUILD)/assembler-enc-tests.sym \
 	    --importfile=$(BUILD)/enc_fix_payload.sym \
 	    --obj=$(BUILD)/overlay_suite.bin \
 	    src/test_overlay_suite.asm
+	@sz=$$(wc -c < $(BUILD)/overlay_suite.bin); \
+	if [ $$sz -gt 3202 ]; then \
+	    echo "overlay_suite.bin is $$sz B > 3202 B cap: the suite code would overrun CEMIT_ELEMS (&FD00) — see src/compact_emit.asm's buffer map"; \
+	    exit 1; \
+	else \
+	    echo "overlay-suite size ok: $$sz B (cap 3202; code end &$$(printf '%04X' $$((0xF080 + $$sz - 2))))"; \
+	fi
 
 overlay-suite: $(BUILD)/overlay_suite.bin
 
