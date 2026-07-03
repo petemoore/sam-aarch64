@@ -39,6 +39,9 @@ EMU_DETECT_PORT: equ &7F           ; unmapped SAM port for emulation detection (
 TR_MODE_EMU:     equ &E0           ; tr_terminate branch markers (recorded in TR_TERM_MODE)
 TR_MODE_HW:      equ &A0
 
+; Includers that need only the exit (tr_terminate) — not the UDP reporter and
+; its build_udp_frame dependency — define TR_TERMINATE_ONLY before the include.
+if defined(TR_TERMINATE_ONLY)==0
 test_report:
                 ; Stash the entry parameters (the buffer build below needs the
                 ; registers).
@@ -118,6 +121,7 @@ tr_no_detail:
 tr_paint:
                 out     (&fe), a
                 ret
+endif                                            ; TR_TERMINATE_ONLY==0 (the UDP reporter)
 
 ; ---------------------------------------------------------------------------
 ; tr_terminate — end a pushed test, doing the right thing for where it runs.
@@ -162,6 +166,7 @@ tr_port_be:       defb TR_PORT >> 8, TR_PORT & &ff
 ; sender; the emulator ignores them and a LAN listener sees them. Hardcoded to
 ; the known first-light values (a later revision can read them from the Trinity
 ; "Trinity Network" config chunk via read_chunk).
+if defined(TR_TERMINATE_ONLY)==0
 TR_SRC_MAC:       defb &02,&54,&52,&49,&4e,&bc   ; 02:54:52:49:4e:bc
 TR_SRC_IP:        defb 192,168,2,75
 
@@ -171,3 +176,6 @@ tr_save_dlen:     defs 1
 tr_save_dptr:     defs 2
 TR_TERM_MODE:     defs 1            ; tr_terminate branch marker (TR_MODE_EMU/HW)
 TR_PAYLOAD:       defs TR_HDR_LEN+TR_DETAIL_MAX
+else
+TR_TERM_MODE:     defs 1            ; tr_terminate branch marker (TR_MODE_EMU/HW)
+endif                                            ; TR_TERMINATE_ONLY==0 (reporter cells)

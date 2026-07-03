@@ -1304,7 +1304,7 @@
   description: |
     The scoped hardware validation the 2026-07-03 pre-flight recommended: boot the smoke-variant fetcher on the real SAM (TAPO power-cycle, trinload push or floppy vessel per the i70a exit decision), fetch LICENCE.broadcom (1594 B) from the LAN HTTP mirror, persist via HSAVE RST-8 into the first-FREE SD record, confirm via tcpdump port-80 capture (loopback-proven first) + :9001 markers + post-cycle record read-back. This exercises exactly the unverified hardware gate (section-C paging of the HSAVE source is the q16 hardware detail, http_main.asm:494-497). Note i347-class exposure (EI d loop, no IM2 takeover) is low-risk for a seconds-long smoke but must be assessed before any multi-minute fetch.
   status: OPEN
-  depends_on: [i70a]
+  depends_on: [i70a, i70d]
   kind: leaf
   owner: agent
   parent: i70
@@ -1317,6 +1317,17 @@
   depends_on: [i70b]
   kind: leaf
   owner: agent
+  parent: i70
+
+- id: i70d
+  title: "HTTP-fetch shot config completions: HT_SERVER_PORT knob, IP defines wired into all three recipes, tr_terminate exits (i228) for http_main"
+  description: |
+    Post-i70a gaps found staging the i70b shot on this capture host: (1) the fetch port was hardcoded 80 (http_main.asm:384-388) and the host cannot bind :80 unprivileged (only tcpdump/arping are sudoers-allowed) — HT_SERVER_PORT define + Makefile var, default 80; (2) the netboot-http-boot and netboot-http-boot-debug recipes never passed the HT_SERVER_IP_* defines (only the smoke recipe did), so the SHOT binary would fetch the placeholder 192.168.0.1 regardless of the make vars — all three recipes now pass IP+port; (3) http_main exited every path with raw di;halt, which strands a trinload-pushed SAM — the i228 rule (netboot-trinity-testing.md prerequisites) mandates tr_terminate (RET to trinload on hardware, di;halt under emulation); all four exits now jp tr_terminate, with test_report.asm gaining a TR_TERMINATE_ONLY gate so the exit is includable without the UDP reporter and its build_udp_frame dependency (default includers byte-identical, md5-verified). Runbook updated accordingly (also corrects the earlier power-cycle-recovery wording, which contradicted i228).
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 834, role: completing}
   parent: i70
 
 - id: i71
