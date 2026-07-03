@@ -428,73 +428,64 @@ hardware-verified (CLAUDE.md §5).
 
 ## HTTP fetch (i70): self-provision a firmware blob over HTTP
 
-**What it is.** The firmware self-provisioning capstone: instead of fetching over
-TFTP, the SAM is an **HTTP/1.0 client** that fetches a firmware blob from a plain
-HTTP server and **writes it to Trinity storage** via the B-DOS record hooks. It
-boots, reads the SAM's MAC + IP from the EEPROM, broadcasts an ARP request to learn
-the server's MAC, opens a TCP connection (SYN → SYN-ACK → the handshake-completing
-ACK that carries the `GET`), receives the streamed response (ACKing each segment,
-accumulating the bytes), ends on the server's FIN (HTTP/1.0 closes after the body),
-parses the response, copies the body past the `\r\n\r\n` header into a section-C
-staging buffer, and HSAVEs it to Trinity storage under the configured name. On
-success it sets a **green border** and halts.
+**What it is.** The firmware self-provisioning capstone: the SAM is an **HTTP/1.0 client** that fetches a multi-file pinned firmware bundle from a plain HTTP server and **writes each file to Trinity storage** via the B-DOS record hooks. It boots as a section-D overlay (loaded at `&8000`, running in the `&8000`–`&FFFF` window that is RAM at post-load runtime), reads the SAM's MAC + IP from the Trinity EEPROM, initialises the ENC28J60, reads the SD card's CSD to learn the total record count (`BD_RECORDS`), waits for the PHY link (proactive-TX gate, i128), then drives a multi-file provisioning loop: for each file, it broadcasts an ARP request, opens a TCP connection, sends a `GET` for the file's cdn.githubraw.com URL, streams the response body through a SHA-256 verify into bounded B-DOS HSAVE records (one per 16 KB window, starting at the first free record on the card), and records the per-file hash-match verdict. On completion it sets a **green border** and halts; a bring-up failure sets a **border colour and halts** (red = no Trinity / blank EEPROM; yellow = `drv_init` failed; yellow (6) = PHY link timeout).
 
-**Configure the target first.** The fetch target is fixed in the program (edit and
-rebuild for your network): in `src/netboot/netboot_http.asm`, `ht_server_ip` is the
-HTTP server's IP and `ht_out_name` is the Trinity output filename (default
-`firmware.bin`); the HTTP request path + Host header are `HTTP_PATH` / `HTTP_HOST`
-in `src/netboot/http_get.asm` (defaults `/firmware/start4.elf` + `fw.local`). Set
-them to a server you control and a blob it serves, then `make netboot-http-disk`.
+**The server IP** is configurable at build time via `-D HT_SERVER_IP_{A,B,C,D}=n` (defaults to 192.168.0.1). The file list is the pinned manifest in `src/netboot/fw_source.asm` (six Raspberry Pi firmware files by default; one file in the smoke build below).
 
-**Build the disk:**
+**i70b smoke shot (recommended first run).** For a scoped first hardware test, use the 1-file smoke binary (LICENCE.broadcom, ~1594 bytes, ~4 records). It exercises the full boot path — EEPROM read, drv_init, CSD read, link wait, first-free record detection, ARP, TCP handshake, GET, streaming SHA-256 into HSAVE records — in a short run with a small, predictable blob. The debug variant emits UDP step-marker packets (port 9001, "SDBG" magic) so a tcpdump on the host shows exactly how far the SAM got without anyone watching the border colour.
+
+**Set the server IP for your network** (the default 192.168.0.1 almost certainly isn't right):
 
 ```sh
-make netboot-http-disk
-# -> build/netboot_http.mgt   (B-DOS boot + AUTO + the fetcher at &8000)
+# Override at make time (all four octets required if any is non-default):
+HT_SERVER_IP_A=192 HT_SERVER_IP_B=168 HT_SERVER_IP_C=2 HT_SERVER_IP_D=1 make netboot-http-smoke-disk
+# or for the debug variant (smoke+debug, same 1-file manifest):
+HT_SERVER_IP_A=192 HT_SERVER_IP_B=168 HT_SERVER_IP_C=2 HT_SERVER_IP_D=1 make netboot-http-boot-debug
 ```
 
-**Run it:**
+**Build the disks:**
 
-1. On another machine on the same LAN, run a plain HTTP server that serves the blob
-   at the configured path:
+```sh
+make netboot-http-smoke-disk              # -> build/netboot_http_smoke.mgt  (smoke, 1 file)
+make netboot-http-disk                    # -> build/netboot_http.mgt         (full, 6 files)
+# debug binary (smoke+debug, for port-9001 marker capture):
+make netboot-http-boot-debug              # -> build/netboot_http_boot_debug.bin
+```
+
+**Run the smoke shot:**
+
+1. On the host serving the file (must be reachable at `HT_SERVER_IP_*`):
 
    ```sh
-   # e.g. a one-off static server rooted at the dir holding ./firmware/start4.elf
+   # cdn.githubraw.com proxies raw.githubusercontent.com — a real internet fetch.
+   # Or serve the blob locally (must match the pinned SHA-256 in fw_source.asm):
    python3 -m http.server 80
    ```
 
-2. Boot `build/netboot_http.mgt` on the SAM + Trinity. A bring-up failure sets a
-   **border colour and halts** (red = no Trinity / blank EEPROM settings; blue =
-   `drv_init` failed). On success it broadcasts the ARP, opens the connection, sends
-   the `GET`, and pulls the body; a **green border** on completion means the blob was
-   HSAVEd to Trinity storage.
-
-3. (Optional) Watch the exchange:
+2. (Optional, for autonomous diagnosis) Start the marker listener before powering on:
 
    ```sh
-   sudo tcpdump -i eth0 -n 'arp or port 80'
+   sudo tcpdump -i eth0 -n 'udp port 9001'
+   # Each "SDBG" packet's last byte is the step code:
+   #   0x60 ENTRY    — drv_init OK + EEPROM populated
+   #   0x61 EEPROM_OK — SD CSD read done + ENC RX re-armed
+   #   0x62 LINK_UP  — PHY link up
+   #   0x63 FILE_START — per-file fetch started (prov_start / store_begin)
+   #   0x64 FILE_SAVED — per-file window HSAVE'd
+   #   0x65 FILE_VERIFY — per-file SHA-256 verdict recorded
+   #   0x66 ALL_DONE — all files stored, about to green border + halt
+   #   0x70 FAIL_CFG  — EEPROM chunk absent or blank
+   #   0x71 FAIL_INIT — drv_init returned BC=0 (ENC not responding)
+   #   0x72 FAIL_LINK — PHY link timeout
    ```
 
-   You should see the SAM's `ARP who-has <server-ip>` answered by the server, then a
-   TCP handshake, a `GET <path> HTTP/1.0` from the SAM, the response stream, and the
-   FIN teardown.
+3. Push or boot `build/netboot_http_boot_debug.bin` on the SAM + Trinity (use
+   trinload or the smoke disk). The program halts at DI;HALT when it finishes or
+   fails, so trinload survives for the next push.
 
-**What a pass looks like.** The green border, and the fetched blob present on the
-SAM's Trinity storage (browse it from B-DOS — `DIR` the record), byte-correct
-versus the body the server served (the response body, past the HTTP header).
+**What a pass looks like.** For the smoke shot: green border, and LICENCE.broadcom present in the SAM's Trinity storage (browse from B-DOS — `DIR` the record). The harness confirms the exit mechanism: `http_main` uses `DI;HALT` after the green `OUT (&FE)`, which is the correct Z80 section-D overlay exit.
 
-**What this confirms / does not (host-verified vs hardware-gated).** The host
-harness already proves the fetcher's **wire side** byte-for-byte over the i80
-emulation (`netboot_http_test.go`, `make ci-netboot-z80`): the broadcast ARP
-request, the SYN, the handshake-completing ACK+`GET`, the response ACK cadence, the
-FIN-ACK, and the **accumulated body in `CONN_DATA`** all match the Go authority
-`http.Fetcher`. What it cannot prove — and what this on-hardware run confirms — is
-the **B-DOS RST-8 HSAVE write-out** (the harness has no ROM/SAMDOS/RST 8, so the
-bytes-to-storage step is unverified until real Trinity; the i93 seam's field
-arithmetic *is* host-verified, only the hook dispatch is not), the **section-C source
-paging** of the staging buffer, the real ENC28J60 silicon timing, the EEPROM config
-read, and the end-to-end fetch against a real HTTP server. Emulation-verified is not
-hardware-verified (CLAUDE.md §5).
+**What this confirms / does not (host-verified vs hardware-gated).** The host harness proves: the provisioner's **wire side** byte-for-byte over the i80 emulation; the **store leaf** (store_begin / storage_sink_leaf / store_end) first-free record detection + HSAVE record selection via the BDOSStore oracle (`TestProvStoreDemarcation`); the **boot path marker sequence** [ENTRY → EEPROM_OK → LINK_UP → FILE_START] in the debug binary (`TestHTTPMainBootDebugMarkers`); the **PHY link-wait gate** (i128, `TestHTTPMainBootReachesFirstTX` / `TestHTTPMainRecoversFromLinkDownStart`). What the harness cannot prove — and what this on-hardware run confirms — is the **B-DOS RST-8 HSAVE write-out** (the harness models the hook dispatch via BDOSStore but has no ROM/SAMDOS to back it; the hook field arithmetic is host-verified, only the real dispatch is hardware-gated), the **CSD SPI ladder** on real Trinity hardware (`csd_set_bd_records`, verifying BD_RECORDS is derived from the card), the real ENC28J60 silicon timing, and the end-to-end fetch against a real HTTP server. Emulation-verified is not hardware-verified (CLAUDE.md §5).
 
 ---
 

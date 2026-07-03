@@ -56,6 +56,21 @@ DBG_DONE_CTRL:      equ &40           ; "tftp.done" control received -> return t
 ; the (H>>6)-1 encoding at write time, or is the prelude paging a different page in?).
 DBG_HMPR_NEXT:      equ &50           ; the NEXT marker's code byte = HMPR (in a,(&fb)) at this point
 DBG_LMPR_NEXT:      equ &51           ; the NEXT marker's code byte = LMPR (in a,(&fa)) at this point
+; http_main (i70a): boot-path + per-file progress codes.
+; DBG_HTTP_ENTRY fires as the FIRST marker, just after drv_init succeeds — the
+; first point where the ENC is ready to transmit. All earlier markers would
+; silently fail (ENC not yet initialized), so this serves as "I'm alive + past
+; drv_init" confirmation. The EEPROM read already succeeded before drv_init.
+DBG_HTTP_ENTRY:       equ &60         ; http_main: drv_init OK + EEPROM chunk populated
+DBG_HTTP_EEPROM_OK:   equ &61         ; SD CSD read done (BD_RECORDS set) + ENC RX re-armed
+DBG_HTTP_LINK_UP:     equ &62         ; PHY link up (drv_wait_link returned BC!=0)
+DBG_HTTP_FILE_START:  equ &63         ; per-file fetch started (store_begin called)
+DBG_HTTP_FILE_SAVED:  equ &64         ; per-file window persisted (HSAVE returned)
+DBG_HTTP_FILE_VERIFY: equ &65         ; per-file verify done (store_end / conn_verify_final)
+DBG_HTTP_ALL_DONE:    equ &66         ; all files fetched + persisted (ht_done)
+DBG_HTTP_FAIL_CFG:    equ &70         ; fail: EEPROM chunk absent or bad (ht_fail_cfg)
+DBG_HTTP_FAIL_INIT:   equ &71         ; fail: drv_init returned BC=0 (ht_fail_init)
+DBG_HTTP_FAIL_LINK:   equ &72         ; fail: PHY link timeout (ht_fail_link)
 
 dbg_marker:
                 push    af
@@ -119,12 +134,12 @@ dbg_marker:
                 ret
 
 ; dbg_report_paging — emit the runtime LMPR/HMPR as two tag+value marker pairs
-; (i280b-b2i). PRESERVES ALL REGISTERS (each dbg_marker call does), so it can be
-; dropped at any handler boundary like dbg_marker itself. Sequence on the wire:
-;   HMPR_NEXT(&50), <HMPR byte>, LMPR_NEXT(&51), <LMPR byte>.
-; The SD/ENC one-PIC constraint is the same as dbg_marker: never call while an SD
-; chip-select is asserted; both call sites (HWSAD_PRE, FLUSH_PRE) are outside the
-; SD transaction.
+; (i280b-b2i). Only needed in serve debug builds (NETBOOT_SERVE_DBG, defined in
+; netboot_serve.asm alongside NETBOOT_DEBUG). The serve uses it at HWSAD_PRE and
+; FLUSH_PRE to pin the paged-pointer registers during raw sector writes; the
+; http_main debug path has no paged writes and excluding it saves ~25 bytes that
+; let http_main's debug binary stay within the 32 KB boot budget.
+if defined(NETBOOT_SERVE_DBG)
 dbg_report_paging:
                 push    af
                 ld      a, DBG_HMPR_NEXT
@@ -137,17 +152,18 @@ dbg_report_paging:
                 call    dbg_marker
                 pop     af
                 ret
+endif ; NETBOOT_SERVE_DBG
 
 dbg_magic:          defb 83,68,66,71              ; "SDBG"
 dbg_broadcast_mac:  defb &ff,&ff,&ff,&ff,&ff,&ff
 dbg_broadcast_ip:   defb 255,255,255,255
 dbg_port_be:        defb DBG_PORT >> 8, DBG_PORT & &ff
 dbg_save_code:      defs 1
-; i280b-b2f: enc_timed_out latched at the END of serve_rearm_enc and emitted at the NEXT
-; WRQ_ENTRY as DBG_PRIOR_REARM_TIMEOUT. The §8e finding is that DBG_REARM_TIMEOUT, emitted
-; inside the post-rearm dead ENC-TX window, may not reach the wire; this latch is read at
-; WRQ_ENTRY (which DOES escape), reporting the prior re-arm's result from outside the window.
-; Initialised 0 so the first WRQ (no prior re-arm) emits no &18. Persists across the serve
-; loop until the next re-arm rewrites it.
+; i280b-b2f: enc_timed_out latched at the END of serve_rearm_enc and emitted at
+; the NEXT WRQ_ENTRY as DBG_PRIOR_REARM_TIMEOUT. Serve-only (paired with the
+; serve's serve_rearm_enc timeout path). Excluded in http_main debug builds
+; (no serve_rearm_enc there) to save 1 byte.
+if defined(NETBOOT_SERVE_DBG)
 last_rearm_timed_out: defb 0
+endif ; NETBOOT_SERVE_DBG
 DBG_PAYLOAD:        defs 6

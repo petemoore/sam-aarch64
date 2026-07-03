@@ -297,10 +297,17 @@ type BDOSStore struct {
 	listWrites   []ListWrite   // captured BD_HOOK_LISTWRITE record-list writes, in order
 	boots        []int         // records ALHK-booted, in order (the i122a boot-a-record primitive)
 	card         *CardModel    // nil = no card modelled; HRSAD returns all-zero
+	// usedRecords tracks records that have been HSAVE'd this session. After each
+	// HSAVE the selected record is marked here so that a subsequent
+	// bdos_find_free_record (via bdHookListRead) sees it as named rather than free,
+	// allowing multi-file provisioning to pick a different record for each file
+	// without an attached CardModel. Records in usedRecords with no card model appear
+	// in the list sector with entry[0]='U' (named/used, bit 7 clear, nonzero).
+	usedRecords  map[int]bool
 }
 
 // NewBDOSStore returns a store with no record selected and no saves recorded.
-func NewBDOSStore() *BDOSStore { return &BDOSStore{selected: -1} }
+func NewBDOSStore() *BDOSStore { return &BDOSStore{selected: -1, usedRecords: map[int]bool{}} }
 
 // Selected returns the most recently HRECORD-selected record (-1 if none).
 func (s *BDOSStore) Selected() int { return s.selected }
@@ -365,6 +372,14 @@ func (s *BDOSStore) handle(cpu *z80.CPU, mac *Machine, retAddr uint16) uint16 {
 		}
 		save := decodeBDOSSave(s.selected, u)
 		s.saves = append(s.saves, save)
+		// Mark the selected record as used so a subsequent bdos_find_free_record
+		// (via bdHookListRead) sees it as named rather than free. This lets
+		// multi-file provisioning pick a different first-free record for each file
+		// (D2: store_begin calls bdos_find_free_record per file; without this the
+		// list reads as all-zero = all free, and every file picks record 1).
+		if s.selected > 0 {
+			s.usedRecords[s.selected] = true
+		}
 		// Write-back (i144): copy the saved file's bytes from its source page into
 		// the selected record's sectors, so a follow-up HRSAD reads the file back
 		// (round-trip content verification — the i119e E2E asserts record contents,
@@ -426,6 +441,22 @@ func (s *BDOSStore) handle(cpu *z80.CPU, mac *Machine, retAddr uint16) uint16 {
 		var data [bdSectorSize]byte
 		if s.card != nil {
 			data = s.card.ListSector(listSec)
+		}
+		// Overlay usedRecords: records that have been HSAVE'd are shown as named
+		// (entry[0] nonzero, bit 7 clear) so bdos_find_free_record skips them. The
+		// card model is the primary source; usedRecords only sets bytes that are still
+		// zero (i.e., the card model hasn't already marked the record named).
+		const entriesPerSector = 32
+		const entrySize = 16
+		for rec := range s.usedRecords {
+			recListSec := (rec-1)/entriesPerSector + 1
+			if recListSec != listSec {
+				continue
+			}
+			entryOff := ((rec - 1) % entriesPerSector) * entrySize
+			if data[entryOff]&0x7F == 0 { // still reads as free
+				data[entryOff] = 'U' // mark used: nonzero, bit 7 clear
+			}
 		}
 		for i, b := range data {
 			mac.m.poke(dest+uint16(i), b)

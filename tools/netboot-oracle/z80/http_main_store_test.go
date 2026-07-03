@@ -91,6 +91,11 @@ func TestProvStoreDemarcation(t *testing.T) {
 	writeProvConfig(t, mac) // BASE_PORT / BASE_ISS (identity unused by this test)
 	store := z80h.NewBDOSStore()
 	mac.AttachBDOS(store) // the REAL store leaf's rst 8 HSAVE runs (no card: verdict = the digest)
+	// D2: BD_RECORDS must be > 0 so bdos_find_free_record (called in store_begin)
+	// can scan the list and find a free record. With BD_RECORDS=10, prov_start(0)
+	// finds record 1 free → stores in FW_BASE_RECORD; prov_start(1) finds record 2
+	// free (usedRecords overlay marks record 1 used after the first HSAVE).
+	mac.WriteU16LE(symAddr(t, mac, "BD_RECORDS"), 10)
 
 	name0 := manifestNameBytes(t, mac, 0)
 	name1 := manifestNameBytes(t, mac, 1)
@@ -140,12 +145,13 @@ func TestProvStoreDemarcation(t *testing.T) {
 		t.Fatalf("store recorded %d HSAVE(s), want 2 (one bounded record per file)", len(saves))
 	}
 	type want struct {
-		name string
-		size uint32
+		name   string
+		size   uint32
+		record int
 	}
 	wants := []want{
-		{spanRecordName(name0, 0), uint32(len(body0))},
-		{spanRecordName(name1, 0), uint32(len(body1))},
+		{spanRecordName(name0, 0), uint32(len(body0)), 1}, // D2: prov_start(0) finds record 1 free
+		{spanRecordName(name1, 0), uint32(len(body1)), 2}, // D2: prov_start(1) finds record 2 free (1 used by HSAVE above)
 	}
 	for i, w := range wants {
 		if saves[i].Name != w.name {
@@ -153,6 +159,14 @@ func TestProvStoreDemarcation(t *testing.T) {
 		}
 		if saves[i].Size != w.size {
 			t.Errorf("record[%d] size = %d, want %d (the served body length, header stripped)", i, saves[i].Size, w.size)
+		}
+		// D2: storage_sink_leaf uses FW_BASE_RECORD (set in store_begin by
+		// bdos_find_free_record) + FW_REC_IDX as the HRECORD selection. With
+		// BD_RECORDS=10 and no pre-existing records, file 0 uses record 1 and
+		// file 1 uses record 2 (the usedRecords overlay in BDOSStore marks record
+		// 1 used after the first HSAVE so bdos_find_free_record returns 2 next).
+		if saves[i].Record != w.record {
+			t.Errorf("record[%d] HRECORD = %d, want %d (first-free base+index)", i, saves[i].Record, w.record)
 		}
 	}
 

@@ -250,4 +250,9 @@ PARAM_DST_PORT:   defs 2                 ; big-endian on the wire
 PARAM_PAYLOAD_PTR: defs 2
 PARAM_PAYLOAD_LEN: defs 2
 
+; PACKET_SHARED: when defined (EQU or -D), the caller provides PACKET (e.g. as
+; an EQU alias to an already-allocated buffer such as ARP_PACKET), so we skip
+; the 1518-byte defs. Used by the http_main debug build which reuses ARP_PACKET.
+if defined(PACKET_SHARED)==0
 PACKET:           defs 1518              ; the output frame buffer
+endif

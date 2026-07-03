@@ -1892,6 +1892,15 @@ SRC_TABLE:        defs 256
                 ; assemble the claim/list-write routines. The client never claims, so
                 ; it omits them (boot-window budget — i195).
 NETBOOT_WANT_CLAIM: equ 1
+; NETBOOT_SERVE_DBG must be defined BEFORE bdos_seam.asm (which guards
+; the dbg_report_paging call site with this flag). pyz80's two-pass assembly
+; would phase-error if it's defined after the guarded call site — in pass 2
+; the symbol would be defined and the call included (3 extra bytes vs pass 1).
+; Defined here, inside the serve-only section but before bdos_seam.asm, so
+; the conditional in bdos_seam.asm resolves identically in both passes.
+if defined(NETBOOT_DEBUG)
+NETBOOT_SERVE_DBG:  equ 1
+endif
                 include "bdos_seam.asm"        ; i121f: free-record find + record select + HWSAD/HRSAD + validate
                 include "raw_record_sink.asm"  ; i121f: streaming disk-image -> raw record (HWSAD per sector)
                 ; tr_terminate (i228): serve_main's bring-up error paths end via it,
