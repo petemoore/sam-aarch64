@@ -200,7 +200,14 @@ OPMEM_OFF:      equ     &D100          ; 8 bytes — OpMem offset (s64 LE)
 ;     &D3CA  ERRATA_INSN1         (4 bytes: previous instruction word, LE)
 ;     &D3CE  ERRATA_PREV_PC       (4 bytes: PASS_PC after processing prev insn)
 ;     &D3D2  ERRATA_INSN2         (4 bytes: current instruction word, scratch)
-;   &D3D6..&D4FF  free (298 B between 835769 state and STAGING_BUF at &D500)
+;   &D3D6..&D3EE  i27c: Cortex-A53 erratum 843419 state (25 B)
+;     &D3D6  FIX_843419_ENABLED   (1 byte: 0=off, 1=on for A53/Pi3 targeting)
+;     &D3D7  E843_SCAN_PAGE       (1 byte: 0-based OUT run page index)
+;     &D3D8  E843_SCAN_PTR        (2 bytes: section-B ptr during post-layout scan)
+;     &D3DA  E843_BYTES_LEFT      (3 bytes: bytes remaining in scan, u24 LE)
+;     &D3DD  E843_SCAN_PC         (2 bytes: low 16 of current insn virtual PC)
+;     &D3DF  E843_INSN_BUF        (16 bytes: 4-word lookahead scratch)
+;   &D3EF..&D4FF  free (273 B between 843419 state and STAGING_BUF at &D500)
 ;   &E100..&E27F  LITPOOL_PC_MAP      (64 entries × 6 bytes = 384 B;
 ;                                     moved to &E100+ on 2026-05-28 to
 ;                                     fit the bumped 64-entry cap —
@@ -252,6 +259,15 @@ OPMEM_OFF:      equ     &D100          ; 8 bytes — OpMem offset (s64 LE)
                 ; i27b: Cortex-A53 erratum 835769 NOP-insertion fix. Predicates,
                 ; per-instruction hazard gate, and mode-0 per-word processing path.
                 include "errata_835769.asm"
+                ; i27c: Cortex-A53 erratum 843419 post-layout ADRP→ADR rewrite.
+                ; Scan runs once after pass 2, before enctab_map_out.
+                ; Excluded from BUILD_TESTS_ENCODE: that variant's budget
+                ; is already near the ceiling (encode_inst fixtures take ~2 KB);
+                ; enc-tests does not produce production AArch64 output for
+                ; real hardware so the errata fix is not relevant there.
+                if defined(BUILD_TESTS_ENCODE)==0
+                include "errata_843419.asm"
+                endif
                 include "symbols.asm"
                 include "local_labels.asm"
                 include "litpool.asm"
@@ -298,6 +314,13 @@ start:
                 ld      (ORIGIN_HIGH + 1), a
                 ld      (ORIGIN_HIGH + 2), a
                 ld      (ORIGIN_HIGH + 3), a
+; Zero the 843419 toggle (default off) at cold boot.  Same reason as
+; ORIGIN_HIGH above: errata_843419_scan reads it before main_assemble,
+; so it needs a known value before the self-tests and the first assemble.
+; Not needed in BUILD_TESTS_ENCODE (errata_843419.asm excluded there).
+                if defined(BUILD_TESTS_ENCODE)==0
+                ld      (FIX_843419_ENABLED), a
+                endif
 
 ; Capture the boot LMPR value (as left by BASIC's CALL 32768) into
 ; LMPR_DEFAULT_RUNTIME so enctab_map_out restores the *real* default,

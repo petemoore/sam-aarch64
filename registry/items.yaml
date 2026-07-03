@@ -385,7 +385,7 @@
   title: "Cortex-A53 errata workarounds (--fix-cortex-a53-*)"
   description: |
     Cortex-A53 errata workarounds (--fix-cortex-a53-835769 / -843419) as an EXPLICIT enable/disable feature, off by default for later silicon (Pi 4/400), on for Cortex-A53 / Pi 3 (Pete, q37). These are hard-to-debug latent bugs. Umbrella over the Go authority (i27a) + Z80 ports (i27b 835769, i27c 843419 + toggle). CORRECTION (i27a research vs Pete's q37 note): 835769 has NO page-boundary condition — it is a DATA-DEPENDENCY erratum (a memory op immediately followed by a 64-bit multiply-accumulate); the page-offset (0xff8/0xffc) condition belongs to 843419. Also note: in binutils 2.44 BOTH fixes are link-time (gas does not implement 835769; GCC's flag is compiler-side) — but for our single assemble+link tool 835769 is best done as NOP insertion in the instruction stream and 843419 as an in-place ADRP->ADR rewrite after final layout. CAVEAT (Pete): if it balloons in code size or assemble-time perf, flag and reconsider — assessment so far: tractable, NOT massive (linear scans + a re-layout only when 835769 hazards exist; off by default). Greenfield: Go-first authority then faithful Z80 port + binutils cross-check.
-  status: OPEN
+  status: DONE
   kind: umbrella
   owner: agent
 
@@ -416,10 +416,12 @@
   title: "i27c: Z80 port — Cortex-A53 843419 ADRP->ADR rewrite + SAM enable/disable toggle"
   description: |
     Faithful Z80 port (CLAUDE.md s6) of the i27a 843419 fix + the SAM-side enable/disable toggle UX (q37: explicit feature, off by default). Post-layout scan over the OUT buffer: for each ADRP at a final page-offset 0xff8/0xffc matching the sequence predicate (mem-op, optional 1 non-branch insn, then unsigned-imm ld/st whose base == ADRP Rd), rewrite ADRP->ADR in place (no address shift — the +/-1MB ADR range always fits our image). Mirror the Go authority masks. Wire the SAM toggle (directive or build option) covering BOTH 835769 (i27b) and 843419. SimCoupe-gated; boot self-test fixture. Go authority: errata.go (i27a).
-  status: OPEN
+  status: DONE
   depends_on: [i27a, i234]
   kind: leaf
   owner: agent
+  prs:
+    - {num: 846, role: completing}
   parent: i27
 
 - id: i28

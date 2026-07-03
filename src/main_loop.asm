@@ -107,6 +107,14 @@ main_assemble:
                 call    walk_records
                 call    litpool_flush               ; implicit end-of-source
 
+; -- i27c: Cortex-A53 erratum 843419 post-layout ADRP→ADR scan.
+; Runs after pass 2 once the OUT buffer is finalised; rewrites ADRP
+; words at vulnerable page offsets in-place (toggle off = no-op).
+; Excluded from BUILD_TESTS_ENCODE (errata_843419.asm is not included there).
+                if defined(BUILD_TESTS_ENCODE)==0
+                call    errata_843419_scan
+                endif
+
 ; -- Bracket close: restore LMPR so save_out_file's RST 8 finds ROM
 ; in section A.
                 call    enctab_map_out
