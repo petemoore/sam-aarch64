@@ -16,8 +16,10 @@
 ;     coalesce into KindLitData records, split on whole-element boundaries at the
 ;     litDataMaxBytes (1016) cap (compact.go:61-79, ConstDataWidth, encodeDirective
 ;     -> evalImmsAsBytes);
-;   * LABEL_DEF / LOCAL_DEF drop out of the record stream (compact.go:99-102 —
-;     captured by pass1, never re-emitted here);
+;   * LABEL_DEF / LOCAL_DEF drop out of the record stream (compact.go:99-102)
+;     and are captured as header label/local rows (headerRows,
+;     compact.go:196-222) for the b8c serializer — see COMPACT_LABELROWS /
+;     COMPACT_LOCALROWS below;
 ;   * INST records emit a SKELETON KindInsnRun element (placeholder base word, no
 ;     patches). Here only the element COUNT and the 4-byte PC accounting matter,
 ;     so a mode-0 frame of placeholder words is emitted. The run is flushed on
@@ -85,6 +87,23 @@ COMPACT_GLOBALS_CAP:    equ     128
 COMPACT_DATA_RUN_CAP:   equ     1216
 COMPACT_RECS_CAP:       equ     1344
 
+; Header label/local row capture (i48c-b8c): the headerRows input rows
+; (compact.go:196-222), one per LABEL_DEF / LOCAL_DEF record, in record
+; order.  A label row is [name_id:2 LE][offset:4 LE]; a local row is
+; [digit:1][offset:4 LE]; offset = RecordPC - OriginVMA, the same
+; low-word subtraction the sidecar anchor uses (host Symbols[name] /
+; LocalDefs pc IS the LABEL_DEF/LOCAL_DEF record's pc, pass1.go:176-185).
+; The b8c serializer (src/compact_serialize.asm) sorts + delta-encodes
+; these rows into the on-disk header tables.  The buffers live in the
+; low-RAM block (&0000-&6DFF) that is free in this flat harness (code at
+; &8000+, leaf tables at &C100+, harness stack at &6FFE down); at most
+; 128 rows of each kind can exist because COMPACT_REC_PC caps the walk at
+; 128 records.  Row counts are capped host-side like the other buffers.
+COMPACT_LABELROWS:      equ     &5000          ; 128 rows * 6 B = 768 B
+COMPACT_LOCALROWS:      equ     &5400          ; 128 rows * 5 B = 640 B
+COMPACT_LABELROWS_CAP:  equ     128            ; rows
+COMPACT_LOCALROWS_CAP:  equ     128            ; rows
+
 ; Output count/length cells (host reads these; addresses mirrored in the test).
 compact_sidecar_count:  equ     &FF80          ; u16
 compact_globals_count:  equ     &FF82          ; u16
@@ -117,6 +136,10 @@ compact_globals_ptr:    equ     &FFAA          ; u16
 compact_recs_ptr:       equ     &FFAC          ; u16
 ; (ORIGIN_LOW occupies &FFB0-&FFB3, equ'd in the included test_pass1_ir.asm.)
 compact_anchor_buf:     equ     &FFB4          ; 4 bytes — anchor subtraction scratch
+compact_labelrows_ptr:  equ     &FFB8          ; u16 — label-row append cursor
+compact_localrows_ptr:  equ     &FFBA          ; u16 — local-row append cursor
+compact_labelrows_count: equ    &FFBC          ; u16 (host reads this)
+compact_localrows_count: equ    &FFBE          ; u16 (host reads this)
 
 
 ; -----------------------------------------------------------------------
@@ -151,6 +174,13 @@ compact_ir_walk:
                 ld      (compact_recs_ptr), hl
                 ld      hl, COMPACT_DATA_RUN
                 ld      (compact_data_ptr), hl
+                ld      hl, COMPACT_LABELROWS
+                ld      (compact_labelrows_ptr), hl
+                ld      hl, COMPACT_LOCALROWS
+                ld      (compact_localrows_ptr), hl
+                ld      hl, 0
+                ld      (compact_labelrows_count), hl
+                ld      (compact_localrows_count), hl
                 xor     a
                 ld      (compact_inst_run_open), a      ; no open inst run
 
@@ -220,12 +250,61 @@ compact_advance:
 
 
 ; -----------------------------------------------------------------------
-; compact_label_local — LABEL_DEF / LOCAL_DEF: flushData(), then drop the record
+; compact_label_local — LABEL_DEF / LOCAL_DEF: flushData(), capture a header
+; label/local row (headerRows, compact.go:196-222), then drop the record
 ; WITHOUT flushing the inst run (compact.go:99-102). LABEL_DEF is 5 bytes on the
 ; wire ([kind][len:2=2][sym_id:2]); LOCAL_DEF is 4 ([kind][len:2=1][digit]).
+;
+; The row's NameID is the record's sym_id (the name table is interned in ID
+; order with no duplicates, so the first-occurrence map headerRows builds is
+; the identity, compact.go:197-204); the offset is RecordPC - OriginVMA via
+; compact_store_anchor (host Symbols[name]/LocalDefs pc = the record's pc,
+; pass1.go:176-185).  headerRows does not clamp a negative offset, but a
+; label/local before the origin-seeding `.org` is screened out host-side
+; (compact_ir_test.go's negative-offset screen), so reusing the clamped
+; anchor helper is byte-equivalent in scope.
 ; -----------------------------------------------------------------------
 compact_label_local:
                 call    compact_flush_data
+                ld      hl, (compact_cursor)
+                ld      a, (hl)
+                cp      REC_KIND_LOCAL_DEF
+                jr      z, compact_ll_local
+; LABEL_DEF → label row [name_id:2 LE][offset:4 LE].
+                ld      de, (compact_cursor)
+                inc     de
+                inc     de
+                inc     de                              ; → sym_id LSB
+                ld      hl, (compact_labelrows_ptr)
+                ld      a, (de)
+                ld      (hl), a                         ; name_id lo
+                inc     hl
+                inc     de
+                ld      a, (de)
+                ld      (hl), a                         ; name_id hi
+                inc     hl
+                call    compact_store_anchor            ; offset u32 → (HL), HL += 4
+                ld      (compact_labelrows_ptr), hl
+                ld      hl, (compact_labelrows_count)
+                inc     hl
+                ld      (compact_labelrows_count), hl
+                jr      compact_ll_size
+compact_ll_local:
+; LOCAL_DEF → local row [digit:1][offset:4 LE].
+                ld      de, (compact_cursor)
+                inc     de
+                inc     de
+                inc     de                              ; → digit
+                ld      hl, (compact_localrows_ptr)
+                ld      a, (de)
+                ld      (hl), a                         ; digit
+                inc     hl
+                call    compact_store_anchor            ; offset u32 → (HL), HL += 4
+                ld      (compact_localrows_ptr), hl
+                ld      hl, (compact_localrows_count)
+                inc     hl
+                ld      (compact_localrows_count), hl
+compact_ll_size:
 ; size = 3 framing + payload_len (from the len u16 at cursor+1).
                 ld      hl, (compact_cursor)
                 inc     hl

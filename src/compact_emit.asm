@@ -54,8 +54,17 @@
 ; below CEMIT_ELEMS — the Makefile overlay-suite rule enforces the
 ; resulting payload size cap.  Caps are sized for the boot fixture with
 ; ample slack; an overflow is a loud &cd fail, never silent truncation.
+;
+; A flat harness that reuses the frame packer (src/test_compact_ser.asm,
+; the i48c-b8c boundary-split coverage) defines CEMIT_BUFS_EXTERNAL=1 and
+; supplies its own CEMIT_ELEMS / CEMIT_ELEMS_END before including this
+; file: the default 256-byte window cannot hold a >253-element mode-0 run
+; (254 elements need 1270 bytes), so the boundary fixtures need a larger
+; window than the paged payload has room for.
+if defined(CEMIT_BUFS_EXTERNAL)==0
 CEMIT_ELEMS:            equ     &FD00       ; serialized element run
 CEMIT_ELEMS_END:        equ     &FE00       ; one past (256 B cap)
+endif
 CADAPT_OUT:             equ     &FE00       ; compact record-stream output
 CADAPT_OUT_END:         equ     &FF00       ; one past (256 B cap)
 CADAPT_DATA:            equ     &FF00       ; open LIT_DATA run (driver)
@@ -71,6 +80,13 @@ CEMIT_LIT_BREAK:        equ     4           ; litBreak (compact.go:272)
 ; -----------------------------------------------------------------------
 ; cemit_init — reset the adapter: empty element run, output stream at
 ; [HL, DE).  Input: HL = output base, DE = output end (one past).
+;
+; Window contract: base <= end as u16 values — the window may not wrap
+; past &FFFF, so a window reaching the top of memory is expressed with
+; end = &FFFF (last usable byte &FFFE).  cemit_out_hdr's room check
+; computes room as end - cursor (never cursor + need), so it is exact for
+; any window honouring this contract; a violated contract fails loudly on
+; the first emission rather than wrapping mod 65536 into a false fit.
 ; Clobbers: HL.
 ; -----------------------------------------------------------------------
 cemit_init:
@@ -149,17 +165,28 @@ cemit_ai_done:
                 xor     a                       ; success
                 ret
 
-; cemit_elems_room — element-buffer capacity guard: HL (append ptr) + DE
-; (bytes needed) must stay within CEMIT_ELEMS_END.  Preserves HL, DE.
+; cemit_elems_room — element-buffer capacity guard: DE (bytes needed) must
+; fit between HL (append ptr) and CEMIT_ELEMS_END.  Wrap-safe: room is
+; computed as END - ptr (never ptr + need), so an element buffer placed
+; near top-of-memory (CEMIT_BUFS_EXTERNAL layouts) cannot wrap mod 65536
+; into a false fit.  Preserves HL, DE.
 cemit_elems_room:
                 push    hl
-                add     hl, de
-                ld      bc, CEMIT_ELEMS_END + 1
+                push    de
+                ld      b, h
+                ld      c, l
+                ld      hl, CEMIT_ELEMS_END
                 or      a
-                sbc     hl, bc                  ; CF set iff ptr+need <= END
+                sbc     hl, bc                  ; HL = room = END - ptr
+                jr      c, cer_fail             ; ptr past END: state corrupt
+                sbc     hl, de                  ; room - need (CF clear from above)
+                jr      c, cer_fail
+                pop     de
                 pop     hl
-                ret     c
-                ; fall through to cemit_fail_elems
+                ret
+cer_fail:
+                ; fail_with_tag never returns; the two pushes stay parked.
+                jp      cemit_fail_elems
 cemit_fail_elems:
                 ld      hl, (cemit_elem_ptr)
                 ld      (LAST_FAIL_PC), hl
@@ -526,6 +553,10 @@ cem1_emit_range:
 ; -----------------------------------------------------------------------
 ; cemit_out_hdr — write a record header [kind][payload_len:2 LE] at the
 ; output cursor after checking room for the whole record (3 + payload).
+; The room check is wrap-safe (PR 827 review follow-up, i48c-b8c): room
+; is computed as end - cursor, never cursor + need, so a window abutting
+; top-of-memory (see the cemit_init window contract) cannot wrap mod
+; 65536 into a false fit.
 ; Input:  A = record kind, HL = payload length.
 ; Output: DE -> payload destination (the header is written; the caller
 ;         writes the payload and stores the advanced cemit_out_ptr).
@@ -535,16 +566,18 @@ cem1_emit_range:
 cemit_out_hdr:
                 push    af
                 push    hl
-                ld      de, (cemit_out_ptr)
-                add     hl, de
-                inc     hl
-                inc     hl
-                inc     hl                      ; out_ptr + 3 + payload
-                ld      bc, (cemit_out_end)
+                ld      bc, 3
+                add     hl, bc                  ; HL = need = 3 + payload
+                jr      c, coh_fail             ; need wrapped: can never fit
+                ex      de, hl                  ; DE = need
+                ld      hl, (cemit_out_end)
+                ld      bc, (cemit_out_ptr)
                 or      a
-                sbc     hl, bc
-                jr      c, coh_ok               ; fits below the end
-                jr      z, coh_ok               ; fills exactly
+                sbc     hl, bc                  ; HL = room = end - cursor
+                jr      c, coh_fail             ; cursor past end: state corrupt
+                sbc     hl, de                  ; room - need (CF clear from above)
+                jr      nc, coh_ok              ; need <= room (exact fill ok)
+coh_fail:
                 ld      hl, (cemit_out_ptr)
                 ld      (LAST_FAIL_PC), hl
                 ld      a, CEMIT_TAG_OVERFLOW
