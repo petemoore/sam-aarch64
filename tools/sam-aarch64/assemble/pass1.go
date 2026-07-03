@@ -379,9 +379,17 @@ func resolveEquDirective(rec format.Record, f *format.File, res *Pass1Result) er
 	if err != nil {
 		return fmt.Errorf(".equ %s: %w", name, err)
 	}
-	if _, dup := res.Symbols[name]; !dup {
-		usage.observeSymbolAdd(res.Symbols, name)
+	// .set/.equ redefinition is a HARD FAIL — a DELIBERATE divergence from
+	// GNU as, which silently overwrites (see docs/ARCHITECTURE.md §3, i73/q49).
+	// It matches the Z80 assembler, whose symbol_insert does `jp fail` on a
+	// duplicate id (src/main_loop.asm main_dir_equ_pass1). The guarantee is
+	// strict-input / byte-identical-output: any input we accept emits exactly
+	// the bytes GNU as would, so rejecting a redefinition never diverges the
+	// generated code — it only rejects a class of input GNU as tolerates.
+	if _, dup := res.Symbols[name]; dup {
+		return fmt.Errorf("symbol %q redefined by .set/.equ (redefinition is rejected — a deliberate divergence from GNU as; see docs/ARCHITECTURE.md §3)", name)
 	}
+	usage.observeSymbolAdd(res.Symbols, name)
 	res.Symbols[name] = v
 	return nil
 }
