@@ -17,6 +17,10 @@
 ; standalone fixture includes the write path that sd_record_write_guard_test.go exercises
 ; (bd_record_write_hw / bd_rec_guard_tripped) — the same path sd_push and the serve use.
 NETBOOT_WANT_CLAIM: equ 1
+; The list-path flag (i70e): this fixture exercises the raw SPI paths against
+; the harness SD model, so the scan/claim cluster uses the REAL CMD17/CMD24
+; mechanism — never the synthetic RST-8 hooks.
+NETBOOT_REAL_LISTREAD: equ 1
 
                 include "encdrv.asm"           ; wait_ready (the shared &DC busy poll)
                 include "bdos_seam.asm"         ; BD_RECORDS (+ the picker seam storage)

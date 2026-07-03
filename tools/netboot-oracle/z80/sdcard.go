@@ -261,6 +261,40 @@ func (s *SDCard) CapturedSector(addr uint32) ([]byte, bool) {
 	return sec, ok
 }
 
+// MarkRecordListUsed marks record rec (1-based) as named/used in the on-card
+// record-LIST bytes, so a raw CMD17 list read (bdos_find_free_record's
+// NETBOOT_REAL_LISTREAD path) sees it as taken. List sector N (1-based) lives
+// at card LBA N; an SDHC/v2 CMD17 frame carries that LBA verbatim while an
+// SDv1 frame carries the byte address N<<9 — the store key follows the card
+// class. Only a still-free entry byte is touched (entry[0]&0x7F == 0),
+// mirroring the on-card effect of a real B-DOS save-to-record: the record no
+// longer scans as free. This is the SPI-visible twin of the BDOSStore
+// usedRecords overlay (i70e); BDOSStore's HSAVE handler calls it when the two
+// models are bridged via MirrorUsedRecordsTo.
+func (s *SDCard) MarkRecordListUsed(rec int) {
+	if rec < 1 {
+		return
+	}
+	const entriesPerSector, entrySize = 32, 16
+	listSec := uint32((rec-1)/entriesPerSector + 1)
+	key := listSec
+	if !s.isV2 {
+		key = listSec << 9
+	}
+	if s.store == nil {
+		s.store = make(map[uint32][]byte)
+	}
+	sec, ok := s.store[key]
+	if !ok {
+		sec = make([]byte, sdSectorSz)
+		s.store[key] = sec
+	}
+	off := ((rec - 1) % entriesPerSector) * entrySize
+	if sec[off]&0x7F == 0 {
+		sec[off] = 'U'
+	}
+}
+
 // RecordDataSector returns the 512 bytes captured for linear sector linearSec
 // (0-based) of record (1-based) on an SDHC/v2 card, using the card geometry
 // LBA = csdBase + 1600*(record-1) + linearSec. It reads back what the real B-DOS

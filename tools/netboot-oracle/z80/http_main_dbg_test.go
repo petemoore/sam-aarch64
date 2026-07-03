@@ -86,10 +86,11 @@ func TestHTTPMainBootDebugMarkers(t *testing.T) {
 	mac.AttachIO(enc)
 	store := z80h.NewBDOSStore()
 	mac.AttachBDOS(store)
-	// BD_RECORDS must be > 0 so store_begin's bdos_find_free_record can find a
-	// free record; without it BD_RECORDS=0 → the scan exits immediately and
-	// FW_BASE_RECORD stays 0 (graceful-decline path, record 0 = floppy).
-	mac.WriteU16LE(symAddr(t, mac, "BD_RECORDS"), 10)
+	// No SD CSD attached: the boot's csd_set_bd_records fails gracefully and
+	// leaves BD_RECORDS = 0, so store_begin's free-record scan is skipped
+	// (graceful-decline path, record 0 = floppy). The marker sequence under
+	// test is unaffected; the scan itself is covered by TestProvStoreDemarcation
+	// against the SPI card model (i70e).
 
 	// No RX queued: after prov_first's ARP egresses, the provisioning loop spins
 	// awaiting a reply that never comes. RunBoot returns with Halted=false.

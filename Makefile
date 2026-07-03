@@ -528,7 +528,7 @@ netboot-http: $(BUILD)/netboot_http.bin $(BUILD)/netboot_http.map
 # use.
 $(BUILD)/netboot_http_boot.bin $(BUILD)/netboot_http_boot.map: src/netboot/http_main.asm $(asm_deps/src/netboot/http_main.asm)
 	@mkdir -p $(BUILD)
-	pyz80 -D NETBOOT_STREAM=1 -D HT_SERVER_IP_A=$(HT_SERVER_IP_A) -D HT_SERVER_IP_B=$(HT_SERVER_IP_B) \
+	pyz80 -D NETBOOT_STREAM=1 -D NETBOOT_REAL_LISTREAD=1 -D HT_SERVER_IP_A=$(HT_SERVER_IP_A) -D HT_SERVER_IP_B=$(HT_SERVER_IP_B) \
 	    -D HT_SERVER_IP_C=$(HT_SERVER_IP_C) -D HT_SERVER_IP_D=$(HT_SERVER_IP_D) \
 	    -D HT_SERVER_PORT=$(HT_SERVER_PORT) \
 	    --obj=$(BUILD)/netboot_http_boot.bin \
@@ -556,7 +556,7 @@ HT_SERVER_IP_D ?= 1
 HT_SERVER_PORT ?= 80
 $(BUILD)/netboot_http_smoke_boot.bin $(BUILD)/netboot_http_smoke_boot.map: src/netboot/http_main.asm $(asm_deps/src/netboot/http_main.asm)
 	@mkdir -p $(BUILD)
-	pyz80 -D NETBOOT_STREAM=1 -D NETBOOT_HTTP_SMOKE=1 \
+	pyz80 -D NETBOOT_STREAM=1 -D NETBOOT_HTTP_SMOKE=1 -D NETBOOT_REAL_LISTREAD=1 \
 	    -D HT_SERVER_IP_A=$(HT_SERVER_IP_A) -D HT_SERVER_IP_B=$(HT_SERVER_IP_B) \
 	    -D HT_SERVER_IP_C=$(HT_SERVER_IP_C) -D HT_SERVER_IP_D=$(HT_SERVER_IP_D) \
 	    -D HT_SERVER_PORT=$(HT_SERVER_PORT) \
@@ -582,7 +582,7 @@ netboot-http-smoke-disk: $(BUILD)/netboot_http_smoke_boot.bin $(BUILD)/build-dis
 # anyway (a 1-file fetch exercises the complete boot+store path concisely).
 $(BUILD)/netboot_http_boot_debug.bin $(BUILD)/netboot_http_boot_debug.map: src/netboot/http_main.asm $(asm_deps/src/netboot/http_main.asm)
 	@mkdir -p $(BUILD)
-	pyz80 -D NETBOOT_STREAM=1 -D NETBOOT_DEBUG=1 -D NETBOOT_HTTP_SMOKE=1 \
+	pyz80 -D NETBOOT_STREAM=1 -D NETBOOT_DEBUG=1 -D NETBOOT_HTTP_SMOKE=1 -D NETBOOT_REAL_LISTREAD=1 \
 	    -D HT_SERVER_IP_A=$(HT_SERVER_IP_A) -D HT_SERVER_IP_B=$(HT_SERVER_IP_B) \
 	    -D HT_SERVER_IP_C=$(HT_SERVER_IP_C) -D HT_SERVER_IP_D=$(HT_SERVER_IP_D) \
 	    -D HT_SERVER_PORT=$(HT_SERVER_PORT) \

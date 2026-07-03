@@ -306,12 +306,17 @@ byte-for-byte intact (the shared-resource invariant). The i195 host tests
 `bdos_claim_record` for a battery of adversarial filenames (200-char garbage,
 traversal payloads, embedded control/high-bit/DEL bytes, all-illegal, empty) and
 assert the built entry is always safe + legible, matches the Go authority, and that
-no adversarial input writes a single byte outside the claimed slot. **Honesty line:**
-those tests reach the list sector via the harness hooks `BD_HOOK_LISTREAD/LISTWRITE`
-(161/162), which model the on-card RMW result; the raw card-absolute SPI list-sector
-path (CMD17/CMD24 on `&DC`–`&DF`) is the hardware-gated open item of §8 — there is
-no card-absolute list-sector Z80 SPI driver yet, so this is emulation-verified, not
-hardware-verified.
+no adversarial input writes a single byte outside the claimed slot. **Honesty line
+(updated, i70e):** those tests run the raw card-absolute SPI list path
+(`bd_list_read_hw`/`bd_list_write_hw`, CMD17/CMD24 on `&DC`–`&DF`) against the
+harness SD-SPI model — the serve boot binary builds with `NETBOOT_REAL_LISTREAD` —
+and that path is hardware-proven (the sd_push store/boot/delete campaign, i319a).
+The harness-invented RST-8 list hooks 161/162 are gated behind an explicit oracle
+opt-in and used by nothing: on real B-DOS 1.5t those codes collide with live
+handlers (161 = HLDBK) and wedge the machine in the DI'd SD driver — the i70b
+2026-07-03 hardware wedge (i70e). Every image's list access is the SPI path,
+enforced at build time (a list-scanning image without `NETBOOT_REAL_LISTREAD`
+fails to assemble).
 
 ---
 

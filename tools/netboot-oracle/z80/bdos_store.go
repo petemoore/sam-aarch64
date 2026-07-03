@@ -39,6 +39,7 @@ package z80
 // Trinity hardware. Emulation-verified is not hardware-verified.
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/koron-go/z80"
@@ -97,15 +98,15 @@ const (
 // from a user program. The `RECORD` BASIC command lists every record's name by
 // reading the list sectors off the card (bdos15a.src.txt:886-906, list.record;
 // docs/specs/trinity-record-detection-design.md §2). The narrower true fact is
-// only that there is no dedicated RST-8 hook named "list records". The harness
-// models card-absolute list-sector reads via bdHookListRead (ListSector method):
-// Z80 code loads E=listSector, HL=dest and issues RST 8 / DEFB BD_HOOK_LISTREAD,
-// which models the result of a raw SD CMD17 single-block read at the card-absolute
-// LBA — the hardware path (SPI ladder, ports &DC–&DF) is hardware-gated and not
-// emulated at the SPI level (docs/specs/trinity-record-detection-design.md §8,
-// open-verification-item-1). Per-record identity (the "BDOS" stamp at +232 and the
-// disk label at +210) is still read via HRSAD after HRECORD-selecting the record —
-// that remains the selected-record view, bdos_inspect_record.
+// only that there is no dedicated RST-8 hook named "list records" — which is why
+// EVERY image's list access is the raw CMD17/CMD24 SPI path (NETBOOT_REAL_LISTREAD,
+// modelled at the SPI level by sdcard.go and hardware-proven by sd_push/i319a).
+// The synthetic hook 161 (bdHookListRead, served from this model's ListSector)
+// survives only behind the AllowSyntheticListHooks opt-in — on real B-DOS 1.5t
+// that code is HLDBK and wedges the machine (i70e). Per-record identity (the
+// "BDOS" stamp at +232 and the disk label at +210) is still read via HRSAD after
+// HRECORD-selecting the record — that remains the selected-record view,
+// bdos_inspect_record.
 type CardModel struct {
 	// RecordList holds the 16-byte record-list entries, indexed by record number
 	// minus 1 (entry 0 = record 1). Entries beyond len(RecordList) read as all-zero.
@@ -303,11 +304,35 @@ type BDOSStore struct {
 	// allowing multi-file provisioning to pick a different record for each file
 	// without an attached CardModel. Records in usedRecords with no card model appear
 	// in the list sector with entry[0]='U' (named/used, bit 7 clear, nonzero).
-	usedRecords  map[int]bool
+	usedRecords map[int]bool
+	// spiCard, when non-nil (MirrorUsedRecordsTo), receives MarkRecordListUsed
+	// after every HSAVE, so a raw CMD17 list read (the NETBOOT_REAL_LISTREAD
+	// scan path) sees HSAVE'd records as used — the SPI-visible twin of
+	// usedRecords (i70e). Without the bridge, multi-file provisioning against
+	// the SPI card would re-pick the same "free" record for every file.
+	spiCard *SDCard
+	// AllowSyntheticListHooks opts in to serving the harness-invented list hooks
+	// 161/162 (BD_HOOK_LISTREAD/LISTWRITE). Default FALSE: a run that issues them
+	// panics, because on real B-DOS 1.5t those codes dispatch to REAL handlers
+	// (161 = HLDBK, 162 = &5E09) that drop into the DI'd, busy-polled,
+	// non-abortable SD driver with the caller's registers — a hard machine wedge
+	// (the 2026-07-03 i70b hardware shot; i70e). Only scan-logic unit tests that
+	// deliberately exercise bdos_seam's NETBOOT_SYNTHETIC_LIST_HOOKS build set
+	// this; a SHIPPED image must use the real CMD17/CMD24 list path
+	// (NETBOOT_REAL_LISTREAD), which the harness models at the SPI level
+	// (sdcard.go), so an image-level test that trips this panic has caught a
+	// real would-wedge-hardware bug.
+	AllowSyntheticListHooks bool
 }
 
 // NewBDOSStore returns a store with no record selected and no saves recorded.
 func NewBDOSStore() *BDOSStore { return &BDOSStore{selected: -1, usedRecords: map[int]bool{}} }
+
+// MirrorUsedRecordsTo bridges HSAVE bookkeeping to the SPI card model: after
+// every HSAVE the selected record is marked used in sd's record-LIST bytes
+// (SDCard.MarkRecordListUsed), so the raw CMD17 scan path sees it — see the
+// spiCard field doc (i70e).
+func (s *BDOSStore) MirrorUsedRecordsTo(sd *SDCard) { s.spiCard = sd }
 
 // Selected returns the most recently HRECORD-selected record (-1 if none).
 func (s *BDOSStore) Selected() int { return s.selected }
@@ -379,6 +404,9 @@ func (s *BDOSStore) handle(cpu *z80.CPU, mac *Machine, retAddr uint16) uint16 {
 		// list reads as all-zero = all free, and every file picks record 1).
 		if s.selected > 0 {
 			s.usedRecords[s.selected] = true
+			if s.spiCard != nil {
+				s.spiCard.MarkRecordListUsed(s.selected)
+			}
 		}
 		// Write-back (i144): copy the saved file's bytes from its source page into
 		// the selected record's sectors, so a follow-up HRSAD reads the file back
@@ -434,8 +462,10 @@ func (s *BDOSStore) handle(cpu *z80.CPU, mac *Machine, retAddr uint16) uint16 {
 		// Writes 512 bytes (32 × 16-byte record-list entries) to memory at HL.
 		// This models the result of a raw SD CMD17 single-block read at the
 		// card-absolute LBA of the list sector — NOT record-clamped, unlike HRSAD.
-		// The hardware SPI ladder (ports &DC–&DF) is hardware-gated and not emulated
-		// at the SPI level (docs/specs/trinity-record-detection-design.md §8).
+		// Serving it requires the explicit AllowSyntheticListHooks opt-in: hook
+		// 161 does not exist on real B-DOS 1.5t (it is HLDBK there) and wedges
+		// real hardware (i70e).
+		s.requireSyntheticListHooks(hook, retAddr)
 		listSec := int(cpu.DE.Lo)
 		dest := cpu.HL.U16()
 		var data [bdSectorSize]byte
@@ -464,11 +494,12 @@ func (s *BDOSStore) handle(cpu *z80.CPU, mac *Machine, retAddr uint16) uint16 {
 	case bdHookListWrite:
 		// Card-absolute list-sector WRITE: E = 1-based list sector, HL = the 512
 		// bytes (32 × 16-byte record-list entries) to write back. This models the
-		// result of a raw SD single-block WRITE at the card-absolute LBA of the list
-		// sector — the SPI ladder (ports &DC–&DF) is hardware-gated and not emulated
-		// (docs/specs/trinity-record-detection-design.md §8). bdos_claim_record does
-		// a read-modify-write: it loads the sector, overwrites ONLY the claimed
-		// record's 16-byte entry, and writes the whole sector back.
+		// result of a raw SD single-block WRITE at the card-absolute LBA of the
+		// list sector. bdos_claim_record does a read-modify-write: it loads the
+		// sector, overwrites ONLY the claimed record's 16-byte entry, and writes
+		// the whole sector back. Like bdHookListRead, this is a harness-only hook
+		// gated on AllowSyntheticListHooks (162 is a real 1.5t handler — i70e).
+		s.requireSyntheticListHooks(hook, retAddr)
 		listSec := int(cpu.DE.Lo)
 		src := cpu.HL.U16()
 		var written [bdSectorSize]byte
@@ -476,8 +507,34 @@ func (s *BDOSStore) handle(cpu *z80.CPU, mac *Machine, retAddr uint16) uint16 {
 			written[i] = mac.m.peek(src + uint16(i))
 		}
 		s.applyListWrite(listSec, written)
+	default:
+		// An unmodelled hook code is a fixture bug, never a no-op: on real
+		// B-DOS 1.5t every code 128-166 dispatches to a REAL handler (the
+		// &839F table), so silently succeeding here manufactures exactly the
+		// emulation-passes/hardware-wedges gap of the i70b shot (i70e).
+		panic(fmt.Sprintf("BDOSStore: unmodelled RST 8 hook code %d (&%02X) at &%04X — "+
+			"model it faithfully against bdos15t-beta6.annotated.dis before using it", hook, hook, retAddr))
 	}
 	return retAddr + 1 // skip the 1-byte inline hook code
+}
+
+// requireSyntheticListHooks panics unless the test opted in to the
+// harness-invented list hooks 161/162. On real B-DOS 1.5t those codes collide
+// with live handlers (161 = HLDBK block-load, 162 = &5E09) that fall into the
+// SD/SPI driver, which runs entirely under DI with unbounded busy-polls and no
+// ESC-abort (1.5t deleted 1.5a's tst.esc) — so a shipped image issuing them
+// wedges the machine with the network dead, exactly the 2026-07-03 i70b shot
+// (i70e). Shipped images must build with NETBOOT_REAL_LISTREAD (the CMD17/CMD24
+// SPI path the harness models in sdcard.go); only scan-logic unit tests on the
+// NETBOOT_SYNTHETIC_LIST_HOOKS build may opt in.
+func (s *BDOSStore) requireSyntheticListHooks(hook byte, retAddr uint16) {
+	if s.AllowSyntheticListHooks {
+		return
+	}
+	panic(fmt.Sprintf("BDOSStore: RST 8 hook %d (&%02X) at &%04X is a harness-only synthetic list hook — "+
+		"on B-DOS 1.5t this code is a REAL handler and the machine wedges in the DI'd SD driver (i70e). "+
+		"Build the image with NETBOOT_REAL_LISTREAD (raw CMD17/CMD24), or set AllowSyntheticListHooks "+
+		"for a deliberate scan-logic unit test", hook, hook, retAddr))
 }
 
 // applyListWrite reconciles a written list sector against the CardModel: it finds

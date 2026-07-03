@@ -648,10 +648,14 @@ endif
 ; sd_csd.asm — CSD read and BD_RECORDS derivation. Included here (after all the
 ; code) so every symbol it defines — csd_set_bd_records, csd_base, BD_RECORDS
 ; (via bdos_seam.asm already included transitively) — is available above.
-; No NETBOOT_WANT_CLAIM / NETBOOT_REAL_LISTREAD: http_main uses B-DOS RST 8
-; hooks for record selection and never issues raw CMD24 SPI writes, so the
-; ~540-byte write cluster (bd_list_write_hw / bd_cmd24_write_core /
-; bd_record_write_hw) is omitted, keeping the binary inside the 32 KB budget.
+; NETBOOT_REAL_LISTREAD (set by the Makefile recipes, i70e): the free-record
+; scan reads the record list via the raw CMD17 path (bd_list_read_hw, below) —
+; the sd_push/i319a hardware-proven mechanism. The record SELECT and the HSAVE
+; still go via real B-DOS RST 8 hooks (hardware-proven by i93b). No
+; NETBOOT_WANT_CLAIM: http_main never issues raw CMD24 SPI writes (B-DOS HSAVE
+; owns the record contents), so the ~540-byte write cluster (bd_list_write_hw /
+; bd_cmd24_write_core / bd_record_write_hw) is omitted, keeping the binary
+; inside the 32 KB budget.
 ; ===========================================================================
                 include "sd_csd.asm"
 
