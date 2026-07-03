@@ -57,7 +57,11 @@
 ; Provenance: tools/sam-aarch64/assemble/compact.go (Compact / globalNameIDs),
 ; tools/sam-aarch64-format/litinsts.go (ConstDataWidth), pass2.go (evalImmsAsBytes).
 
+                if defined(CHAIN_PAGED_DRIVER)
+                ; org is owned by chain_paged_driver.asm
+                else
                 org     &8000
+                endif
 
                 include "test_pass1_ir.asm"
 
@@ -94,13 +98,28 @@ COMPACT_RECS_CAP:       equ     1344
 ; low-word subtraction the sidecar anchor uses (host Symbols[name] /
 ; LocalDefs pc IS the LABEL_DEF/LOCAL_DEF record's pc, pass1.go:176-185).
 ; The b8c serializer (src/compact_serialize.asm) sorts + delta-encodes
-; these rows into the on-disk header tables.  The buffers live in the
-; low-RAM block (&0000-&6DFF) that is free in this flat harness (code at
-; &8000+, leaf tables at &C100+, harness stack at &6FFE down); at most
-; 128 rows of each kind can exist because COMPACT_REC_PC caps the walk at
-; 128 records.  Row counts are capped host-side like the other buffers.
-COMPACT_LABELROWS:      equ     &5000          ; 128 rows * 6 B = 768 B
-COMPACT_LOCALROWS:      equ     &5400          ; 128 rows * 5 B = 640 B
+; these rows into the on-disk header tables.  Row counts are capped host-side
+; like the other buffers.
+;
+; Buffer placement depends on the build context:
+;
+;   Flat harness (b8b): low-RAM block (&0000-&6DFF) that is free here (code at
+;   &8000+, leaf tables at &C100+, harness stack at &6FFE down).  At most 128
+;   rows of each kind can exist because COMPACT_REC_PC caps the walk at 128 records.
+;
+;   Paged chain (b8j+, CHAIN_PAGED_DRIVER=1): section B (&4000-&7FFF) is the
+;   page-9 parser window when LMPR=&28, so the flat addresses &5000/&5400 are
+;   INSIDE that window and would corrupt parser state.  Both buffers relocate
+;   into page-8 spare (&1200+ — after PARSE_RECS &0000-&07FF, LEX_SRC
+;   &0800-&0FFF, SYM_NAMES &1000-&11FF).  The compact walk writes them via
+;   section A (page 8), and the Go test reads them directly from pager.RAM[8].
+                if defined(CHAIN_PAGED_DRIVER)
+COMPACT_LABELROWS:      equ     &1200          ; page-8 spare: 128 rows * 6 B = 768 B
+COMPACT_LOCALROWS:      equ     &1500          ; page-8 spare: 128 rows * 5 B = 640 B
+                else
+COMPACT_LABELROWS:      equ     &5000          ; low-RAM block: 128 rows * 6 B = 768 B
+COMPACT_LOCALROWS:      equ     &5400          ; low-RAM block: 128 rows * 5 B = 640 B
+                endif
 COMPACT_LABELROWS_CAP:  equ     128            ; rows
 COMPACT_LOCALROWS_CAP:  equ     128            ; rows
 

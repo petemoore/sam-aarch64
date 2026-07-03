@@ -1036,9 +1036,11 @@
   title: "b8d brick 2 — paged pass1+compact (no encoder): the chain driver runs pass1_ir_walk + the skeleton compact walk over the page-8 IR; 83-fixture corpus match of the b8b non-encoder views"
   description: |
     Second brick of docs/plans/i48c-b8d-integrated-chain.md (see its revised "Brick split" + "Measurements" sections): extend the PR-831 driver to phases 0-2 — after parse_run, alias PASS1_IR_BUF to the PARSE_RECS page-8 window address (equ-conditional; it is symbol-addressed only, test_pass1_ir.asm:137-139) with PASS1_IR_LEN from PARSE_RECPTR, and run pass1_ir_walk + compact_ir_walk (the flat-b8b SKELETON INST arm — the real encoder is brick 3) in the main image with the pass-1 leaf tables at their production &C100-&EFFF equ homes and compact-core state at &F000+. Relocate the b8b header-row captures (COMPACT_LABELROWS/LOCALROWS, &5000/&5400 in the flat harness — inside the page-9 window here) into page-8 spare (&1200+). Corpus test over the 83-fixture screened set (union of parseKnownOversize + compactKnownOversize, both reviewed lists) asserting the b8b non-encoder comparisons — sidecar rows exact, globals exact, parseCompactView record view, header label/local rows — against host assemble.Compact, all computed from a text-only input on the Z80 side (no host-derived IR). Measured maxima (2026-07-03): the PR-831 layout needs NO resizing (max IR ~1000 B, toks 167, src ~1236 B over the 83).
-  status: OPEN
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 833, role: completing}
   parent: i48c-b8
 
 - id: i48d
