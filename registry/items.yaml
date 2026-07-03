@@ -993,9 +993,11 @@
   title: "Negative control for the &d1 sidecar anchor-monotonicity trap (PR 828 review follow-up)"
   description: |
     Add a wantTag-style negative control to tools/netboot-oracle/z80/compact_serialize_test.go: feed compact_serialize an out-of-order sidecar (anchors decreasing; encode with the existing serSidecarWire helper, which preserves input order), benign empty label/local/global/names inputs and a valid ser_out_base/ser_out_end window; assert res.Halted at fail_halt with ser_fail_tag == &d1 (SER_TAG_SIDECAR_ORDER, src/compact_serialize.asm:82; trigger ser_delta32 borrow at :351-352; handler :395-397). Mirror the &cd pattern (runCemitFlush wantTag branch, compact_serialize_test.go:594-623). A companion in-order success case is welcome if cheap.
-  status: OPEN
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 829, role: completing}
   parent: i48c-b8
 
 - id: i48c-b8g

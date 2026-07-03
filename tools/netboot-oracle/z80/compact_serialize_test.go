@@ -754,3 +754,70 @@ func TestCemitOutHdrWindowGuard(t *testing.T) {
 		}
 	})
 }
+
+// TestSerializeSidecarOrderGuard proves the sidecar-anchor monotonicity guard
+// (compact_serialize.asm:351-352) fires with tag &d1 on out-of-order input and
+// passes on non-decreasing input — the PR 828 review follow-up (i48c-b8f).
+// Mirrors the wantTag pattern of TestCemitOutHdrWindowGuard.
+func TestSerializeSidecarOrderGuard(t *testing.T) {
+	// Two SidecarBlank rows (kind 1: the shorter wire shape, just a RunLen
+	// field after the kind+anchor header) at anchors 4 and 10. The subtests
+	// swap their order to exercise both sides of the guard.
+	rowLo := format.SidecarRow{Kind: format.SidecarBlank, Blank: format.BlankRun{Anchor: 4, RunLen: 1}}
+	rowHi := format.SidecarRow{Kind: format.SidecarBlank, Blank: format.BlankRun{Anchor: 10, RunLen: 1}}
+
+	// setupMinimal writes the parameter cells into mac for a minimal but
+	// complete compact_serialize call: empty labels/locals/globals/recs, an
+	// empty name table, the supplied sidecar rows, and a standard out window.
+	setupMinimal := func(t *testing.T, mac *z80h.Machine, rows []format.SidecarRow) {
+		t.Helper()
+		mac.Write(serSidecarBuf, serSidecarWire(rows))
+		mac.Write(serNamesBuf, serNamesWire(t, nil)) // [count:2 LE] = 0
+
+		serSetCell(t, mac, "ser_labels_ptr", serLabelRowsBuf)
+		serSetCell(t, mac, "ser_labels_count", 0)
+		serSetCell(t, mac, "ser_locals_ptr", serLocalRowsBuf)
+		serSetCell(t, mac, "ser_locals_count", 0)
+		serSetCell(t, mac, "ser_globals_ptr", serGlobalsBuf)
+		serSetCell(t, mac, "ser_globals_count", 0)
+		serSetCell(t, mac, "ser_names_ptr", serNamesBuf)
+		serSetCell(t, mac, "ser_sidecar_ptr", serSidecarBuf)
+		serSetCell(t, mac, "ser_sidecar_count", uint16(len(rows)))
+		serSetCell(t, mac, "ser_recs_ptr", serRecsBuf)
+		serSetCell(t, mac, "ser_recs_len", 0)
+		serSetCell(t, mac, "ser_out_base", serOutBuf)
+		serSetCell(t, mac, "ser_out_end", serOutBufEnd)
+	}
+
+	t.Run("out_of_order_sidecar_fails", func(t *testing.T) {
+		// Anchor 10 before anchor 4 (decreasing) must fire the &d1 guard.
+		mac := loadCompactSer(t)
+		setupMinimal(t, mac, []format.SidecarRow{rowHi, rowLo})
+		res, err := mac.CallEntry("compact_serialize", z80h.Entry{})
+		if err != nil {
+			t.Fatalf("compact_serialize: %v", err)
+		}
+		failHalt, _ := mac.Sym("fail_halt")
+		if !res.Halted || res.PC != failHalt {
+			t.Fatalf("compact_serialize returned cleanly (PC=&%04X) — expected the fail trap with tag &D1", res.PC)
+		}
+		tagAddr, _ := mac.Sym("ser_fail_tag")
+		if tag := mac.Read(tagAddr, 1)[0]; tag != 0xD1 {
+			t.Fatalf("fail tag = &%02X, want &D1", tag)
+		}
+	})
+
+	t.Run("in_order_sidecar_succeeds", func(t *testing.T) {
+		// Anchor 4 before anchor 10 (non-decreasing) must produce a valid .tbn.
+		mac := loadCompactSer(t)
+		setupMinimal(t, mac, []format.SidecarRow{rowLo, rowHi})
+		res, err := mac.CallEntry("compact_serialize", z80h.Entry{})
+		if err != nil {
+			t.Fatalf("compact_serialize: %v", err)
+		}
+		serCheckClean(t, mac, res, "compact_serialize")
+		if outLen := serReadCell(t, mac, "ser_out_len"); outLen == 0 {
+			t.Fatalf("compact_serialize wrote 0 bytes — expected a non-empty .tbn")
+		}
+	})
+}
