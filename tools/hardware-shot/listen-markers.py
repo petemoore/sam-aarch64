@@ -46,6 +46,17 @@ MARKERS = {
     # marker whose code byte IS the register value (printed as the next UNKNOWN(&XX)).
     0x50: "HMPR_NEXT",            # the NEXT marker's &XX = HMPR (section C/D page) at this point
     0x51: "LMPR_NEXT",            # the NEXT marker's &XX = LMPR (section A/B page) at this point
+    # http_main fetch-path markers (DBG_HTTP_* in dbg_marker.asm).
+    0x60: "HTTP_ENTRY",           # http_main: drv_init OK + EEPROM chunk populated
+    0x61: "HTTP_EEPROM_OK",       # SD CSD read done (BD_RECORDS set) + ENC RX re-armed
+    0x62: "HTTP_LINK_UP",         # PHY link up (drv_wait_link returned BC!=0)
+    0x63: "HTTP_FILE_START",      # per-file fetch started (store_begin called)
+    0x64: "HTTP_FILE_SAVED",      # per-file window persisted (HSAVE returned)
+    0x65: "HTTP_FILE_VERIFY",     # per-file verify done (store_end / conn_verify_final)
+    0x66: "HTTP_ALL_DONE",        # all files fetched + persisted (ht_done)
+    0x70: "HTTP_FAIL_CFG",        # fail: EEPROM chunk absent or bad (ht_fail_cfg)
+    0x71: "HTTP_FAIL_INIT",       # fail: drv_init returned BC=0 (ht_fail_init)
+    0x72: "HTTP_FAIL_LINK",       # fail: PHY link timeout (ht_fail_link)
 }
 
 
