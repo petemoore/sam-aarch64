@@ -14,9 +14,12 @@
 ;
 ; Each instruction record becomes one serialized INSN_RUN element,
 ; accumulated in CEMIT_ELEMS in the mode-1 wire layout
-; (writer.go:53-67):
+; (writer.go WriteInsnRun):
 ;
-;   [base_word:4 LE][patch_count:1]{[slot:1][expr_len:1][expr...]}*
+;   [base_word:4 LE][patch_count:1]{[slot:4|expr_len:4][expr...]}*
+;
+; where the packed patch header's expr_len nibble 15 escapes to a
+; real-length u8 between the header and the expr bytes (i39c).
 ;
 ; A fully-literal, PC-invariant instruction is a bare word (patch_count
 ; 0); a symbol/PC-bearing one carries exactly one {slot, expr} patch
@@ -125,27 +128,52 @@ cemit_add_inst:
                 inc     hl
                 jr      cemit_ai_done
 cemit_ai_overlay:
-; -- overlay element: [base:4][1][slot][expr_len][expr] ------------------
-; The wire expr_len is u8 (writer.go:61-63 panics past 255) — a longer
+; -- overlay element: [base:4][1][packed hdr][expr] ----------------------
+; The packed patch header is [slot:4|expr_len:4]; a 15+-byte expr takes
+; the len-nibble escape + a real-length u8 (writer.go WriteInsnRun, i39c).
+; The wire expr_len is u8 (the Go writer panics past 255) — a longer
 ; expr is a compaction bug, so fail loudly.
                 ld      a, (OVL_EXPR_LEN + 1)
                 or      a
                 jp      nz, cemit_fail_elems
                 ld      de, (OVL_EXPR_LEN)
-                ld      hl, 7
-                add     hl, de
-                ex      de, hl                  ; DE = 7 + expr_len
+                ld      hl, 6
+                add     hl, de                  ; 6 + expr_len
+                ld      a, e
+                cp      15
+                jr      c, cemit_ai_sized
+                inc     hl                      ; + the escape length byte
+cemit_ai_sized:
+                ex      de, hl                  ; DE = bytes needed
                 ld      hl, (cemit_elem_ptr)
                 call    cemit_elems_room
                 call    cemit_copy_base         ; ovl_base -> (HL), HL += 4
                 ld      (hl), 1                 ; patch_count = 1
                 inc     hl
                 ld      a, (OVL_SLOT)
-                ld      (hl), a                 ; slot
-                inc     hl
+                rlca
+                rlca
+                rlca
+                rlca
+                and     &F0                     ; slot -> high nibble
+                ld      b, a
                 ld      a, (OVL_EXPR_LEN)
-                ld      (hl), a                 ; expr_len (u8)
+                cp      15
+                jr      nc, cemit_ai_hdr_esc
+                or      b                       ; [slot:4|len:4] inline
+                ld      (hl), a
                 inc     hl
+                jr      cemit_ai_hdr_done
+cemit_ai_hdr_esc:
+                ld      c, a                    ; C = real length
+                ld      a, b
+                or      &0F                     ; [slot:4|escape 0xF]
+                ld      (hl), a
+                inc     hl
+                ld      (hl), c                 ; real expr_len u8
+                inc     hl
+cemit_ai_hdr_done:
+                ld      a, (OVL_EXPR_LEN)
                 or      a
                 jr      z, cemit_ai_done        ; empty expr: nothing to copy
 ; Copy the expr bytes.  OVL_EXPR_PTR points at the operand body's
@@ -362,7 +390,9 @@ cf_i_take_j:
 
 ; -----------------------------------------------------------------------
 ; cemit_elem_size — DE := on-wire size of the serialized element at HL
-; (insnElementSize, compact.go:340-346): 5 + per patch (2 + expr_len).
+; (insnElementSize, compact.go): 5 + per patch (packed header + expr_len),
+; where the packed header [slot:4|expr_len:4] is 1 byte, or 2 when the
+; expr_len nibble is the 15-escape (real u8 length follows, i39c).
 ; Preserves HL.  Clobbers A, BC.
 ; -----------------------------------------------------------------------
 cemit_elem_size:
@@ -371,16 +401,21 @@ cemit_elem_size:
                 ld      bc, 4
                 add     hl, bc
                 ld      b, (hl)                 ; patch_count
-                inc     hl                      ; -> first patch (slot)
+                inc     hl                      ; -> first packed header
                 ld      a, b
                 or      a
                 jr      z, ces_done
 ces_patch:
-                inc     hl                      ; skip slot -> expr_len
-                ld      a, (hl)
-                inc     hl                      ; -> expr bytes
-                inc     de
-                inc     de                      ; size += 2 (slot + expr_len)
+                ld      a, (hl)                 ; packed [slot:4|len:4]
+                inc     hl
+                inc     de                      ; size += 1 (packed header)
+                and     &0F
+                cp      &0F
+                jr      nz, ces_have_len        ; inline length 0..14
+                ld      a, (hl)                 ; escape: real u8 length
+                inc     hl
+                inc     de                      ; size += 1 (length byte)
+ces_have_len:
                 push    bc
                 ld      c, a
                 ld      b, 0

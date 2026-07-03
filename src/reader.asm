@@ -86,9 +86,9 @@ reader_init:
                 jp      nz, fail
                 inc     hl
 
-; -- Validate version u16 LE = 2 (compact-`.tbn` v2, M8 / i39a) ---------
+; -- Validate version u16 LE = 3 (packed patch headers, i39c) -----------
                 ld      a, (hl)
-                cp      2
+                cp      3
                 jp      nz, fail
                 inc     hl
                 ld      a, (hl)

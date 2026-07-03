@@ -394,7 +394,8 @@ func parseCompactView(t *testing.T, stream []byte) compactView {
 
 // countInsnElements counts the elements in one KindInsnRun payload
 // [mode u8] then, mode 0: [word u32]*; mode 1: [word u32][patch_count u8]
-// [slot u8, expr_len u8, expr]*.
+// then per patch a packed [slot:4|expr_len:4] header (len nibble 15 =
+// escape, real u8 length follows) + expr bytes (i39c).
 func countInsnElements(t *testing.T, payload []byte) int {
 	t.Helper()
 	mode := payload[0]
@@ -412,9 +413,12 @@ func countInsnElements(t *testing.T, payload []byte) int {
 			pc := int(payload[p])
 			p++
 			for k := 0; k < pc; k++ {
-				p++ // slot
-				elen := int(payload[p])
-				p++
+				elen := int(payload[p] & 0x0F)
+				p++ // packed [slot:4|expr_len:4]
+				if elen == 0x0F {
+					elen = int(payload[p])
+					p++ // length-escape u8
+				}
 				p += elen
 			}
 			n++

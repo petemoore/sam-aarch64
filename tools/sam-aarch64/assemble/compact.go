@@ -340,7 +340,12 @@ func emitMode1InsnRun(w *format.RecordWriter, elems []format.InsnElement) {
 func insnElementSize(el format.InsnElement) int {
 	sz := 4 + 1 // base word + patch_count
 	for _, p := range el.Patches {
-		sz += 2 + len(p.Expr) // slot + expr_len + expr bytes
+		// packed header [slot:4|expr_len:4] + expr bytes; a 15+-byte
+		// expr adds the length-escape u8 (writer.go WriteInsnRun).
+		sz += 1 + len(p.Expr)
+		if len(p.Expr) >= 15 {
+			sz++
+		}
 	}
 	return sz
 }

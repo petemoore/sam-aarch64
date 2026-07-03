@@ -107,27 +107,8 @@ insn_p2_patch_loop:
                 dec     a
                 ld      (insn_patch_count), a
 
-; -- Read slot + expr_len; HL → expr bytes -----------------------------
-                ld      hl, (insn_cursor)
-                ld      a, (hl)
-                ld      (insn_slot), a
-                inc     hl
-                ld      c, (hl)
-                ld      b, 0
-                ld      (insn_expr_len), bc
-                inc     hl                          ; HL → expr bytes
-; Advance the cursor + remaining past this patch (slot+len+expr).
-                push    hl                          ; expr ptr
-                ld      de, (insn_expr_len)
-                add     hl, de                      ; HL past expr
-                ld      (insn_cursor), hl
-                ld      hl, (insn_remaining)
-                inc     de
-                inc     de                          ; DE = expr_len + 2
-                or      a
-                sbc     hl, de
-                ld      (insn_remaining), hl
-                pop     hl                          ; HL = expr ptr
+; -- Decode the packed patch header; HL → expr bytes --------------------
+                call    insn_patch_header
 
 ; -- Evaluate the patch expression -> expr_result ----------------------
                 ld      bc, (insn_expr_len)
@@ -187,25 +168,8 @@ insn_p1_patch_loop:
                 dec     a
                 ld      (insn_patch_count), a
 
-                ld      hl, (insn_cursor)
-                ld      a, (hl)
-                ld      (insn_slot), a
-                inc     hl
-                ld      c, (hl)
-                ld      b, 0
-                ld      (insn_expr_len), bc
-                inc     hl                          ; HL → expr bytes
+                call    insn_patch_header           ; HL → expr bytes
                 ld      (insn_expr_ptr), hl
-; Advance cursor + remaining past the patch.
-                ld      de, (insn_expr_len)
-                add     hl, de
-                ld      (insn_cursor), hl
-                ld      hl, (insn_remaining)
-                inc     de
-                inc     de
-                or      a
-                sbc     hl, de
-                ld      (insn_remaining), hl
 
 ; -- Register a litpool slot for a FoldLitpool19 patch -----------------
                 ld      a, (insn_slot)
@@ -226,6 +190,49 @@ insn_p1_lp_width:
 insn_p1_elem_done:
                 call    pass_pc_advance_4
                 jp      insn_p1_elem_loop
+
+; -----------------------------------------------------------------------
+; insn_patch_header — decode one packed patch header at (insn_cursor):
+; [slot:4|expr_len:4], expr_len nibble 15 = escape, real u8 length
+; follows (reader.go KindInsnRun mode 1 / format reference §7.2, i39c).
+; Sets (insn_slot) + (insn_expr_len), advances (insn_cursor) and
+; (insn_remaining) past the whole patch (header + expr bytes).
+; Output: HL → expr bytes.  Clobbers: A, BC, DE.
+; -----------------------------------------------------------------------
+insn_patch_header:
+                ld      hl, (insn_cursor)
+                ld      a, (hl)
+                inc     hl
+                ld      c, a                ; C = packed header byte
+                rrca
+                rrca
+                rrca
+                rrca
+                and     &0F
+                ld      (insn_slot), a      ; slot = high nibble
+                ld      de, 1               ; DE = header size
+                ld      a, c
+                and     &0F                 ; expr_len nibble
+                cp      &0F
+                jr      nz, iph_len_done    ; 0..14: inline length
+                ld      a, (hl)             ; escape: real u8 length
+                inc     hl
+                inc     e                   ; header size 2
+iph_len_done:
+                ld      c, a
+                ld      b, 0
+                ld      (insn_expr_len), bc
+                push    hl                  ; expr ptr
+                add     hl, bc              ; HL = past expr
+                ld      (insn_cursor), hl
+                ld      hl, (insn_remaining)
+                or      a
+                sbc     hl, bc              ; remaining -= expr_len
+                or      a
+                sbc     hl, de              ; remaining -= header size
+                ld      (insn_remaining), hl
+                pop     hl                  ; HL = expr ptr
+                ret
 
 endif   ; defined(INSN_RUN_FOLD_ONLY)==0
 

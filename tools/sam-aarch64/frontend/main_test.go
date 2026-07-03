@@ -9,7 +9,7 @@ func TestEmptyFileRoundtrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if f.Version != 2 || len(f.Names) != 0 || len(f.Records) != 0 {
+	if f.Version != 3 || len(f.Names) != 0 || len(f.Records) != 0 {
 		t.Errorf("unexpected file shape: %+v", f)
 	}
 }
