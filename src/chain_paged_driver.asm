@@ -155,17 +155,35 @@ OPVAL_STRIDE:           equ     10
 ; ENCTAB form-table lookup (needed by encode_inst, called from compact_inst).
                 include "form_lookup.asm"
 
-; System-name encoders (encode_mrs_word etc.) — stub implementations.
-; The full sysname.asm needs the page-13 sysreg lookup infrastructure (paged_call,
-; LMPR_DEFAULT_RUNTIME, SYSREG_* constants) that the b8d standalone driver does
-; not carry.  The stub fails loudly with tag &fe; mrs/msr/dc/tlbi fixtures are
-; screened out of the b8d corpus by the Go test's b8dKnownSkip list.
-encode_mrs_word:
-encode_msr_word:
-encode_dc_word:
-encode_tlbi_word:
-                ld      a, &fe                          ; sysreg not supported in b8d
-                jp      fail_with_tag
+; paged_call and SYSREG constants (mirrors trampoline.asm, not included here).
+; paged_call lives at &7E40 in section B; in the b8d chain, section B = page 9
+; (LMPR=&28), so the body is installed there at b8d_chain_paged startup.
+TRAMPOLINE_DST:         equ     &7E00
+PAGED_CALL_DST:         equ     TRAMPOLINE_DST + &40    ; = &7E40
+PAGED_CALL_HMPR_SAVE:   equ     TRAMPOLINE_DST + &D0    ; = &7ED0
+PAGED_CALL_SP_SAVE:     equ     TRAMPOLINE_DST + &D1    ; = &7ED1
+TRAMP_SAFE_SP:          equ     TRAMPOLINE_DST + 256    ; = &7F00
+paged_call:             equ     PAGED_CALL_DST
+
+SYSREG_DATA_PAGE:       equ     13
+SYSREG_SYSREG_ENTRY:    equ     &8000
+SYSREG_PSTATE_ENTRY:    equ     &8008
+SYSREG_DC_ENTRY:        equ     &8010
+SYSREG_TLBI_ENTRY:      equ     &8018
+SYSREG_COMM_NAME:       equ     TRAMPOLINE_DST + &80    ; = &7E80, 16 bytes
+SYSREG_COMM_LEN:        equ     TRAMPOLINE_DST + &90    ; = &7E90, 1 byte
+SYSREG_COMM_RESULT:     equ     TRAMPOLINE_DST + &91    ; = &7E91, up to 8 bytes
+
+; LMPR save slot used by sysname.asm's paged_call bracket (mirrors trampoline.asm).
+LMPR_DEFAULT_RUNTIME:   defb    0
+
+; paged_call body bytes — LDIR'd into page-9 section B at b8d_chain_paged startup.
+                include "paged_bodies.asm"
+
+; System-name encoders (encode_mrs_word etc.) via the real page-13 sysreg lookup.
+; sysname.asm calls paged_call at PAGED_CALL_DST (&7E40 in section B = page 9
+; when LMPR=&28) and reads results from SYSREG_COMM_RESULT there.
+                include "sysname.asm"
 
 ; insn_run.asm in fold-only mode: FSID_* constants + insn_fold helpers only;
 ; main_handle_insn_run (depends on walk_records/emit_byte) is excluded.
@@ -180,6 +198,18 @@ encode_tlbi_word:
 ; COMPACT_WALK_REAL_ENCODER block in test_compact_ir.asm's memory map).
 ; CEMIT_BUFS_EXTERNAL=1 is passed as a -D flag by the b8d Makefile target.
                 include "compact_emit.asm"
+
+; compact_serialize.asm emits code into the binary. In the paged chain driver,
+; compact_ir_walk internally calls pass1_ir_walk, which initialises the SYMTAB
+; (symbol_table_init: 256 × 8-byte hash buckets at &C160-&C95F) by writing
+; 0xFF to bytes 0-1 of each bucket. Any b8d or serialiser code assembled into
+; &C160-&C95F would be overwritten. Skip to &C9A4 (first free byte after
+; SYMTAB + SYMTAB_ABS_BITMAP per assembler.asm §memory map) before emitting
+; the serialiser. The gap bytes land in the binary but the SYMTAB init
+; overwrites them at runtime; the gap is harmless dead space.
+if $ <= &C9A4
+                defs    &C9A4 - $
+endif
 
 ; .tbn serializer.
                 include "compact_serialize.asm"
@@ -299,9 +329,19 @@ b8d_chain_paged:
                 ld      (B8D_SAVED_SP), hl
                 ld      sp, &C0FE               ; section D stack (HMPR-stable)
 
-                ; Phase 1: parser window → parse_run.
+                ; Phase 1: parser window, sysreg setup → parse_run.
+                ; Set LMPR=&28 (section B = page 9), install the paged_call body
+                ; there, and record LMPR_DEFAULT_RUNTIME so sysname lookups can
+                ; bracket the encode window (sysname.asm:sysname_lmpr_default_in).
                 ld      a, &28                  ; LMPR=&28: secA=page8, secB=page9
                 out     (&fa), a
+                ld      (LMPR_DEFAULT_RUNTIME), a       ; = &28 for sysname bracket
+                push    bc                      ; save source length (LDIR clobbers BC)
+                ld      hl, paged_call_body
+                ld      de, PAGED_CALL_DST      ; &7E40 in section B (= page 9)
+                ld      bc, paged_call_body_end - paged_call_body
+                ldir                            ; install paged_call in page 9
+                pop     bc                      ; restore source length
                 call    parse_run               ; BC = src len in; BC = rec count out
                 ld      a, (PARSE_ERR)
                 or      a

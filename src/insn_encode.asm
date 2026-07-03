@@ -575,8 +575,6 @@ enc_fsid_addsub: ld     a, FSID_ADDSUB_IMM12
                 ret
 enc_fsid_movk:  ld      a, FSID_MOVK_IMM16
                 ret
-enc_fsid_movz:  ld      a, FSID_MOVZ_AUTO
-                ret
 enc_fsid_logical: ld    a, FSID_LOGICAL
                 ret
 enc_fsid_br26:  ld      a, FSID_BRANCH26

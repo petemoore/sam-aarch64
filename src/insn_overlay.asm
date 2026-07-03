@@ -705,9 +705,9 @@ ovl_mep_yes:
 ; ovl_fold_slot_for_kind — A = SlotKind; CF=1 + A=FoldSlot if it maps to a
 ; relocatable FoldSlot (FoldSlotForKind, tools/aarch64enc/overlay.go:
 ; 150-176), else CF=0.  Covers the generic-table relocatable slots.
-; NOTE: Imm16Shifted maps to FoldMovkImm16 (hw stays in the base word) —
-; deliberately different from enc_slotkind_to_fsid's FSID_MOVZ_AUTO (the
-; literal encoder's auto-hw path).
+; NOTE: Imm16Shifted maps to FoldMovkImm16 (hw stays in the base word),
+; matching enc_slotkind_to_fsid (same FSID_MOVK_IMM16 mapping after the
+; SK_IMM16SH correction in PR 835).
 ovl_fold_slot_for_kind:
                 cp      SK_BR26
                 jr      z, ovl_fsk_br26
