@@ -664,31 +664,15 @@ encode_logical_imm_rotated:
 
 
 ; -----------------------------------------------------------------------
-; encode_logical_imm_reject — shared reject target.
-;
-; All reject sites in encode_logical_imm jump here.  By default
-; (encode_logical_imm_soft == 0) it does `jp fail`, aborting assembly — the
-; normal and/orr-imm behaviour.  A caller that wants a recoverable "not
-; encodable" signal instead (to try logical-imm as one alias form and fall
-; through to the next) can arm the soft flag; this handler then records the
-; rejection and RETs, mapping to CY=1 at the caller.  No caller currently arms
-; it, so reject hard-fails; the hook is kept for a future alias-fallback
-; encoder (e.g. the i48c on-SAM editor text→overlay encoder).  See i73-L9.
-;
-; Every reject site is at a stack-balanced point (only the encoder's own
-; return address is on the stack), so the RET returns to the correct
-; caller.  Mirrors the Go side, where tryEncodeMovImm simply observes
-; encodeLogicalImm returning an error and moves on (refenc/pass2.go:492).
+; encode_logical_imm_reject — shared reject target. Every reject site in
+; encode_logical_imm jumps here and assembly aborts with `jp fail`: an
+; and/orr immediate that is not encodable is a hard error. Every reject site
+; is at a stack-balanced point (only the encoder's own return address is on
+; the stack). Mirrors the Go side, where the caller observes encodeLogicalImm
+; returning an error and surfaces it (refenc/pass2.go:492). A future
+; alias-fallback encoder wanting a recoverable "not encodable" signal (e.g. an
+; on-SAM editor text→overlay encoder) would re-introduce a soft branch + flag
+; here. See i73-L9 / i109.
 ; -----------------------------------------------------------------------
 encode_logical_imm_reject:
-                ld      a, (encode_logical_imm_soft)
-                or      a
-                jp      z, fail             ; hard fail (normal and/orr-imm path)
-                ld      a, 1
-                ld      (encode_logical_imm_rejected), a
-                ret
-
-; Soft-fail flags live in section-D RAM (&F000 free region) to avoid
-; spending code-image bytes (the test variant is tight against &C000).
-encode_logical_imm_soft:         equ     &F019
-encode_logical_imm_rejected:     equ     &F01A
+                jp      fail

@@ -285,9 +285,9 @@ ENC_FIX_TABLE_RAM:  equ     &E100
 ; off-axis cluster (its BUILD_TESTS occupant) is not in the enc-tests
 ; build, and IN does not claim pages 7..12 until main_assemble.
 ;
-; OVERLAY_SUITE_RAM = &F080 sits in the free &F01B-&FFFF section-D
+; OVERLAY_SUITE_RAM = &F080 sits in the free &F019-&FFFF section-D
 ; region (see the assembler.asm memory map), clear of the encode_inst
-; scratch at &F000-&F01A (live while the suite runs) and of the enc_fix
+; scratch at &F000-&F018 (live while the suite runs) and of the enc_fix
 ; payload copy at &E100+ (the suite's fixture tables, read while the
 ; suite runs).  The suite code may extend to &FCFF (the Makefile
 ; overlay-suite size guard enforces it); above it live the compact

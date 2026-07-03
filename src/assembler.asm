@@ -29,9 +29,8 @@
 ;   &E280-&E77C  LOCAL_LABEL_TABLE (2 + 255 × 5 = 1277 B; moved here 2026-05-28)
 ;   &E77D-&E7FF  free (131 B between local-labels and symtab-overflow)
 ;   &E800-&EFFF  SYMTAB_OVERFLOW (256 × 8 = 2 KB; moved here 2026-05-28)
-;   &F000-&F01A  MOV-imm + logical-imm encoder scratch (encode_mov_imm_*
-;                &F000-&F018; logical-imm soft-fail flags &F019/&F01A;
-;                added 2026-05-29 for the release byte-match encoder fixes)
+;   &F000-&F018  MOV-imm encoder scratch (encode_mov_imm_*; added 2026-05-29
+;                for the release byte-match encoder fixes)
 ;   &F01B-&FFFF  free (~4 KB headroom in section D for future use)
 ;   (Also: ORIGIN_HIGH &C960 (4 B) + SYMTAB_ABS_BITMAP &C964 (64 B),
 ;    added 2026-05-29 — see their equ definitions below.)
@@ -279,20 +278,13 @@ start:
 ; re-enables interrupts, so DI must be repeated after hook calls.
                 ld      sp, &C100
 
-; Disarm the logical-imm soft-fail hook.  It lives in uninitialised
-; section-D RAM (&F019) and defaults to "armed only by the MOV-bitmask
-; path" — but RAM is not zero on cold boot, so force it clear here.  When
-; clear, encode_logical_imm_reject `jp fail`s as before for the normal
-; and/orr-immediate slot path.  See src/slots/logical_imm.asm.
-                xor     a
-                ld      (encode_logical_imm_soft), a
-
 ; Zero ORIGIN_HIGH at cold boot.  It is normally set by `.org`'s set-pc
 ; tail and reset by pass_pc_reset — but both run inside main_assemble,
-; AFTER the BUILD_TESTS boot self-tests.  encode_adrp_imm now reads
-; ORIGIN_HIGH as the target/PC high word, so the adrp slot self-tests
-; (which assume origin 0) would otherwise see uninitialised RAM.  Force
-; it to 0 here, before any self-test runs.
+; AFTER the BUILD_TESTS boot self-tests.  encode_adrp_imm reads ORIGIN_HIGH
+; as the target/PC high word, so the adrp slot self-tests (which assume
+; origin 0) would otherwise see uninitialised RAM.  Force it to 0 here,
+; before any self-test runs.
+                xor     a
                 ld      (ORIGIN_HIGH + 0), a
                 ld      (ORIGIN_HIGH + 1), a
                 ld      (ORIGIN_HIGH + 2), a
