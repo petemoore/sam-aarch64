@@ -84,8 +84,20 @@
 ; -----------------------------------------------------------------------
 COMPACT_SIDECAR:        equ     &F200          ; sidecar rows, source order (768 B)
 COMPACT_GLOBALS:        equ     &F500          ; global name_ids, append order (128 B)
+; COMPACT_DATA_RUN and COMPACT_RECS: when COMPACT_WALK_REAL_ENCODER=1 they
+; relocate to page-8 spare (accessible via section A with LMPR=&28), freeing
+; the section-D block (&F580-&FF7F) for the CEMIT_ELEMS accumulation buffer.
+if defined(COMPACT_WALK_REAL_ENCODER)
+COMPACT_DATA_RUN:       equ     &1800          ; page-8 spare: 1216 B
+COMPACT_RECS:           equ     &2000          ; page-8 spare: 1344 B
+; CEMIT element accumulation buffer in the freed section-D block.
+; CEMIT_ELEMS_END must not overlap compact_sidecar_count at &FF80.
+CEMIT_ELEMS:            equ     &F580          ; 2560 B cap (2048+ bare 5-B elements)
+CEMIT_ELEMS_END:        equ     &FF80          ; one past the buffer
+else
 COMPACT_DATA_RUN:       equ     &F580          ; open-data-run accumulation (1216 B)
 COMPACT_RECS:           equ     &FA40          ; compacted record stream (1344 B)
+endif
 COMPACT_SIDECAR_CAP:    equ     768
 COMPACT_GLOBALS_CAP:    equ     128
 COMPACT_DATA_RUN_CAP:   equ     1216
@@ -203,6 +215,14 @@ compact_ir_walk:
                 xor     a
                 ld      (compact_inst_run_open), a      ; no open inst run
 
+if defined(COMPACT_WALK_REAL_ENCODER)
+; Initialize the cemit adapter: element buffer at CEMIT_ELEMS, output stream
+; at COMPACT_RECS (compact_flush_inst syncs cemit_out_ptr before each flush).
+                ld      hl, COMPACT_RECS
+                ld      de, COMPACT_RECS + COMPACT_RECS_CAP
+                call    cemit_init
+endif
+
 ; Walk cursor + per-record index (for COMPACT_REC_PC lookup).
                 ld      hl, PASS1_IR_BUF
                 ld      (compact_cursor), hl
@@ -230,7 +250,11 @@ compact_loop:
                 cp      REC_KIND_BLANK_RUN
                 jp      z, compact_blank
                 cp      REC_KIND_INST
+if defined(COMPACT_WALK_REAL_ENCODER)
+                jp      z, compact_walk_inst
+else
                 jp      z, compact_inst
+endif
                 cp      REC_KIND_DIRECTIVE
                 jp      z, compact_directive
                 jp      fail                            ; unknown record kind
@@ -482,12 +506,91 @@ compact_bump_sidecar_count:
 
 
 ; -----------------------------------------------------------------------
-; compact_inst — INST: flushData(), then append a skeleton element to the open
-; inst run (compact.go:149-161). Each INST occupies 4 output bytes; the skeleton
-; element is a placeholder base word (0). The run is materialised as mode-0
-; KindInsnRun frames at compact_flush_inst. Wire:
-; [kind][mnem:2][op_count:1][ops_len:2][ops]; size = 6 + ops_len.
+; compact_inst / compact_walk_inst — INST dispatch handler.
+; Wire: [kind][mnem:2][op_count:1][ops_len:2][ops]; size = 6 + ops_len.
 ; -----------------------------------------------------------------------
+if defined(COMPACT_WALK_REAL_ENCODER)
+
+; Real encoder arm (COMPACT_WALK_REAL_ENCODER=1): extract mnem/op/ops from
+; the INST record, set PASS_PC from COMPACT_REC_PC[index], copy ops to
+; STAGING_BUF (section D, HMPR-stable), then call cemit_add_inst within an
+; ENCTAB bracket (LMPR=&24), restoring LMPR=&28 after.
+compact_walk_inst:
+                call    compact_flush_data
+; Extract fields from cursor (page 8 via section A, LMPR=&28):
+; [kind][mnem:2][op_count:1][ops_len:2][ops...]
+                ld      hl, (compact_cursor)
+                inc     hl                              ; -> mnem lo
+                ld      e, (hl)
+                inc     hl
+                ld      d, (hl)                         ; DE = mnem_id
+                ld      (cwi_mnem_id), de
+                inc     hl                              ; -> op_count
+                ld      a, (hl)
+                ld      (cwi_op_count), a
+                inc     hl                              ; -> ops_len lo
+                ld      c, (hl)
+                inc     hl
+                ld      b, (hl)                         ; BC = ops_len
+                ld      (cwi_ops_len), bc
+; Set PASS_PC from COMPACT_REC_PC[compact_rec_index] (section D, HMPR-stable).
+                ld      hl, (compact_rec_index)
+                add     hl, hl
+                add     hl, hl                          ; HL = index * 4
+                ld      de, COMPACT_REC_PC
+                add     hl, de                          ; HL -> COMPACT_REC_PC[index]
+                ld      e, (hl)
+                inc     hl
+                ld      d, (hl)
+                ld      (PASS_PC), de
+                inc     hl
+                ld      e, (hl)
+                inc     hl
+                ld      d, (hl)
+                ld      (PASS_PC + 2), de
+; Copy ops (ops_len bytes) from page-8 cursor+6 to STAGING_BUF (section D)
+; while LMPR=&28 and page 8 is visible via section A.
+                ld      hl, (compact_cursor)
+                ld      bc, 6
+                add     hl, bc                          ; HL -> ops in page 8
+                ld      de, STAGING_BUF
+                ld      bc, (cwi_ops_len)
+                ld      a, b
+                or      c
+                jr      z, cwi_no_ops
+                ldir                                    ; copy ops to STAGING_BUF (section D)
+cwi_no_ops:
+; ENCTAB bracket: map ENCTAB into section A, call cemit_add_inst, restore.
+                ld      a, LMPR_ENCTAB
+                out     (&fa), a
+                ld      a, (cwi_op_count)
+                ld      de, (cwi_mnem_id)
+                ld      hl, STAGING_BUF
+                call    cemit_add_inst
+                push    af                              ; save gap status
+                ld      a, &28
+                out     (&fa), a                        ; restore LMPR=&28: page 8 -> section A
+                pop     af
+                or      a
+                jp      nz, cwi_gap_fail
+; Advance past record: 6 + ops_len.
+                ld      bc, (cwi_ops_len)
+                inc     bc
+                inc     bc
+                inc     bc
+                inc     bc
+                inc     bc
+                inc     bc                              ; + 6 header bytes
+                jp      compact_advance
+
+cwi_gap_fail:
+                ld      a, CEMIT_TAG_OVERFLOW           ; gap = compaction bug; fail loudly
+                jp      fail_with_tag
+
+else
+
+; Skeleton arm (COMPACT_WALK_REAL_ENCODER not set): count element, emit
+; placeholder frames at compact_flush_inst.
 compact_inst:
                 call    compact_flush_data
 ; Mark the inst run open and bump its element count.
@@ -517,6 +620,8 @@ compact_inst_count:
                 inc     bc
                 inc     bc                              ; + 6 header bytes
                 jp      compact_advance
+
+endif
 
 
 ; -----------------------------------------------------------------------
@@ -867,17 +972,35 @@ compact_ecd_copy:
 
 
 ; -----------------------------------------------------------------------
-; compact_flush_inst — materialise the open inst run as mode-0 KindInsnRun
-; frames of placeholder base words (compact.go:57-60 flushInst →
-; emitInsnRunFrames; with no patches every frame is mode-0, split at maxWords =
-; (1016-1)/4 = 253 words). The base words are placeholders (0) — the real
-; emission is the ENCTAB-coupled adapter src/compact_emit.asm (i48c-b8e),
-; verified in the paged enc-tests boot; only the element count + PC accounting
-; matter here (see THE SEAM note in the file header).
+; compact_flush_inst — flush the open inst run.
 ;
+; COMPACT_WALK_REAL_ENCODER=1: delegates to cemit_flush_inst, syncing the
+; shared output pointer (compact_recs_ptr ↔ cemit_out_ptr) so that LitData
+; records (written to compact_recs_ptr by compact_flush_data) and InsnRun
+; records (written to cemit_out_ptr by cemit_flush_inst) are correctly
+; interleaved.  cemit_flush_inst is a no-op on an empty run.
+;
+; COMPACT_WALK_REAL_ENCODER not set (skeleton arm): emit mode-0 KindInsnRun
+; frames of zero placeholder words (sufficient for b8b/b8j non-encoder tests).
 ; A KindInsnRun mode-0 record is [REC_KIND_INSN_RUN][len:2 LE][mode=0][word:4]*.
+;
 ; Clobbers: everything.
 ; -----------------------------------------------------------------------
+if defined(COMPACT_WALK_REAL_ENCODER)
+
+compact_flush_inst:
+; Sync cemit_out_ptr to compact_recs_ptr (compact_flush_data may have advanced
+; compact_recs_ptr since the last cemit_flush_inst call).
+                ld      hl, (compact_recs_ptr)
+                ld      (cemit_out_ptr), hl
+                call    cemit_flush_inst
+; Sync compact_recs_ptr to cemit_out_ptr (advanced past the written frames).
+                ld      hl, (cemit_out_ptr)
+                ld      (compact_recs_ptr), hl
+                ret
+
+else
+
 COMPACT_INSN_MAX_WORDS: equ     253
 
 compact_flush_inst:
@@ -945,6 +1068,8 @@ compact_fi_words:
                 djnz    compact_fi_words
                 ld      (compact_recs_ptr), de
                 jr      compact_fi_frame
+
+endif
 
 
 ; -----------------------------------------------------------------------
@@ -1107,3 +1232,8 @@ compact_mul_zero:
 ; top of this file (the &F000-&FFFF free block), NOT emitted here — see that map
 ; for why (the included 11 KB IR buffer pushes the code image past &C100, so any
 ; emitted scratch would collide with the leaves' SYMTAB).
+;
+; cwi_* state cells (compact_walk_inst temporaries) are emitted by
+; chain_paged_driver.asm in the b8d driver block (they need defw/defb, which
+; would land in the image here but are only needed for COMPACT_WALK_REAL_ENCODER).
+; They are NOT defined here to avoid bloating the b8b/b8j image.

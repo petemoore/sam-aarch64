@@ -107,3 +107,246 @@ b8j_parse_err:
 ; ===========================================================================
 B8J_SAVED_LMPR: defs 1          ; boot LMPR saved across the window
 B8J_SAVED_SP:   defs 2          ; boot SP saved across the window
+
+
+; ===========================================================================
+; b8d additions — COMPACT_WALK_REAL_ENCODER=1 only.
+;
+; When built with -D COMPACT_WALK_REAL_ENCODER=1 the chain extends from the
+; skeleton compact walk (b8j) to the full encoder pipeline:
+;   parse → pass1 → compact_ir_walk (real cemit_add_inst INST arm)
+;       → compact_serialize → compact .tbn output
+;
+; Additional includes (encoder, serializer) and the b8d_chain_paged entry
+; point are gated here so the b8j binary is unaffected.
+; ===========================================================================
+if defined(COMPACT_WALK_REAL_ENCODER)
+
+; ENCTAB paging constants (normally in src/trampoline.asm, not included here).
+ENCTAB_BASE:            equ     &0000           ; ENCTAB base address in section A
+LMPR_ENCTAB:            equ     &24             ; LMPR value: section A = page 4 (ENCTAB)
+
+; Diagnostic cell — stores a context pointer on loud fails (compact_emit.asm).
+LAST_FAIL_PC:           defw    0
+
+; compact_walk_inst temporaries (emitted here rather than in test_compact_ir.asm
+; to keep the b8b/b8j image lean; these are only needed for REAL_ENCODER builds).
+cwi_mnem_id:    defw    0               ; mnemonic id saved across LMPR bracket
+cwi_op_count:   defb    0               ; operand count saved across LMPR bracket
+cwi_ops_len:    defw    0               ; operand-stream byte length
+
+; OPVAL_STRIDE (from encoder.asm, not included here): the operand-value
+; record stride used by the slot encoders.
+OPVAL_STRIDE:           equ     10
+
+; Slot encoders (same 11 files and order as src/assembler.asm).
+                include "slots/xreg.asm"
+                include "slots/imm_small.asm"
+                include "slots/imm12_shifted.asm"
+                include "slots/imm16_shifted.asm"
+                include "slots/extend_op.asm"
+                include "slots/branch_imm.asm"
+                include "slots/adrp_imm.asm"
+                include "slots/logical_imm.asm"
+                include "slots/shifted_reg.asm"
+                include "slots/extended_reg.asm"
+                include "slots/mem.asm"
+
+; ENCTAB form-table lookup (needed by encode_inst, called from compact_inst).
+                include "form_lookup.asm"
+
+; System-name encoders (encode_mrs_word etc.) — stub implementations.
+; The full sysname.asm needs the page-13 sysreg lookup infrastructure (paged_call,
+; LMPR_DEFAULT_RUNTIME, SYSREG_* constants) that the b8d standalone driver does
+; not carry.  The stub fails loudly with tag &fe; mrs/msr/dc/tlbi fixtures are
+; screened out of the b8d corpus by the Go test's b8dKnownSkip list.
+encode_mrs_word:
+encode_msr_word:
+encode_dc_word:
+encode_tlbi_word:
+                ld      a, &fe                          ; sysreg not supported in b8d
+                jp      fail_with_tag
+
+; insn_run.asm in fold-only mode: FSID_* constants + insn_fold helpers only;
+; main_handle_insn_run (depends on walk_records/emit_byte) is excluded.
+; INSN_RUN_FOLD_ONLY=1 is passed as a -D flag by the b8d Makefile target.
+                include "insn_run.asm"
+
+; Core encoder + overlay classifier.
+                include "insn_encode.asm"
+                include "insn_overlay.asm"
+
+; compact_emit.asm with external CEMIT_ELEMS/CEMIT_ELEMS_END (defined by the
+; COMPACT_WALK_REAL_ENCODER block in test_compact_ir.asm's memory map).
+; CEMIT_BUFS_EXTERNAL=1 is passed as a -D flag by the b8d Makefile target.
+                include "compact_emit.asm"
+
+; .tbn serializer.
+                include "compact_serialize.asm"
+
+
+; ---------------------------------------------------------------------------
+; Page-8 layout for b8d (accessed via section A when LMPR=&28).
+; Picking up after COMPACT_RECS ends at &2540:
+;   &2B00: names wire buffer (SYM_NAMES converted to ser_names format)
+;   &2F00: .tbn output (up to &3FFF = 4352 B)
+; ---------------------------------------------------------------------------
+B8D_NAMES_WIRE:         equ     &2B00           ; [count:2 LE][len:1][bytes]* per name
+B8D_NAMES_WIRE_END:     equ     &2F00           ; one past (1024 B — more than SYM_NAMES)
+B8D_SER_OUT:            equ     &2F00           ; .tbn output base (page-8 address)
+B8D_SER_OUT_END:        equ     &3FFF           ; one past (last usable byte)
+
+
+; ---------------------------------------------------------------------------
+; b8d_build_names_wire — convert SYM_NAMES (page-8 offset &1000, format
+; [len:1][bytes]*[0]) to the ser_names format ([count:2 LE][len:1][bytes]*)
+; and store the result at B8D_NAMES_WIRE (also in page 8).  Must be called
+; with LMPR=&28 so section A = page 8.
+; Clobbers: A, BC, DE, HL.
+; ---------------------------------------------------------------------------
+b8d_build_names_wire:
+                ld      hl, SYM_NAMES               ; &1000 in page 8 via section A
+                ld      de, B8D_NAMES_WIRE + 2      ; dest: skip [count:2] placeholder
+                ld      bc, 0                        ; BC = name count
+bnw_loop:
+                ld      a, (hl)                      ; len byte (0 = end of names list)
+                or      a
+                jr      z, bnw_done
+                ld      (de), a                      ; copy len byte
+                inc     de
+                push    bc
+                ld      c, a
+                ld      b, 0                         ; BC = len (bytes to copy)
+bnw_copy:
+                inc     hl
+                ld      a, (hl)
+                ld      (de), a
+                inc     de
+                dec     bc
+                ld      a, b
+                or      c
+                jr      nz, bnw_copy
+                inc     hl                           ; advance past last name byte → next len
+                pop     bc
+                inc     bc                           ; count++
+                jr      bnw_loop
+bnw_done:
+                ld      hl, B8D_NAMES_WIRE
+                ld      (hl), c                      ; count lo
+                inc     hl
+                ld      (hl), b                      ; count hi
+                ret
+
+
+; ---------------------------------------------------------------------------
+; b8d_setup_serialize — populate the compact_serialize parameter cells from
+; the compact walk outputs and b8d layout constants.  Must be called with
+; LMPR=&28.  Clobbers: HL.
+; ---------------------------------------------------------------------------
+b8d_setup_serialize:
+                ld      hl, COMPACT_LABELROWS
+                ld      (ser_labels_ptr), hl
+                ld      hl, (compact_labelrows_count)
+                ld      (ser_labels_count), hl
+
+                ld      hl, COMPACT_LOCALROWS
+                ld      (ser_locals_ptr), hl
+                ld      hl, (compact_localrows_count)
+                ld      (ser_locals_count), hl
+
+                ld      hl, COMPACT_RECS
+                ld      (ser_recs_ptr), hl
+                ld      hl, (compact_recs_len)
+                ld      (ser_recs_len), hl
+
+                ld      hl, B8D_NAMES_WIRE
+                ld      (ser_names_ptr), hl
+
+                ld      hl, COMPACT_GLOBALS
+                ld      (ser_globals_ptr), hl
+                ld      hl, (compact_globals_count)
+                ld      (ser_globals_count), hl
+
+                ld      hl, COMPACT_SIDECAR
+                ld      (ser_sidecar_ptr), hl
+                ld      hl, (compact_sidecar_count)
+                ld      (ser_sidecar_count), hl
+
+                ld      hl, B8D_SER_OUT
+                ld      (ser_out_base), hl
+                ld      hl, B8D_SER_OUT_END
+                ld      (ser_out_end), hl
+                ret
+
+
+; ===========================================================================
+; b8d_chain_paged — drive parse → pass1 → compact_ir_walk (real encoder) →
+; compact_serialize → .tbn output.
+;
+; Entry: BC = source byte length (source written to page 8 at &0800 = LEX_SRC).
+; Exit:  .tbn bytes at B8D_SER_OUT (page-8 address &2F00), length in
+;        ser_out_len (section C, readable via mac.Read or pager.RAM[8]).
+;        LMPR and SP restored to entry values.
+; On error: hits the fail trap (tag &f1 parse error, or &cd/&d0-&d3 encoder/
+;           serializer overflow).
+; ===========================================================================
+b8d_chain_paged:
+                ; Phase 0: save boot state, relocate stack.
+                in      a, (&fa)
+                ld      (B8D_SAVED_LMPR), a
+                ld      hl, 0
+                add     hl, sp
+                ld      (B8D_SAVED_SP), hl
+                ld      sp, &C0FE               ; section D stack (HMPR-stable)
+
+                ; Phase 1: parser window → parse_run.
+                ld      a, &28                  ; LMPR=&28: secA=page8, secB=page9
+                out     (&fa), a
+                call    parse_run               ; BC = src len in; BC = rec count out
+                ld      a, (PARSE_ERR)
+                or      a
+                jr      nz, b8d_parse_err
+
+                ; PASS1_IR_LEN = PARSE_RECPTR - PARSE_RECS.
+                ld      hl, (PARSE_RECPTR)
+                ld      de, PARSE_RECS          ; &0000
+                or      a
+                sbc     hl, de
+                ld      (PASS1_IR_LEN), hl
+
+                ; Phase 2: form_lookup_init (needs ENCTAB in section A).
+                ld      a, LMPR_ENCTAB          ; &24
+                out     (&fa), a
+                call    form_lookup_init
+                ld      a, &28
+                out     (&fa), a                ; restore LMPR=&28
+
+                ; Phase 3: compact walk with real encoder (cemit_add_inst per INST).
+                call    compact_ir_walk
+
+                ; Phase 4: build names wire (SYM_NAMES → ser_names format).
+                call    b8d_build_names_wire
+
+                ; Phase 5: set up compact_serialize parameter cells.
+                call    b8d_setup_serialize
+
+                ; Phase 6: serialize to .tbn.
+                call    compact_serialize
+
+                ; Phase 7: restore boot state.
+b8d_restore:
+                ld      a, (B8D_SAVED_LMPR)
+                out     (&fa), a
+                ld      hl, (B8D_SAVED_SP)
+                ld      sp, hl
+                ret
+
+b8d_parse_err:
+                ld      a, &f1
+                jp      fail_with_tag
+
+; b8d driver state cells (section C, HMPR-stable).
+B8D_SAVED_LMPR: defs 1
+B8D_SAVED_SP:   defs 2
+
+endif   ; defined(COMPACT_WALK_REAL_ENCODER)
