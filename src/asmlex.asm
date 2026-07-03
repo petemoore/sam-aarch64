@@ -1212,7 +1212,22 @@ LEX_SRC:        defs 4096       ; input source bytes (corpus: 4096 B cap)
 LEX_TOKS:       equ  &0100      ; output token records (14 B each -> 1024 tokens, 14336 B, ends &3900)
 LEX_STRPOOL:    defs 4096       ; decoded TOK_STRING bodies (corpus: 4096 B cap)
                 else
+                if defined(ASMPARSE_PAGED_BUFS)
+; Paged build (i48c-b8i/b8d): all large buffers as equates placed in the
+; two-page window mapped by LMPR=&28 (section A=page8, section B=page9).
+; Page-8 window (&0000-&3FFF): PARSE_RECS at &0000, LEX_SRC at &0800, SYM_NAMES at &1000.
+; Page-9 window (&4000-&7FFF): code+defs at &4000, LEX_TOKS at &6700, LEX_STRPOOL at &7500.
+; Code (excl. large buffers) ends ~&611E; scratch-variable defs follow to AP_NAMEBUF end ~&665F.
+; LEX_TOKS starts at &6700 (above &665F) so token writes never collide with the defs region.
+; 256-token LEX_TOKS cap (x14 B = 3584 B, ends &7500) and 1024-byte LEX_STRPOOL
+; (ends &7900) are sized for the b8d brick-1 single-fixture smoke test; final
+; corpus-scale sizing lands in brick 2.
+LEX_SRC:        equ  &0800      ; page-8 window; 2048 B cap (ends &1000)
+LEX_TOKS:       equ  &6700      ; page-9 window, above defs end ~&665F; 3584 B (256 tokens, ends &7500)
+LEX_STRPOOL:    equ  &7500      ; page-9 window; 1024 B cap (ends &7900)
+                else
 LEX_SRC:        defs 2048       ; input source bytes (caller writes; BC = len)
 LEX_TOKS:       defs 3584       ; output token records (14 B each -> 256 tokens)
 LEX_STRPOOL:    defs 2048       ; decoded TOK_STRING bodies (span ptr/len index here)
+                endif
                 endif

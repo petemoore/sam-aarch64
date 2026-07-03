@@ -1025,9 +1025,11 @@
   title: "b8d brick 1 — paged parser image: parse_run seeded into pages 8/9, LMPR-driven from a main-image driver, single-fixture IR byte-match in the koron harness"
   description: |
     First brick of the docs/plans/i48c-b8d-integrated-chain.md design (the flat-64K-infeasible finding): build the parser (asmlex+asmparse) as a window image org &4000 with buffers equ-placed across the page-8/9 pair (provisional sizing; final sizing at brick 2 from the b8g corpus measurements), seed it into Pager().RAM[8]/RAM[9], and drive it from a minimal org-&8000 main image: save LMPR+SP, SP to &C0FE, LMPR=&28 (RAM0+page8: section A=8, B=9), call parse_run (cross-image symbol via the --importfile precedent), capture record count + PARSE_RECPTR-derived length into driver cells, restore LMPR+SP. Go smoke test: seed pages, write a small fixture source into the page-8 LEX_SRC offset, CallEntry the driver, read PARSE_RECS from RAM[8], byte-match vs serializeIR(frontend.Translate) — proving the paged arrangement (phases 0-1 of the plan) end-to-end. CRITICAL harness facts: OUT(&FA) is faithfully emulated (no-op assumption is false); CallEntry plants SP=&6FFE/trap=&7000 in boot-mapped pages, so LMPR must be restored before the final RET and SP relocated during the window.
-  status: OPEN
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 831, role: completing}
   parent: i48c-b8
 
 - id: i48d
