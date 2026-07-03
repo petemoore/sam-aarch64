@@ -560,12 +560,16 @@ func refParse(src []byte) (recs []parseRec, ok bool) {
 	}
 }
 
+// addrPARSE_RECS is the PARSE_RECS buffer address under ASMPARSE_CORPUS_BUFS.
+// PARSE_RECS is an `equ` constant in src/asmparse.asm, absent from the pyz80
+// mapfile; a drift here vs. the .asm is a silent corruption.
+const addrPARSE_RECS uint16 = 0x3A00
+
 // parseZ80 writes src to LEX_SRC, runs parse_run, and reads back the emitted
 // INST records plus the PARSE_ERR flag.
 func parseZ80(t *testing.T, mac *z80h.Machine, src []byte) (recs []parseRec, errFlag bool) {
 	t.Helper()
 	symSrc, _ := mac.Sym("LEX_SRC")
-	symRecs, _ := mac.Sym("PARSE_RECS")
 	symErr, _ := mac.Sym("PARSE_ERR")
 
 	mac.Write(symSrc, src)
@@ -574,7 +578,7 @@ func parseZ80(t *testing.T, mac *z80h.Machine, src []byte) (recs []parseRec, err
 		t.Fatalf("parse_run: %v", err)
 	}
 	count := int(res.BC)
-	addr := symRecs
+	addr := addrPARSE_RECS
 	for i := 0; i < count; i++ {
 		// Every record is tagged by a leading REC_KIND_* byte (see
 		// parse_emit_inst / parse_emit_comment / parse_emit_blank_run). The

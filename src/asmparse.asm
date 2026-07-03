@@ -4613,4 +4613,10 @@ SYM_NAMES:      defs 2048       ; document symbol table: `len,name` records + se
 ; ===========================================================================
 PARSE_ERR:      defs 1          ; non-zero after a parse error / out-of-domain line
 AP_NAMEBUF:     defs 32         ; scratch the harness fills with a candidate name
+                if defined(ASMPARSE_CORPUS_BUFS)
+; Corpus build: PARSE_RECS relocated to low RAM, contiguous with the
+; LEX_TOKS block at &0100-&3900 (10752 B cap covers every corpus fixture IR).
+PARSE_RECS:     equ  &3A00      ; emitted record stream (10752 B, ends &6400)
+                else
 PARSE_RECS:     defs 2048       ; emitted INST record stream (harness reads here)
+                endif
