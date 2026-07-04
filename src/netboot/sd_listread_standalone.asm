@@ -5,11 +5,11 @@
 ; NETBOOT_HOSTTEST, so the detection routines (bdos_read_list_sector,
 ; bdos_record_entry, bdos_find_free_record — which live behind the
 ; `if defined(NETBOOT_HOSTTEST)==0` production block in bdos_seam.asm) ARE
-; assembled, and bdos_read_list_sector tail-calls the real CMD17 read instead of
-; the BD_HOOK_LISTREAD harness hook. The real read uses no RST 8, so the routines
-; the test drives (read-list / find-free) need no B-DOS hook dispatch — they talk
-; straight to the modelled SD-SPI ports. NETBOOT_WANT_CLAIM is left undefined (the
-; record-claim write path is a separate increment; i141 is the READ only).
+; assembled, and bdos_read_list_sector tail-calls the real CMD17 read. The real
+; read uses no RST 8, so the routines the test drives (read-list / find-free) need
+; no B-DOS hook dispatch — they talk straight to the modelled SD-SPI ports.
+; NETBOOT_WANT_CLAIM is left undefined (the record-claim write path is a separate
+; increment; i141 is the READ only).
 ;
 ; sd_listread_test.go Loads this, attaches the i145c/i145h SD model, SeedSectors the
 ; record-list sectors at their card-absolute LBAs, and asserts the detection routines

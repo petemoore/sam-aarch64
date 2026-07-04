@@ -341,7 +341,7 @@ bvdr_fail:
 ; The real B-DOS hook dispatch. The bodies issue `rst 8` with the B-DOS hook
 ; codes; on real hardware they route through the ROM/SAMDOS bank + the Trinity
 ; SD driver. The flat harness has no ROM / RST-8 vector, so bdos_store.go models
-; each hook (HRECORD/HGTHD/HSAVE/HRSAD/HWSAD/ALHK/LISTREAD): every bootable
+; each hook (HRECORD/HGTHD/HSAVE/HRSAD/HWSAD/ALHK): every bootable
 ; binary that includes this seam (client / serve / http / sd_push) exercises the
 ; dispatch in emulation through that model. The standalone unit-test binary
 ; (netboot_bdos_seam.bin) carries these bodies too, but bdos_seam_test drives
@@ -362,14 +362,6 @@ BD_HOOK_HLOAD:    equ 130                ; load whole file (found by HGTHD)
 BD_HOOK_HSAVE:    equ 132                ; save whole file
 BD_HOOK_HRSAD:    equ 160                ; read raw 512-byte sector (HRSAD)
 BD_HOOK_HWSAD:    equ 149                ; write raw 512-byte sector (HWSAD)
-; HARNESS-ONLY synthetic hooks — these codes MUST NEVER reach hardware. On real
-; B-DOS 1.5t they collide with live handlers (161 = HLDBK block-load at &46C5,
-; 162 = &5E09; the &839F dispatch table admits codes 128-166) that drop into the
-; DI'd, busy-polled, non-abortable SD driver — a hard machine wedge (the
-; 2026-07-03 i70b shot; i70e). Only the NETBOOT_SYNTHETIC_LIST_HOOKS build of
-; bdos_read/write_list_sector emits them, and only the Go oracle serves them.
-BD_HOOK_LISTREAD: equ 161                ; card-absolute list-sector read: E=listSec, HL=dest
-BD_HOOK_LISTWRITE: equ 162               ; card-absolute list-sector write: E=listSec, HL=source
 
 ; Drive number the HRSAD/HWSAD rwsad prelude device-selects on. The prelude does
 ; `ld a,(hk.a)` then `call &8662`; hk.a is the MAIN A the caller held at the RST 8
@@ -475,13 +467,13 @@ bdos_read_sector:
 ; ---------------------------------------------------------------------------
                 ; The record-list scan cluster (bdos_read_list_sector,
                 ; bdos_record_entry, bdos_record_geometry, bdos_find_free_record,
-                ; bdos_find_highest_free_record) is assembled only when a list-path
-                ; flag chooses its read mechanism. An includer that never scans
-                ; builds flag-free (the cluster is simply absent); a CALLER without
-                ; a flag fails the build with an undefined bdos_* symbol — the
-                ; enforcement that keeps the synthetic RST-8 bytes off hardware
-                ; (i70e; see bdos_read_list_sector's header).
-                if defined(NETBOOT_REAL_LISTREAD) | defined(NETBOOT_SYNTHETIC_LIST_HOOKS)
+                ; bdos_find_highest_free_record) is assembled only under
+                ; NETBOOT_REAL_LISTREAD (the raw CMD17 list path). An includer that
+                ; never scans builds without the flag (the cluster is simply
+                ; absent); a CALLER without it fails the build with an undefined
+                ; bdos_* symbol — the enforcement that keeps every list access on
+                ; the raw-CMD17 path (i70e; see bdos_read_list_sector's header).
+                if defined(NETBOOT_REAL_LISTREAD)
 
 ; bdos_read_list_sector — read one 512-byte list sector from the card (card-
 ; absolute, not record-clamped).
@@ -492,32 +484,16 @@ bdos_read_sector:
 ; Out: BD_LIST_BUF   512 bytes  the list sector (32 × 16-byte entries)
 ; Clobbers: A, DE, HL.
 ;
-; Two builds select the read path — an EXPLICIT flag is required either way
-; (no flag = assembly error, below):
-;   * NETBOOT_REAL_LISTREAD (i141, EVERY hardware-bound image): call
-;     bd_list_read_hw (sd_csd.asm), the raw SD CMD17 single-block read on ports
-;     &DC–&DF — the sd_push/i319a hardware-proven mechanism. CY-on-failure is
-;     treated as "no free record", the same safe decline as a 0 BD_RECORDS.
-;   * NETBOOT_SYNTHETIC_LIST_HOOKS (harness scan-logic unit tests ONLY): issue
-;     the harness-invented hook 161, served from the Go CardModel. This byte
-;     MUST NEVER reach hardware: on real B-DOS 1.5t code 161 is HLDBK (a real
-;     block-load handler) and the call falls into the DI'd, busy-polled,
-;     non-abortable SD driver with the wrong registers — a hard machine wedge
-;     with the network dead (the 2026-07-03 i70b shot; i70e). The Go oracle
-;     refuses hook 161 unless the test opts in (AllowSyntheticListHooks).
-; The flagless build error below is what makes forgetting the real-path flag on
-; a new bootable image a build failure instead of a hardware wedge.
+; The read path (NETBOOT_REAL_LISTREAD, i141 — EVERY hardware-bound image): call
+; bd_list_read_hw (sd_csd.asm), the raw SD CMD17 single-block read on ports
+; &DC–&DF — the sd_push/i319a hardware-proven mechanism. CY-on-failure is treated
+; as "no free record", the same safe decline as a 0 BD_RECORDS.
+;
+; An EXPLICIT flag is required: a caller that never sets NETBOOT_REAL_LISTREAD
+; fails the build on the undefined bdos_read_list_sector symbol — forgetting the
+; flag on a new bootable image is a build failure, not a hardware wedge.
 bdos_read_list_sector:
-                if defined(NETBOOT_REAL_LISTREAD)
                 jp      bd_list_read_hw        ; real CMD17 SPI read (tail-call, returns to caller)
-                else
-                ld      a, (BD_LIST_SECTOR)
-                ld      e, a                   ; E = list-sector number (1-based)
-                ld      hl, BD_LIST_BUF
-                rst     8
-                defb    BD_HOOK_LISTREAD
-                ret
-                endif
 
 ; ---------------------------------------------------------------------------
 ; bdos_record_entry — fetch the 16-byte list entry for one record into
@@ -744,32 +720,17 @@ bfhr_next:
 ;      BD_LIST_BUF   512 bytes   the list sector to write (a read-modified copy)
 ; Clobbers: A, DE, HL.
 ;
-; Two builds select the write path (same flags as the READ — they flip
-; together; an EXPLICIT flag is required, no flag = assembly error):
-;   * NETBOOT_REAL_LISTREAD (i198, EVERY hardware-bound image): call
-;     bd_list_write_hw (sd_csd.asm), the raw SD CMD24 single-block write on
-;     ports &DC–&DF — the sd_push/i319a hardware-proven mechanism.
-;   * NETBOOT_SYNTHETIC_LIST_HOOKS (harness claim-logic unit tests ONLY): issue
-;     the harness-invented hook 162, which the BDOSStore captures. This byte
-;     MUST NEVER reach hardware — on B-DOS 1.5t code 162 is a real handler
-;     (&5E09) and the call wedges the machine like hook 161 does (i70e); the
-;     Go oracle refuses it unless the test opts in (AllowSyntheticListHooks).
-                ; Assembled only under a list-path flag, like the read cluster —
-                ; a claim build without a flag errors on the undefined symbol at
-                ; its call sites (i70e enforcement).
-                if defined(NETBOOT_REAL_LISTREAD) | defined(NETBOOT_SYNTHETIC_LIST_HOOKS)
-bdos_write_list_sector:
+; The write path (NETBOOT_REAL_LISTREAD, i198 — EVERY hardware-bound image): call
+; bd_list_write_hw (sd_csd.asm), the raw SD CMD24 single-block write on ports
+; &DC–&DF — the sd_push/i319a hardware-proven mechanism. The WRITE sibling of
+; bdos_read_list_sector; an EXPLICIT flag is required (no flag = assembly error).
+                ; Assembled only under NETBOOT_REAL_LISTREAD, like the read
+                ; cluster — a claim build without the flag errors on the undefined
+                ; symbol at its call sites (i70e enforcement).
                 if defined(NETBOOT_REAL_LISTREAD)
+bdos_write_list_sector:
                 jp      bd_list_write_hw       ; real CMD24 SPI write (tail-call, returns to caller)
-                else
-                ld      a, (BD_LIST_SECTOR)
-                ld      e, a                   ; E = list-sector number (1-based)
-                ld      hl, BD_LIST_BUF
-                rst     8
-                defb    BD_HOOK_LISTWRITE
-                ret
-                endif
-                endif                          ; list-path flags
+                endif                          ; NETBOOT_REAL_LISTREAD (the raw CMD24 list-write path)
 
 ; ---------------------------------------------------------------------------
 ; bdos_claim_record — mark a pushed Trinity record as USED by writing its central

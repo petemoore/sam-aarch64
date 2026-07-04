@@ -320,17 +320,17 @@ sdc_deselect:
                 ret
 
 ; ===========================================================================
-; NETBOOT_REAL_LISTREAD selects bd_list_read_hw (the real CMD17 card-absolute path):
-; sd_push / list_records / delete_record / the serve debug boot set this flag; the
-; standard production serve + http_main use the BD_HOOK_LISTREAD RST 8 hook instead.
-; Without this flag, bdos_find_free_record's bdos_record_list_read_sector takes the
-; RST 8 path (bdos_seam.asm); the 119-byte bd_list_read_hw body is not assembled.
+; NETBOOT_REAL_LISTREAD selects bd_list_read_hw (the real CMD17 card-absolute path)
+; — the ONLY list-read path, set by every image that scans the record list (serve,
+; http_main, sd_push, list_records, delete_record). Without this flag the record-
+; list scan cluster is absent (bdos_seam.asm) and any caller of bdos_read_list_sector
+; fails the build on the undefined symbol; the 119-byte bd_list_read_hw body is not
+; assembled.
 if defined(NETBOOT_REAL_LISTREAD)
 ; ===========================================================================
-; bd_list_read_hw — the REAL card-absolute list-sector read (i141): the hardware
-; implementation of bdos_read_list_sector's BD_HOOK_LISTREAD model. Reads one
-; 512-byte list sector off the SD card via a raw CMD17 single-block read on the
-; Trinity SPI ports, into BD_LIST_BUF.
+; bd_list_read_hw — the REAL card-absolute list-sector read (i141): the body
+; bdos_read_list_sector tail-calls. Reads one 512-byte list sector off the SD card
+; via a raw CMD17 single-block read on the Trinity SPI ports, into BD_LIST_BUF.
 ;
 ; In:  BD_LIST_SECTOR  2 bytes  1-based list-sector number N (card-absolute LBA N:
 ;                              sector 0 is the boot block, sectors 1..base-1 hold
@@ -584,8 +584,8 @@ endif                                          ; shared record-LBA arithmetic
 if defined(NETBOOT_WANT_CLAIM) | defined(NETBOOT_WANT_RECORD_WRITE)
 if defined(NETBOOT_WANT_CLAIM)
 ; ===========================================================================
-; bd_list_write_hw — the REAL card-absolute list-sector write (i198): the
-; hardware implementation of bdos_write_list_sector's BD_HOOK_LISTWRITE model.
+; bd_list_write_hw — the REAL card-absolute list-sector write (i198): the body
+; bdos_write_list_sector tail-calls.
 ; Writes one 512-byte list sector to the SD card via a raw CMD24 single-block
 ; write on the Trinity SPI ports, from BD_LIST_BUF. Mirrors bd_list_read_hw
 ; (CMD17, above) exactly: same init ladder, same LBA computation, same

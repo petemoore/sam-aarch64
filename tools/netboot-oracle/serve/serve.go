@@ -138,8 +138,8 @@ type Responder struct {
 
 	// claims records the records claimed by completed valid pushes, in order, with
 	// the name written into each (i121g). Mirrors the Z80 bdos_claim_record list
-	// writes (BDOSStore.ListWrites). The two-push test asserts the claimed records
-	// differ.
+	// writes (captured on the SD model as raw CMD24 writes to the record-list
+	// sector). The two-push test asserts the claimed records differ.
 	claims []Claim
 
 	// flatStores records the flat-file archive stores completed by FlatFile-class
@@ -150,8 +150,9 @@ type Responder struct {
 }
 
 // Claim is one completed disk-record claim: the record marked used and the name
-// written into its central record-list entry. Mirrors the Z80 ListWrite the
-// harness captures from bdos_claim_record (z80/bdos_store.go).
+// written into its central record-list entry. Mirrors the Z80 record-list write
+// bdos_claim_record performs, captured on the SD model as a raw CMD24 write
+// (z80/sdcard.go).
 type Claim struct {
 	Record int    // the 1-based record claimed
 	Name   string // the record name written (filename-derived, ≤10 chars)

@@ -58,7 +58,7 @@ func assertLoopRETs(t *testing.T, mac *z80h.Machine, why string) {
 // machine, RETs (the flag check after serve_serve_once unwinds to trinload).
 func TestServeStopSentinelExit(t *testing.T) {
 	const records, freeRecord = 8, 4 // a record IS free — proving the sentinel skips the claim anyway
-	mac, enc, store, _, _ := loadServeRecordPush(t, records, freeRecord)
+	mac, enc, store, sd, _ := loadServeRecordPush(t, records, freeRecord)
 
 	// 1. The reserved-name WRQ → a courtesy ACK-0, the stop flag set, nothing armed.
 	got := serveDemo(t, mac, enc, demoWRQ("tftp.done", nil))
@@ -87,8 +87,11 @@ func TestServeStopSentinelExit(t *testing.T) {
 	if w := store.SectorWrites(); len(w) != 0 {
 		t.Fatalf("SectorWrites() = %d after tftp.done, want 0 (the control name is never stored)", len(w))
 	}
-	if lw := store.ListWrites(); len(lw) != 0 {
-		t.Fatalf("ListWrites() = %d after tftp.done, want 0 (no record claimed)", len(lw))
+	// A record claim would CMD24-write the record's list sector (LBA 1 for records
+	// 1-32). WrittenSectors() records committed CMD24 writes only (seeds excluded),
+	// so an empty result proves no record was claimed.
+	if w := sd.WrittenSectors(); len(w) != 0 {
+		t.Fatalf("a record-list claim CMD24-wrote %d sector(s) (%v) after tftp.done, want none (no record claimed)", len(w), w)
 	}
 
 	// 2. The serve loop RETs to trinload: the flag check after serve_serve_once

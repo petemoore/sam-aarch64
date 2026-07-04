@@ -178,7 +178,7 @@ func TestProvStoreDemarcation(t *testing.T) {
 		// D2: storage_sink_leaf uses FW_BASE_RECORD (set in store_begin by
 		// bdos_find_free_record) + FW_REC_IDX as the HRECORD selection. With
 		// BD_RECORDS=10 and no pre-existing records, file 0 uses record 1 and
-		// file 1 uses record 2 (the usedRecords overlay in BDOSStore marks record
+		// file 1 uses record 2 (the SPI mirror MarkRecordListUsed marks record
 		// 1 used after the first HSAVE so bdos_find_free_record returns 2 next).
 		if saves[i].Record != w.record {
 			t.Errorf("record[%d] HRECORD = %d, want %d (first-free base+index)", i, saves[i].Record, w.record)

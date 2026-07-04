@@ -268,9 +268,9 @@ func (s *SDCard) CapturedSector(addr uint32) ([]byte, bool) {
 // SDv1 frame carries the byte address N<<9 — the store key follows the card
 // class. Only a still-free entry byte is touched (entry[0]&0x7F == 0),
 // mirroring the on-card effect of a real B-DOS save-to-record: the record no
-// longer scans as free. This is the SPI-visible twin of the BDOSStore
-// usedRecords overlay (i70e); BDOSStore's HSAVE handler calls it when the two
-// models are bridged via MirrorUsedRecordsTo.
+// longer scans as free. BDOSStore's HSAVE handler calls this to mark the
+// selected record used in the SPI-visible list bytes (i70e), so the raw-CMD17
+// scan path sees it as taken; the bridge is set up via MirrorUsedRecordsTo.
 func (s *SDCard) MarkRecordListUsed(rec int) {
 	if rec < 1 {
 		return
