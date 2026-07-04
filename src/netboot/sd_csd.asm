@@ -354,31 +354,68 @@ if defined(NETBOOT_REAL_LISTREAD)
 ; (CLAUDE.md §5): the real-Trinity SPI run is the final gate (i141's hardware half).
 ; ===========================================================================
 bd_list_read_hw:
-                ; Build the 32-bit LBA (LE) from the 1-byte list-sector number.
+                ; Build the 32-bit LBA (LE) from the 1-byte list-sector number, apply
+                ; the SDv1 byte-shift, then hand off to the shared CMD17 read tail.
                 ld      a, (BD_LIST_SECTOR)
                 ld      (bd_list_lba), a
                 xor     a
                 ld      (bd_list_lba + 1), a
                 ld      (bd_list_lba + 2), a
                 ld      (bd_list_lba + 3), a
-                ; SDv1 (byte-addressed) cards need LBA<<9; SDHC/v2 use the LBA verbatim.
-                ld      a, (CSD_STAGE)
-                and     &C0
-                cp      &40
-                jr      z, bllr_have_lba        ; v2/SDHC: block address, no shift
-                ld      b, 9                    ; v1: bd_list_lba <<= 9
-bllr_shl:
-                ld      hl, bd_list_lba
-                or      a
-                rl      (hl)
-                inc     hl
-                rl      (hl)
-                inc     hl
-                rl      (hl)
-                inc     hl
-                rl      (hl)
-                djnz    bllr_shl
-bllr_have_lba:
+                call    bd_lba_apply_v1_shift   ; SDv1: bd_list_lba <<= 9; v2/SDHC: no-op
+                ld      hl, BD_LIST_BUF
+                jp      bd_cmd17_read_lba
+
+; NETBOOT_WANT_RECORD_READ pulls the record-body read (list_records / i362). It is a
+; strict add-on to NETBOOT_REAL_LISTREAD (it calls bd_cmd17_read_lba), gated
+; separately so builds that read only the LIST (http_main's bd_list_read_hw) do NOT
+; carry this dead code into their tight boot budget.
+if defined(NETBOOT_WANT_RECORD_READ)
+; ===========================================================================
+; bd_record_read_hw — read one 512-byte DATA sector of a Trinity record by its
+; ABSOLUTE card LBA via CMD17 (i362): the READ twin of bd_record_write_hw. It shares
+; the record->LBA arithmetic (bd_record_lba_compute) and the CMD17 read tail
+; (bd_cmd17_read_lba). This reads back what was actually written INTO a record's
+; 800K disk-body image — needed because a store path can write the record BODY while
+; omitting the record-LIST claim (the ~200 B claim does not fit the http smoke boot
+; budget), so list_records reports the record FREE and is structurally blind to the
+; store; this reads the stored bytes directly.
+;
+;     LBA = csd_base + 1600*(record-1) + linearSec   (bd_record_lba_compute)
+;
+; NO write, NO CMD24, NO i295 band guard: a CMD17 read cannot corrupt the shared
+; card (trinity_storage_shared_resource is a WRITE concern). The CALLER range-checks
+; record (1..BD_RECORDS) and linearSec (0..1599), so the LBA stays inside the card's
+; record-data region.
+;
+; In:  BD_REC_REC     2 bytes  1-based record number n (>= 1)
+;      BD_REC_LINEAR  2 bytes  0-based linear sector within the record (0..1599)
+;      HL                      pointer to the 512-byte destination buffer
+; Out: 512 bytes at (HL); CY set on read failure (no data token). Clobbers
+;      AF, BC, DE, HL.
+; ===========================================================================
+bd_record_read_hw:
+                push    hl                      ; save the destination across the LBA math
+                call    bd_record_lba_compute   ; bd_rec_lba = csd_base + 1600*(n-1) + linearSec
+                ld      hl, (bd_rec_lba)
+                ld      (bd_list_lba), hl
+                ld      hl, (bd_rec_lba + 2)
+                ld      (bd_list_lba + 2), hl
+                call    bd_lba_apply_v1_shift   ; SDv1: <<9; v2/SDHC: no-op
+                pop     hl                      ; restore the destination
+                jp      bd_cmd17_read_lba
+endif                                          ; NETBOOT_WANT_RECORD_READ
+
+; ===========================================================================
+; bd_cmd17_read_lba — the shared CMD17 single-block read of the LBA in bd_list_lba
+; (already v1-shifted) into the 512-byte buffer at HL. Factored out of the list read
+; so bd_list_read_hw (list sectors) and bd_record_read_hw (record-body sectors) share
+; one tested CMD17 tail: run the init ladder, issue CMD17 with the LBA MSB-first,
+; poll the &FE token, read 512 bytes into (HL). CY set on read failure (no token).
+; Under DI; the deselect tail EIs. Clobbers AF, BC, DE, HL.
+; ===========================================================================
+bd_cmd17_read_lba:
+                ld      (bd_cmd17_dest), hl     ; latch the destination across the ladder/command
                 call    sdc_init_ladder        ; wake + CMD0/8/41/58/59; card selected
                 ; CMD17 READ_SINGLE_BLOCK, arg = bd_list_lba (sent MSB-first by sdc_cmd:
                 ; B=addr[31:24], C=addr[23:16], D=addr[15:8], E=addr[7:0]).
@@ -396,34 +433,138 @@ bllr_have_lba:
                 call    sdc_cmd
                 ; poll for the &FE start-of-data token (bounded)
                 ld      b, 0
-bllr_tok_poll:
+bcrl_tok_poll:
                 call    sdc_in
                 cp      SDC_DATATOK
-                jr      z, bllr_tok_found
-                djnz    bllr_tok_poll
+                jr      z, bcrl_tok_found
+                djnz    bcrl_tok_poll
                 scf                             ; no token -> read failure
                 jp      sdc_deselect
-bllr_tok_found:
-                ; read the 512-byte data block (two 256-byte passes) into BD_LIST_BUF
-                ld      hl, BD_LIST_BUF
+bcrl_tok_found:
+                ; read the 512-byte data block (two 256-byte passes) into (bd_cmd17_dest)
+                ld      hl, (bd_cmd17_dest)
                 ld      b, 0                    ; 256
-bllr_rd1:
+bcrl_rd1:
                 call    sdc_in
                 ld      (hl), a
                 inc     hl
-                djnz    bllr_rd1
+                djnz    bcrl_rd1
                 ld      b, 0                    ; + 256 = 512
-bllr_rd2:
+bcrl_rd2:
                 call    sdc_in
                 ld      (hl), a
                 inc     hl
-                djnz    bllr_rd2
+                djnz    bcrl_rd2
                 call    sdc_in                  ; 2 CRC bytes (discard)
                 call    sdc_in
                 or      a                       ; CY clear: success
                 jp      sdc_deselect
 
 endif                                          ; NETBOOT_REAL_LISTREAD
+
+; ===========================================================================
+; bd_lba_apply_v1_shift — for an SDv1 (byte-addressed) card, shift bd_list_lba left
+; by 9 (block number -> byte offset); for SDHC/v2 (block-addressed) leave it verbatim.
+; The card class is read from CSD_STAGE[0] (bit7:6 == 01 => v2). Shared by every
+; CMD17/CMD24 LBA setup so the byte-vs-block addressing is computed once. Present in
+; every list/record read or write build (bd_list_read_hw already needs it).
+; In/Out: bd_list_lba (32-bit LE). Clobbers AF, B, HL.
+; ===========================================================================
+if defined(NETBOOT_REAL_LISTREAD) | defined(NETBOOT_WANT_CLAIM) | defined(NETBOOT_WANT_RECORD_WRITE)
+bd_lba_apply_v1_shift:
+                ld      a, (CSD_STAGE)
+                and     &C0
+                cp      &40
+                ret     z                       ; v2/SDHC: block address, no shift
+                ld      b, 9                    ; v1: bd_list_lba <<= 9
+blwr_shl:
+                ld      hl, bd_list_lba
+                or      a
+                rl      (hl)
+                inc     hl
+                rl      (hl)
+                inc     hl
+                rl      (hl)
+                inc     hl
+                rl      (hl)
+                djnz    blwr_shl
+                ret
+endif                                          ; bd_lba_apply_v1_shift
+
+; ===========================================================================
+; Shared record-LBA arithmetic, pulled by BOTH the record READ (bd_record_read_hw,
+; NETBOOT_WANT_RECORD_READ) and the record WRITE (bd_record_write_hw, the write
+; flags). The arithmetic is NOT a write — only bd_cmd24_write_core's CMD24 is — so
+; factoring it here lets the read path compute a record's absolute LBA without pulling
+; the CMD24 / data-safety-guard cluster. Kept OUT of list-only builds (a plain
+; NETBOOT_REAL_LISTREAD image that never touches record bodies).
+; ===========================================================================
+if defined(NETBOOT_WANT_RECORD_READ) | defined(NETBOOT_WANT_CLAIM) | defined(NETBOOT_WANT_RECORD_WRITE)
+
+; bd_record_lba_compute — compute a record's absolute data-sector LBA:
+;   bd_rec_lba = csd_base + 1600*(record-1) + linearSec
+; and save the record offset bd_rec_ofs = 1600*(record-1) (the write path's i295 band
+; guard reads it; the read path ignores it). 1600*(record-1) is formed by (record-1)
+; repeated 16-bit additions of 1600 into the 32-bit accumulator — correctness-first;
+; the per-call cost is dwarfed by the bit-banged SPI transfer.
+; In:  BD_REC_REC     2 bytes  1-based record number n (>= 1)
+;      BD_REC_LINEAR  2 bytes  0-based linear sector within the record
+; Out: bd_rec_lba (4 LE) = final LBA; bd_rec_ofs (4 LE) = 1600*(n-1). Clobbers
+;      AF, BC, DE, HL.
+bd_record_lba_compute:
+                ; --- accumulator (32-bit LE) := 1600 * (record - 1) ---
+                ld      hl, 0
+                ld      (bd_rec_lba), hl
+                ld      (bd_rec_lba + 2), hl
+                ld      hl, (BD_REC_REC)
+                dec     hl                      ; HL = record - 1 (iteration count)
+brlc_mul_loop:
+                ld      a, h
+                or      l
+                jr      z, brlc_mul_done        ; (record-1) additions of 1600 done
+                push    hl                      ; save the loop counter
+                ; bd_rec_lba += 1600 (32-bit: low word add, then propagate carry).
+                ld      hl, (bd_rec_lba)
+                ld      bc, 1600
+                add     hl, bc
+                ld      (bd_rec_lba), hl
+                jr      nc, brlc_mul_nocarry
+                ld      hl, (bd_rec_lba + 2)
+                inc     hl
+                ld      (bd_rec_lba + 2), hl
+brlc_mul_nocarry:
+                pop     hl                      ; restore the loop counter
+                dec     hl
+                jr      brlc_mul_loop
+brlc_mul_done:
+                ; Save the record OFFSET 1600*(n-1) (the band's start, relative to base)
+                ; for the write path's data-safety band check, BEFORE linearSec/base add.
+                ld      hl, (bd_rec_lba)
+                ld      (bd_rec_ofs), hl
+                ld      hl, (bd_rec_lba + 2)
+                ld      (bd_rec_ofs + 2), hl
+                ; --- accumulator += linearSec (16-bit, into the 32-bit accumulator) ---
+                ld      hl, (bd_rec_lba)
+                ld      bc, (BD_REC_LINEAR)
+                add     hl, bc
+                ld      (bd_rec_lba), hl
+                jr      nc, brlc_lin_nocarry
+                ld      hl, (bd_rec_lba + 2)
+                inc     hl
+                ld      (bd_rec_lba + 2), hl
+brlc_lin_nocarry:
+                ; --- accumulator += csd_base (16-bit) ---
+                ld      hl, (bd_rec_lba)
+                ld      bc, (csd_base)
+                add     hl, bc
+                ld      (bd_rec_lba), hl
+                ret     nc
+                ld      hl, (bd_rec_lba + 2)
+                inc     hl
+                ld      (bd_rec_lba + 2), hl
+                ret
+
+endif                                          ; shared record-LBA arithmetic
 
 ; ===========================================================================
 ; The CMD24 write cluster. Two flags pull it, at two granularities (i357):
@@ -495,32 +636,6 @@ bd_list_write_hw:
                 jp      bd_cmd24_write_core
 
 endif                                          ; NETBOOT_WANT_CLAIM (bd_list_write_hw — the record-LIST write)
-
-; ===========================================================================
-; bd_lba_apply_v1_shift — for an SDv1 (byte-addressed) card, shift bd_list_lba
-; left by 9 (block number -> byte offset); for SDHC/v2 (block-addressed) leave it
-; verbatim. The card class is read from CSD_STAGE[0] (bit7:6 == 01 => v2). Shared
-; by every CMD17/CMD24 LBA setup so the byte-vs-block addressing is computed once.
-; In/Out: bd_list_lba (32-bit LE). Clobbers AF, B, HL.
-; ===========================================================================
-bd_lba_apply_v1_shift:
-                ld      a, (CSD_STAGE)
-                and     &C0
-                cp      &40
-                ret     z                       ; v2/SDHC: block address, no shift
-                ld      b, 9                    ; v1: bd_list_lba <<= 9
-blwr_shl:
-                ld      hl, bd_list_lba
-                or      a
-                rl      (hl)
-                inc     hl
-                rl      (hl)
-                inc     hl
-                rl      (hl)
-                inc     hl
-                rl      (hl)
-                djnz    blwr_shl
-                ret
 
 ; ===========================================================================
 ; bd_cmd24_write_core — the shared CMD24 single-block write protocol (the §5/§8
@@ -739,8 +854,8 @@ blwr_ok:
 ; catches nothing (the i295 root cause: a wrong csd_base=2438 placed writes 388
 ; sectors into the NEXT record).
 ;
-; In:  BD_REC_WRITE_REC     2 bytes  1-based claimed record number n (>= 1)
-;      BD_REC_WRITE_LINEAR  2 bytes  0-based linear sector within the record (0..1599)
+; In:  BD_REC_REC     2 bytes  1-based claimed record number n (>= 1)
+;      BD_REC_LINEAR  2 bytes  0-based linear sector within the record (0..1599)
 ;      HL                            pointer to the 512-byte source buffer
 ; Out: CY clear on success, CY set on failure (bd_cmd24_write_core's contract OR the
 ;      data-safety guard refusing an out-of-band LBA). Clobbers: AF, BC, DE, HL.
@@ -753,58 +868,10 @@ blwr_ok:
 ; ===========================================================================
 bd_record_write_hw:
                 push    hl                      ; save the source pointer across the LBA math
-
-                ; --- accumulator (32-bit LE) := 1600 * (record - 1) ---
-                ld      hl, 0
-                ld      (bd_rec_lba), hl
-                ld      (bd_rec_lba + 2), hl
-                ld      hl, (BD_REC_WRITE_REC)
-                dec     hl                      ; HL = record - 1 (iteration count)
-brw_mul_loop:
-                ld      a, h
-                or      l
-                jr      z, brw_mul_done         ; (record-1) additions of 1600 done
-                push    hl                      ; save the loop counter
-                ; bd_rec_lba += 1600 (32-bit: low word add, then propagate carry).
-                ld      hl, (bd_rec_lba)
-                ld      bc, 1600
-                add     hl, bc
-                ld      (bd_rec_lba), hl
-                jr      nc, brw_mul_nocarry
-                ld      hl, (bd_rec_lba + 2)
-                inc     hl
-                ld      (bd_rec_lba + 2), hl
-brw_mul_nocarry:
-                pop     hl                      ; restore the loop counter
-                dec     hl
-                jr      brw_mul_loop
-brw_mul_done:
-                ; Save the record OFFSET 1600*(n-1) (the band's start, relative to base)
-                ; for the data-safety band check below, BEFORE linearSec/base are added.
-                ld      hl, (bd_rec_lba)
-                ld      (bd_rec_ofs), hl
-                ld      hl, (bd_rec_lba + 2)
-                ld      (bd_rec_ofs + 2), hl
-                ; --- accumulator += linearSec (16-bit, into the 32-bit accumulator) ---
-                ld      hl, (bd_rec_lba)
-                ld      bc, (BD_REC_WRITE_LINEAR)
-                add     hl, bc
-                ld      (bd_rec_lba), hl
-                jr      nc, brw_lin_nocarry
-                ld      hl, (bd_rec_lba + 2)
-                inc     hl
-                ld      (bd_rec_lba + 2), hl
-brw_lin_nocarry:
-                ; --- accumulator += csd_base (16-bit) ---
-                ld      hl, (bd_rec_lba)
-                ld      bc, (csd_base)
-                add     hl, bc
-                ld      (bd_rec_lba), hl
-                jr      nc, brw_base_nocarry
-                ld      hl, (bd_rec_lba + 2)
-                inc     hl
-                ld      (bd_rec_lba + 2), hl
-brw_base_nocarry:
+                ; bd_rec_lba = csd_base + 1600*(n-1) + linearSec; bd_rec_ofs = 1600*(n-1).
+                ; Shared with the record READ (bd_record_read_hw) — one tested copy of the
+                ; data-safety-critical record->LBA math (bd_record_lba_compute).
+                call    bd_record_lba_compute
                 ; ---------------------------------------------------------------
                 ; DEFENSIVE DATA-SAFETY GUARD (i295). Pete's SD card is a SHARED user
                 ; resource; a raw absolute CMD24 to the wrong LBA silently corrupts the
@@ -851,7 +918,7 @@ brw_out_of_band:
 ; ===========================================================================
 bd_record_lba_in_band:
                 ; (a) linearSec < 1600  (16-bit: reject linearSec >= 1600)
-                ld      hl, (BD_REC_WRITE_LINEAR)
+                ld      hl, (BD_REC_LINEAR)
                 ld      bc, 1600
                 or      a
                 sbc     hl, bc                  ; linearSec - 1600 ; CY set => linearSec < 1600 (ok)
@@ -941,23 +1008,34 @@ bc32_a_less:
 
 endif                                          ; NETBOOT_WANT_CLAIM | NETBOOT_WANT_RECORD_WRITE (record-data write path)
 
-; bd_list_lba is used by bd_list_read_hw (NETBOOT_REAL_LISTREAD), bd_list_write_hw
-; (NETBOOT_WANT_CLAIM), and bd_record_write_hw (both write flags). It is allocated
-; whenever ANY of those flags is set; the 4 bytes are dead in builds where none
-; applies (e.g. boot_record, which never touches the record list).
+; bd_list_lba is used by bd_list_read_hw / bd_record_read_hw (NETBOOT_REAL_LISTREAD),
+; bd_list_write_hw (NETBOOT_WANT_CLAIM), and bd_record_write_hw (both write flags). It
+; is allocated whenever ANY of those flags is set; the 4 bytes are dead in builds where
+; none applies (e.g. boot_record, which never touches the record list).
 if defined(NETBOOT_REAL_LISTREAD) | defined(NETBOOT_WANT_CLAIM) | defined(NETBOOT_WANT_RECORD_WRITE)
 bd_list_lba:      defs 4                        ; 32-bit LE CMD17/CMD24 block/byte address
 endif
+; bd_cmd17_dest — the shared CMD17 read destination pointer (bd_cmd17_read_lba),
+; latched so it survives the init ladder + command send. READ path only.
+if defined(NETBOOT_REAL_LISTREAD)
+bd_cmd17_dest:    defs 2                        ; bd_cmd17_read_lba: 512-byte read destination pointer
+endif
+; Record-LBA arithmetic scratch + inputs — SHARED by the record READ (bd_record_read_hw,
+; NETBOOT_WANT_RECORD_READ) and the record WRITE (bd_record_write_hw, the write flags):
+; bd_record_lba_compute writes bd_rec_lba/bd_rec_ofs from BD_REC_REC/BD_REC_LINEAR + csd_base.
+if defined(NETBOOT_WANT_RECORD_READ) | defined(NETBOOT_WANT_CLAIM) | defined(NETBOOT_WANT_RECORD_WRITE)
+bd_rec_lba:       defs 4                        ; 32-bit LE record data-block LBA accumulator
+bd_rec_ofs:       defs 4                        ; 32-bit LE record offset 1600*(n-1) (band start, rel. base)
+BD_REC_REC:       defs 2                        ; 1-based record number n (record read/write input)
+BD_REC_LINEAR:    defs 2                        ; 0-based linear sector within the record (read/write input)
+endif
+; Write-only CMD24 / data-safety-guard scratch.
 if defined(NETBOOT_WANT_CLAIM) | defined(NETBOOT_WANT_RECORD_WRITE)
 bd_cmd24_src:     defs 2                        ; bd_cmd24_write_core: 512-byte source pointer
-bd_rec_lba:       defs 4                        ; bd_record_write_hw: 32-bit LE record data-block LBA accumulator
-bd_rec_ofs:       defs 4                        ; bd_record_write_hw: 32-bit LE record offset 1600*(n-1) (band start, rel. base)
 bd_band_lo:       defs 4                        ; bd_record_lba_in_band: 32-bit LE band lower bound = csd_base + bd_rec_ofs
 bd_cmp_tmp:       defs 4                        ; bd_record_lba_in_band / bd_cmp32: 32-bit LE compare scratch
 bd_rec_guard_tripped: defb 0                    ; sticky: set when the data-safety guard REFUSED an out-of-band write
-BD_REC_WRITE_REC:    defs 2                     ; bd_record_write_hw: 1-based claimed record number n
-BD_REC_WRITE_LINEAR: defs 2                     ; bd_record_write_hw: 0-based linear sector within the record
-endif                                           ; NETBOOT_WANT_CLAIM | NETBOOT_WANT_RECORD_WRITE (record-data write cluster data)
+endif                                           ; NETBOOT_WANT_CLAIM | NETBOOT_WANT_RECORD_WRITE (write-only scratch)
 
 ; ===========================================================================
 ; csd_decode_blocks — decode CSD_STAGE into the 32-bit (LE) csd_blocks.

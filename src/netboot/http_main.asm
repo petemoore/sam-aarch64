@@ -711,7 +711,7 @@ if defined(NETBOOT_DEBUG)
 endif
                 ; select the record all writes target.
                 ld      hl, (FW_BASE_RECORD)
-                ld      (BD_REC_WRITE_REC), hl
+                ld      (BD_REC_REC), hl
                 ; zero the 512-byte sector image once (reused for every blanked sector).
                 ld      hl, BD_WRITE_BUF
                 ld      de, BD_WRITE_BUF + 1
@@ -724,7 +724,7 @@ endif
                 ld      b, SFR_DIR_SECTORS - 1  ; sectors 1..39
                 ld      hl, 1
 sfr_blank:
-                ld      (BD_REC_WRITE_LINEAR), hl
+                ld      (BD_REC_LINEAR), hl
                 push    bc
                 push    hl
                 ld      hl, BD_WRITE_BUF
@@ -739,7 +739,7 @@ sfr_blank:
                 ld      bc, 4
                 ldir
                 ld      hl, 0
-                ld      (BD_REC_WRITE_LINEAR), hl
+                ld      (BD_REC_LINEAR), hl
                 ld      hl, BD_WRITE_BUF
                 call    bd_record_write_hw      ; the validity sector (BDOS@232)
                 ret

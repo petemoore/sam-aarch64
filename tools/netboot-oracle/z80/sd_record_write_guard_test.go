@@ -43,14 +43,14 @@ func recordWriteGuardMachine(t *testing.T, csd [16]byte, base, blocks uint32) (*
 	return mac, sd
 }
 
-// callRecordWrite sets BD_REC_WRITE_REC / BD_REC_WRITE_LINEAR, points a source buffer
+// callRecordWrite sets BD_REC_REC / BD_REC_LINEAR, points a source buffer
 // at a scratch address, zeroes the guard flag, CALLs bd_record_write_hw, and returns
 // (committed writes, guardTripped).
 func callRecordWrite(t *testing.T, mac *z80h.Machine, sd *z80h.SDCard, rec, linear uint16) (writes []uint32, tripped bool) {
 	t.Helper()
-	mac.Write(symAddr(t, mac, "bd_rec_guard_tripped"), []byte{0}) // clear the sticky flag (1 byte — it abuts BD_REC_WRITE_REC)
-	mac.WriteU16LE(symAddr(t, mac, "BD_REC_WRITE_REC"), rec)
-	mac.WriteU16LE(symAddr(t, mac, "BD_REC_WRITE_LINEAR"), linear)
+	mac.Write(symAddr(t, mac, "bd_rec_guard_tripped"), []byte{0}) // clear the sticky flag (1 byte — it abuts BD_REC_REC)
+	mac.WriteU16LE(symAddr(t, mac, "BD_REC_REC"), rec)
+	mac.WriteU16LE(symAddr(t, mac, "BD_REC_LINEAR"), linear)
 	// A 512-byte source buffer of recognisable data at a safe scratch address. It
 	// must NOT overlap the fixture's data region (csd_base / csd_blocks / the
 	// BD_REC_WRITE_* cells live in sd_csd.asm's storage above the &8000 org) nor the

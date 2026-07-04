@@ -1142,7 +1142,7 @@ netboot-delete-record: $(BUILD)/delete_record.bin $(BUILD)/delete_record.map
 # a SEPARATE follow-up (CLAUDE.md §5 — emulation-verified is not hardware-verified).
 $(BUILD)/list_records.bin $(BUILD)/list_records.map: src/netboot/list_records.asm $(asm_deps/src/netboot/list_records.asm)
 	@mkdir -p $(BUILD)
-	pyz80 -D NETBOOT_REAL_LISTREAD=1 --obj=$(BUILD)/list_records.bin \
+	pyz80 -D NETBOOT_REAL_LISTREAD=1 -D NETBOOT_WANT_RECORD_READ=1 --obj=$(BUILD)/list_records.bin \
 	    --mapfile=$(BUILD)/list_records.map \
 	    src/netboot/list_records.asm
 	@tools/netboot-boot-fit-check.sh $(BUILD)/list_records.bin 16384 list_records.bin
