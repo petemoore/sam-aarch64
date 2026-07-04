@@ -130,12 +130,36 @@ marker stuck at 'C'), after the render's raw CMD17 (rdb_load_tbn reblock) + CMD2
 - Come-up's `HGTHD(disasm)` works (before any raw CMD17/24); the chain's HGTHD is
   the **first raw-SD → B-DOS-SD transition in one boot** anywhere in the codebase.
 
-**Next step:** read Colin's B-DOS 1.5t SD driver (`~/sam-archive`, the authority
-per CLAUDE.md rule 8) to find what internal driver state (cached sector / card
-address pointer / block-len / device-select mode) its directory read assumes, and
-restore/reset that state at the end of the render (before the chain), OR before
-the chain HGTHD. This is the crux of Phase A; assemble + serve are wired and
-waiting on it.
+**Deepened this session (all ruled out):**
+- **The FIRST B-DOS SD op of any kind hangs** — added an HRECORD re-select
+  (`bdos_select_record`) before the HGTHD; `rdb_phase` stays '5' (its post-HRECORD
+  marker never runs), so **HRECORD itself wedges**, not just HGTHD. So it is NOT a
+  directory-read / device-dispatch specific issue — B-DOS's *SD access* wedges.
+- **The harness SD card model is clean after our ops.** `sdReset` (our `&04`
+  all-deselect bracket, `sdcard.go:476`) clears `deSynced` AND `woken`; `woken`
+  only bumps a stat counter (`sdcard.go:627`), gates nothing; `StuckBusy` is set
+  only in unit tests, never by the model; the `&DC` bit-3 BUSY is time-based and
+  clears as `tNow` advances. So the card model is NOT de-synced/busy/stuck.
+- The hang is a ~72-byte ROM loop at ~`&1Dxx` (a B-DOS SD busy-poll or an FDC
+  poll reached via ROM), spun billions of times — a *permanent* wedge, not a
+  settle. B-DOS `HGTHD`/`HRECORD` read code (real 1.5t, running in the faithful
+  rig) never satisfies its poll after the render's raw ops.
+- The B-DOS investigation's headline (rule-8 authority): B-DOS's steady-state SD
+  ops **rely on boot-time SPI-mode persistence and do NOT re-init** (only HDINIT
+  `&38`s, at `&A623`); our raw READ path (`bd_cmd17_read_lba`, `csd_read`) re-runs
+  `sdc_init_ladder` (the `&38` wake) every call — the WRITE core is already
+  init-once (`bcw_reselect`, no `&38`). Full report in the commit / session log.
+
+**Next step (fresh session):** trace WHY B-DOS's first SD op never satisfies its
+poll here. Two concrete threads: (a) instrument the harness `&DC` IN handler
+(`enc28j60.go`, the status-byte + `settleUntilT`/`sdInitBusyUntilT`/shared-latch
+logic) to log what B-DOS's poll reads at chain time vs at the working come-up
+HGTHD — the delta is the cause; (b) try the investigation's PREFERRED fix — make
+the raw READ path **init-once** (re-select `&31`, NO `&38`) like the write core,
+so the shared-PIC `&38` disturbance is never introduced, then re-test. If the
+harness truly does not model the real SPI-mode-persistence dependence, that is a
+harness faithfulness gap to close (rule 7) — model what makes B-DOS's poll wedge.
+This is the crux of Phase A; assemble + serve are wired and waiting on it.
 
 **Fallback if intractable:** assemble-FIRST ordering (assembler boots pure-B-DOS,
 chains to render last) structurally avoids raw→B-DOS, but has a body-sector

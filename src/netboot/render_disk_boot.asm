@@ -384,11 +384,13 @@ rdb_chain_next:
                 out     (250), a               ; (the pristine boot LMPR, from rdb_main)
 
                 ; --- arm HGTHD for asmdemo -> BD_DIFA (pages, length) -----------
-                ; KNOWN BLOCKER (i365d-b2c Phase A, this session): this HGTHD hangs
-                ; in B-DOS's SD read after the render's raw CMD17/CMD24 ops. The
-                ; physical card is fine (csd_set_bd_records reads it here without
-                ; hanging); it is B-DOS's own SD-driver internal state that wedges —
-                ; the first raw-SD-then-B-DOS-SD transition in one boot. See the plan.
+                ; KNOWN BLOCKER (i365d-b2c Phase A): the FIRST B-DOS SD op here
+                ; HANGS after the render's raw CMD17/CMD24 ops — HRECORD-select and
+                ; HGTHD both wedge (rdb_phase stays before their marker), in a ~72-byte
+                ; ROM loop ~&1Dxx (a B-DOS SD busy-poll / FDC poll). The SD card MODEL
+                ; is clean (de-sync + woken reset by our &04 deselect); B-DOS's own SD
+                ; access is what wedges. Not the dir clobber / LMPR-B / physical card /
+                ; buffers / HRECORD-dispatch (all ruled out). See docs/plans/i365d-b2c-*.
                 ld      hl, rdb_name_asmdemo
                 ld      (BD_NAME_PTR), hl
                 call    bdos_name_to_uifa
