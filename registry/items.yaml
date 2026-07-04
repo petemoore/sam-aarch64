@@ -6387,7 +6387,7 @@
   title: NBMANIFEST long-name mapping for disk-table (large-file) entries
   description: |
     nb_apply_manifest rebuilds STORE + NB_SRC_TABLE from the manifest but does NOT remap NB_DISK_TABLE (the large-file disk-backed entries), so large files only serve under their <=10-char store name when an NBMANIFEST is present. The demo's outputs release.src/release.img are 11-char names, so i365d-b2/i365e need the disk table remapped through the manifest too. Extend nb_apply_manifest (netboot_server.asm:1703+) to also rewrite NB_DISK_TABLE names via nb_manifest_map, and gate with a large-file serve test under a long name (NBMANIFEST present). Flagged in nb_fill_store + the i365c-b1 commit.
-  status: OPEN
+  status: IN_PROGRESS
   kind: leaf
   owner: agent
   parent: i365c
