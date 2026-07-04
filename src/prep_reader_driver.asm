@@ -5,11 +5,11 @@
 ; section-C page 2 (+ section-D page 3), serves the requested include file via
 ; HGTHD/HLOAD, and models the DOSER (&5BC0) post-hook dispatch — the exact
 ; substrate the reader's not-found bracket needs. Boot installs the HLOAD
-; trampoline, points the reader at a fixed request name ("INC1"), calls
+; trampoline, points the reader at a fixed request name ("MACROS"), calls
 ; prep_sam_reader, and reports the outcome on the printer channel so the Go test
 ; reads it from Result.PrinterCapture:
 ;
-;   hit  → "H" + READ_CONTENT_LEN (lo,hi); the loaded bytes land in
+;   hit  → "H"; the loaded bytes land in
 ;          PREP_READER_PAGE (physical page 9), which the test reads directly.
 ;   miss → "M" (the DOSER bracket converted a file-not-found to CF=0 without a
 ;          BASIC longjmp).

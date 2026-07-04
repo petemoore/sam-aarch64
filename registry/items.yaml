@@ -533,7 +533,7 @@
   title: "Brick 3: .include + # line emission via pluggable reader vector"
   description: |
     Port preprocess.go handleInclude and the mid-stream '# line' emission. File access via a pluggable reader vector set at init (no conditional assembly): harness supplies a memory-backed provider, SAM build supplies real UIFA+HGTHD+trampoline-HLOAD (load_in_file pattern). Oracle extends asmprep_test.go with include-relative/search-path/missing/skipped-in-false-if cases. Real reader exercised under SimCoupe. Depends on i31b-b2.
-  status: OPEN
+  status: DONE
   depends_on: [i31b-b2]
   kind: umbrella
   owner: agent
@@ -554,10 +554,12 @@
   title: Real SAM include reader routine (prep_sam_reader) — name-map + UIFA+HGTHD+trampoline-HLOAD + not-found→CF=0 via temporary DOSER bracket
   description: |
     Port the .include reader vector (READER_VEC, src/asmprep.asm) from the b3a memory provider to the real SAM disk loader as a self-contained routine, proven in the SAM-fidelity harness (tools/z80-test-harness-go, which models HGTHD/HLOAD + DOSER) independent of the paged prep image. prep_sam_reader ABI matches prep_mem_reader (REQ_NAME_PTR/LEN in; CF=1 + READ_CONTENT_PTR/LEN on hit, CF=0 on miss). (1) map the resolved candidate name into a 15-byte UIFA name block (verbatim, <=10 chars, space-pad, 4-space ext — name-mapping default, q-followup); (2) install a temporary DOSER (&5BC0) bracket converting a not-found (A!=0) into a clean CF=0 return and restoring the prior vector (HGTHD longjmps to BASIC otherwise; hksp unavailable per i185); (3) fill_uifa+HGTHD geometry, trampoline-HLOAD (load_in_file pattern) into a target page, READ_CONTENT_PTR=&8000 window. Ships src/prep_reader_driver.asm + Makefile prep-reader-z80 + tools/z80-test-harness-go/prep_reader_test.go (hit + not-found, no silent skips). The end-to-end .include-under-SimCoupe exercise and the shared paged prep image are split out (depth-limit) into their own items. Plan: docs/plans/i31b-b3b-sam-include-reader.md. Spec: docs/specs/on-sam-preprocessor-design.md §6 brick 3.
-  status: IN_PROGRESS
+  status: DONE
   depends_on: [i31b-b3a]
   kind: leaf
   owner: agent
+  prs:
+    - {num: 880, role: completing}
   parent: i31b-b3
 
 - id: i31b-b4

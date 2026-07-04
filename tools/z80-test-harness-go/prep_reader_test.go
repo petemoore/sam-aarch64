@@ -6,10 +6,10 @@
 // loader — UIFA + HGTHD + trampoline-HLOAD (the load_in_file pattern) — with a
 // temporary DOSER (&5BC0) bracket that turns a file-not-found into a clean CF=0
 // return instead of a BASIC longjmp. build/prep_reader_driver.bin is a
-// standalone org-&8000 driver that requests the fixed name "INC1", calls
+// standalone org-&8000 driver that requests the fixed name "MACROS", calls
 // prep_sam_reader, and reports on the printer channel:
 //
-//	hit  → "H" + READ_CONTENT_LEN (lo,hi); the bytes land in PREP_READER_PAGE=9.
+//	hit  → "H"; the bytes land in PREP_READER_PAGE=9 (verified from the pager).
 //	miss → "M".
 //
 // This exercises the same HGTHD/HLOAD + DOSER model the boot self-tests use, so
@@ -48,7 +48,7 @@ func loadPrepReaderDriver(t *testing.T) []byte {
 	return bin
 }
 
-// TestPrepSamReaderHit: the reader resolves "INC1" to a served DOS file, HGTHDs
+// TestPrepSamReaderHit: the reader resolves "MACROS" to a served DOS file, HGTHDs
 // its geometry, and trampoline-HLOADs it into page 9. It must report a hit ("H")
 // with READ_CONTENT_LEN == the file length, and the bytes on page 9 must equal
 // the served content — proving name-map → HGTHD → HLOAD end-to-end.
@@ -77,7 +77,7 @@ func TestPrepSamReaderHit(t *testing.T) {
 	}
 }
 
-// TestPrepSamReaderMiss: with no "INC1" served and StrictFileNotFound set, the
+// TestPrepSamReaderMiss: with no "MACROS" served and StrictFileNotFound set, the
 // HGTHD is a genuine file-not-found. The reader's DOSER bracket must convert
 // that to CF=0 ("M") and let the driver reach its HALT cleanly — NOT longjmp to
 // BASIC (which would surface as a pendingFault / non-"M" capture).
