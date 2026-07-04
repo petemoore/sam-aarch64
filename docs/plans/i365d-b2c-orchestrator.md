@@ -271,6 +271,41 @@ not clobbering the DOS; and the assembler's paged_call (page 14) / trampoline
 Prime suspect: an off-axis page the assembler reads before (re)loading it, or a
 `paged_call`/jump landing on a page still holding render IN data.
 
+**FIX 4 — DEFINITIVE ROOT CAUSE (verified via record layout; supersedes the
+SD-coexistence guess below).** render's RELEASESRC write is CONTIGUOUS from
+linearSec 40 (`RDS_DATA_BASE`) for ~820 sectors → linearSec **40..859**. On the
+composed demo record the files sit at: bdos 40..60, AUTOrdb 61..101, **asmdemo
+102..127**, **IN 128..856**, disasm 857..877, d15 878..898, enctab.enc 899..906,
+sd13 907..908, zx013 909..912. So render's RELEASESRC write **OVERWRITES `asmdemo`
+and `IN`** (and bdos, and part of disasm) — the exact files the assemble phase then
+needs. The chain HLOADs `asmdemo` from linearSec 102 AFTER render clobbered it, so
+`&8000` gets release.src *text* (matching the `" height"` / `"torvalds"` bytes seen
+there); the "assembler" is that text executed as code → it wanders and HALTs. NOT
+the SD (that read fine); the "body collision" flagged early in this doc.
+
+**THE FIX (next session):** render must write RELEASESRC to FREE sectors AFTER all
+existing files, not from the fixed base 40. Two options:
+1. **Dynamic base (render-first, keeps the current render→assemble chain):** make
+   `RDS_DATA_BASE` a variable; before `render_run`, scan the record directory (render
+   already has `bd_record_read_hw`) for the max end-sector across all CODE entries and
+   set the base to `max_end+1` (here 913). Touches the write cursor, the dir-entry
+   first-sector (track/sector), and `rds_fill_bitmap`'s bit offset (bit0 currently =
+   linearSec 40). b2a still works (its test now reconstructs by name); re-verify it +
+   the sink/probe tests. This is also correct for a real shared card (never overwrite
+   other files). Preferred — bounded, keeps the working chain.
+2. **Assemble-FIRST (bigger restructure):** boot the assembler, HSAVE RELEASEIMG
+   (B-DOS allocates it at ~913+, clear of RELEASESRC's 40..859), then chain to render
+   which reads the still-intact IN, renders, and writes RELEASESRC last (clobbering
+   IN/asmdemo is now harmless). Sidesteps BOTH the body collision AND the DOS-page
+   clobber (render is last, DI;HALTs — no B-DOS op after), but needs the chain tail in
+   `assembler.asm` (assembler→render) instead of render→assembler. More work.
+
+Do Option 1. Once RELEASESRC lands clear of asmdemo/IN, the chain HLOADs the REAL
+assembler → it assembles → HSAVEs RELEASEIMG → `ret`s onto CHAIN_DONE → Phase A green.
+
+--- superseded SD-coexistence localization (the read that "confirmed" it was normal;
+the real cause is the body collision above) ---
+
 **FIX 4 localization (step-bracketed this session):** the assembler runs NORMALLY
 up to ~62.7M steps and crashes at ~62.77M — a ~70k-step window. Brackets:
 - @62.700M: PC=`&69BB` = a B-DOS SD block-read `INI` loop (port `&DF`, B=bytes
