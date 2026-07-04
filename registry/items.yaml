@@ -554,7 +554,7 @@
   title: "Brick 3b: real SAM include reader (UIFA+HGTHD+trampoline-HLOAD) + SimCoupe exercise"
   description: |
     Bind the b3a pluggable reader vector (READER_VEC) to the real SAM file loader — UIFA + HGTHD + trampoline-HLOAD, the load_in_file pattern (src/main_loop.asm) — and exercise the real-HLOAD include path under SimCoupe with real DOS (a disk image carrying include files). No HOSTTEST carve-outs: the vector is set at init so both the memory provider (b3a) and the real reader get emulator coverage. Likely shares the SAM-runnable asmprep harness with b4 (chain wiring); add the edge if a concrete prerequisite emerges. Depends on i31b-b3a.
-  status: OPEN
+  status: IN_PROGRESS
   depends_on: [i31b-b3a]
   kind: leaf
   owner: agent
