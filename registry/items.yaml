@@ -510,9 +510,11 @@
   title: "Brick 2a: macro definition — .macro/.endm, header+body parse, storage"
   description: |
     Port preprocess.go parseMacroHeader + collectMacroBody + the .macro/.endm cases in processLines: parse the macro name + positional params, collect the body up to .endm (nested .macro and unterminated .macro are errors, .endm-outside-.macro is an error), and store the macroDef (name, param spans, body-line spans, defPos.line) in a macro table. A definition is CONSUMED (emits nothing); an inactive-.if definition is skipped but its body still consumed. No invocation yet, so fixtures define-but-don't-invoke. Oracle: asmprep_test.go byte-compares define/consume + error fixtures vs frontend.Preprocess, and validates the stored record (name/nparams/nbody) via exposed symbols. Extends src/asmprep.asm; keeps the brick-1 non-reentrant loop.
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 877, role: completing}
   parent: i31b-b2
 
 - id: i31b-b2b
