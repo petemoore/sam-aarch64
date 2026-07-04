@@ -34,7 +34,6 @@ Source of truth: `registry/priority.yaml`. Spec: `docs/specs/registry-source-of-
 
 | **id** | item | status | owner | gate | deps | dependents |
 |---|---|---|---|---|---|---|
-| <a id="i359a"></a>**i359a** | **Disk-image catalogue README (docs/disk-catalogue.md) + in-repo record->disk mapping** | IN_PROGRESS | agent | 🛠 in-progress |  |  |
 | <a id="i359b"></a>**i359b** | **Store (sd_push) + boot-verify every built .mgt disk to a Trinity record; fill the record->disk mapping** | OPEN | agent | ready |  |  |
 | <a id="i41e"></a>**i41e** | **Editor edit-model — i48-IR record payload + document symbol table + hybrid record model** — Replace i41a's raw-text line payload with the i48 in-memory symbolic IR (parsed format.Record): a document-global symbol table + name-id/record-id side-tables (§3), a hybrid committed-parsed / active-raw / invalid-error record type (§7.3), per-line text→IR entry. q24 resolved (2026-06-20): the editor validates ONE LINE AT A TIME — no whole-document import to serialize invalidly; the design point is how an in-progress/invalid LINE is held + round-tripped (whole-file import = i165). Open design (symbol-table lifecycle, hybrid sum type, per-line parse) — needs a design pass (§8/§5.2/§6/§7.3). | OPEN | agent | 🔒 q51 | i2a, q51 |  |
 | <a id="i43"></a>**i43** | **Editor: register simulator with user-chosen seeds + replay-on-edit** — Phase-2 editor sub-feature. Register simulator with user-chosen seeds: step instructions, inject/randomise source regs, show dest regs/flags/memory, and replay-on-edit. Described in docs/ROADMAP.md 'Editor vision'. | OPEN | agent | ⏳ i41 | i41 |  |
@@ -149,5 +148,4 @@ Source of truth: `registry/priority.yaml`. Spec: `docs/specs/registry-source-of-
 - i264 — `OPEN` — SAMBOOT selector firmware: hold-key-at-boot launches a record picker (choose boot record by number/name) instead of hardcoded record 3
   - [i264b](#i264b) — `OPEN` — Record picker UI (Increment 2): list available records, select by number/name, persist the SAMBOOT Config chunk
 - i359 — `OPEN` — Disk-image catalogue + store all built .mgt images as Trinity records (with in-repo record->disk mapping)
-  - [i359a](#i359a) — `IN_PROGRESS` — Disk-image catalogue README (docs/disk-catalogue.md) + in-repo record->disk mapping
   - [i359b](#i359b) — `OPEN` — Store (sd_push) + boot-verify every built .mgt disk to a Trinity record; fill the record->disk mapping

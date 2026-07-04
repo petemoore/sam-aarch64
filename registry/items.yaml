@@ -6139,7 +6139,7 @@
 - id: i359a
   title: "Disk-image catalogue README (docs/disk-catalogue.md) + in-repo record->disk mapping"
   description: ""
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
   parent: i359
