@@ -101,9 +101,12 @@ RDB_IM2_HANDLER:        equ     &F9F9          ; = RDB_IM2_VEC * &101 (ei ; reti
 ;     of the &7E00+ trampoline area render already owns). The chain-stub is copied
 ;     here and run from OUTSIDE the &8000 window it HLOADs the next overlay into.
 OVL_STUB_DST:           equ     &7C00          ; the straight-line loader stub body
-CHAIN_DONE:             equ     &7C40          ; the DI;HALT completion barrier (Phase A StopPC)
-OVL_RETADDR:            equ     &7C50          ; 2 bytes = CHAIN_DONE; the next overlay's ret frame
-OVL_STUB_SP:            equ     &7DF0          ; the stub's HLOAD scratch stack (grows down)
+OVL_STUB_SP:            equ     &7DF0          ; the stub's HLOAD scratch stack (grows down);
+                                               ; also the server overlay's come-up + serve stack
+                                               ; (section B; ~7 KB down to &6000, clear of the
+                                               ; B-DOS sysvars <=&5FFF the server's B-DOS walk uses)
+OVL_STUB_HMPR:          equ     &7DFC          ; 1-byte slot: the boot HMPR (exec window), saved
+                                               ; across the 2-page server HLOAD (above OVL_STUB_SP)
 
 ; STAGING_BUF is a LABEL placed after all code (see the end of the file), not
 ; the driver's fixed &E000 — the come-up/sink code occupies what would be the
@@ -359,9 +362,12 @@ rdb_verdict_set:
                 ld      (rdb_phase), a
 
     if defined(DEMO_CHAIN)
-                ; i365d-b2c: RELEASESRC is on the record. Hand the machine to the
-                ; assembler overlay (asmdemo) — load it over the &8000 window and
-                ; run it (it HSAVEs RELEASEIMG). See rdb_chain_next.
+                ; i365d-b2c Phase B: RELEASESRC is on the record (RELEASEIMG was
+                ; HSAVE'd by the assembler before it chained here). Hand the machine
+                ; to the netboot SERVER overlay (nbsrv) — load it over the &8000
+                ; window and run it; it comes up (EEPROM/ENC/CSD, B-DOS store walk)
+                ; and serves BOTH files disk-backed over TFTP forever. See
+                ; rdb_chain_next.
                 jp      rdb_chain_next
     endif
 
@@ -378,15 +384,19 @@ rdb_done:
 
     if defined(DEMO_CHAIN)
 ; ===========================================================================
-; rdb_chain_next (i365d-b2c) — hand the machine to the next overlay (asmdemo).
-; The render is done and RELEASESRC is on the record. We restore a clean B-DOS
-; runtime (boot LMPR = ROM0 in section A + the B-DOS sysvar page in section B,
-; IM 1, DI), arm the HGTHD lookup of the assembler CODE file, then LDIR a tiny
-; straight-line loader stub to section-B low RAM (OUTSIDE the &8000 window) and
-; JP it. The stub HLOADs asmdemo over &8000 (13 KB, fits section C) and enters
-; it. The assembler is callable: it saves the SP at entry and `ret`s at exit —
-; we leave that SP pointing at OVL_RETADDR, whose word is CHAIN_DONE, so the
-; assembler's clean exit lands on the DI;HALT barrier the faithful gate StopPCs.
+; rdb_chain_next (i365d-b2c Phase B) — hand the machine to the netboot SERVER
+; overlay (nbsrv). The render is done and RELEASESRC is on the record. We restore
+; a clean B-DOS runtime (boot LMPR = ROM0 in section A + the B-DOS sysvar page in
+; section B, IM 1, DI), arm the HGTHD lookup of the server CODE file, then LDIR a
+; tiny straight-line loader stub to section-B low RAM (OUTSIDE the &8000 window)
+; and JP it. The stub HLOADs nbsrv over &8000 (2 pages, ~19 KB fills sections C+D)
+; and enters it. The server is TERMINAL — its own come-up (EEPROM/ENC/CSD, the
+; B-DOS store walk that indexes RELEASESRC + RELEASEIMG + the NBMANIFEST long-name
+; map) then nb_serve_loop forever — so no return frame is needed; the stub leaves
+; SP in section B (OVL_STUB_SP) for the server's come-up + serve stack.
+;
+; render's IN reblock ran at IN=4..26 (DEMO_CHAIN), so B-DOS's DOS code page (29)
+; survives intact for the server's post-render B-DOS store walk (HRSAD/HGTHD/HLOAD).
 ; ===========================================================================
 rdb_chain_next:
                 di
@@ -394,32 +404,21 @@ rdb_chain_next:
                 ld      a, (rdb_bdos_lmpr)     ; ROM0 in A + B-DOS sysvar page in B
                 out     (250), a               ; (the pristine boot LMPR, from rdb_main)
                 ld      a, (rdb_boot_hmpr)     ; restore the boot exec window so the next
-                out     (251), a               ; overlay loads to &8000 into a RAM page pair
-                                               ; clear of the DOS page (render left HMPR at
-                                               ; the paged_call/IN window during the render)
+                out     (251), a               ; overlay loads to &8000 into the RAM page pair
+                                               ; ALHK set (render left HMPR at the
+                                               ; paged_call/IN window during the render)
 
-                ; --- arm HGTHD for asmdemo -> BD_DIFA (pages, length) -----------
-                ; The DOS-page clobber (the reblock overwriting B-DOS at DOSFLG=page
-                ; 29) is FIXED above by the DEMO_CHAIN IN=4..26 / paged_call=28 layout
-                ; — this HGTHD now dispatches to REAL B-DOS. REMAINING (next session):
-                ; render_disk_write_dirent zeroes linearSec 0 when it writes
-                ; RELEASESRC, leaving a type-0 entry that halts B-DOS's directory
-                ; scan before asmdemo (linearSec 1) — so this HGTHD fails "not found"
-                ; and B-DOS drops into its error-prompt keyboard wait (ROM KYIP &0502
-                ; / WAITKEY). Fix render_disk_write_dirent to append RELEASESRC into
-                ; the first FREE dir slot, preserving the existing entries. See plan.
-                ld      hl, rdb_name_asmdemo
+                ; --- arm HGTHD for nbsrv -> BD_DIFA (pages, length) -------------
+                ; render_disk_write_dirent appended RELEASESRC into the first FREE
+                ; dir slot (no type-0 gap before nbsrv), so B-DOS's directory scan
+                ; reaches nbsrv (whose on-record body sectors sit above RELEASESRC's
+                ; base-40 write band — placed LAST on the record). This HGTHD
+                ; dispatches to REAL B-DOS (the DOS page at DOSFLG survives the
+                ; IN=4..26 reblock).
+                ld      hl, rdb_name_nbsrv
                 ld      (BD_NAME_PTR), hl
                 call    bdos_name_to_uifa
                 call    bdos_lookup_hook       ; UIFA->&4B00, HGTHD arms svde, DIFA->BD_DIFA
-
-                ; --- lay down the DI;HALT barrier + the assembler's ret frame ----
-                ld      a, &F3                 ; DI
-                ld      (CHAIN_DONE), a
-                ld      a, &76                 ; HALT
-                ld      (CHAIN_DONE + 1), a
-                ld      hl, CHAIN_DONE
-                ld      (OVL_RETADDR), hl      ; ret frame word = CHAIN_DONE
 
                 ; --- copy the loader stub to low RAM and enter it ---------------
                 ld      hl, rdb_chain_stub_src
@@ -433,9 +432,14 @@ rdb_chain_next:
 ; Absolute addresses only (no self-relative control flow) so it runs correctly
 ; at OVL_STUB_DST regardless of where it is assembled. Reads the armed BD_DIFA
 ; (still mapped in section C until the HLOAD) for the page count + length, HLOADs
-; the whole file to &8000, then enters it with SP = OVL_RETADDR.
+; the whole server to &8000, then enters it with SP in section B.  The 2-page
+; (~19 KB) HLOAD to &8000 ADVANCES HMPR per 16 KB (the data lands correctly across
+; sections C+D, no wrap into ROM), so the stub SAVES the boot HMPR first and
+; RESTORES it after — else the server enters at page 2 (section C = its 2nd half).
 rdb_chain_stub_src:
                 ld      sp, OVL_STUB_SP
+                in      a, (251)               ; save the boot exec window (section C = page 1)
+                ld      (OVL_STUB_HMPR), a
                 ld      a, (BD_DIFA + BD_OFF_PAGES)
                 ld      c, a                   ; C = whole-file page count
                 ld      a, (BD_DIFA + BD_OFF_LENGTH)
@@ -445,9 +449,11 @@ rdb_chain_stub_src:
                 ld      d, a                   ; DE = length-mod-16K
                 ld      hl, &8000              ; HLOAD dest = the current window (section C)
                 rst     8
-                defb    BD_HOOK_HLOAD          ; load asmdemo to &8000 (longjmps on read error)
+                defb    BD_HOOK_HLOAD          ; load nbsrv to &8000 (longjmps on read error)
                 di                             ; PTDOS EIs inside RST 8
-                ld      sp, OVL_RETADDR        ; the assembler captures this SP; its ret -> CHAIN_DONE
+                ld      a, (OVL_STUB_HMPR)     ; restore the boot exec window so the server
+                out     (251), a               ; enters at section C = page 1 (jp netboot_main)
+                ld      sp, OVL_STUB_SP        ; the server's come-up + serve stack (section B)
                 jp      &8000
 rdb_chain_stub_end:
     endif
@@ -765,7 +771,7 @@ rdb_name_out:   defm    "RELEASESRC"           ; 10-char on-record output name
 rdb_name_disasm: defm   "disasm"               ; the render's decode engine payload
                 defb    0
     if defined(DEMO_CHAIN)
-rdb_name_asmdemo: defm  "asmdemo"               ; i365d-b2c: the assembler overlay (DEMO_ASM)
+rdb_name_nbsrv: defm    "nbsrv"                 ; i365d-b2c Phase B: the netboot server overlay
                 defb    0
     endif
 rdb_name_in_padded:                            ; the 10-char on-record name of the

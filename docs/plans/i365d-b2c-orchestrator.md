@@ -10,7 +10,58 @@ when the faithful **end-to-end** gate is green (CLAUDE.md rule 5). Internally
 phased; the branch may span sessions. `i365d-b2c` cannot be `split` (id-grammar
 nesting limit), so it stays one item / one completing PR.
 
-## PHASE A — DONE (2026-07-05, assemble-first). Phase B (serve) next.
+## PHASE B — DONE (2026-07-05, assemble→render→serve). Whole demo GREEN.
+
+The serve leg is implemented and **the faithful end-to-end gate is GREEN**:
+`TestAssembleFirstServeFaithful`
+(`tools/netboot-oracle/z80/assemble_first_serve_faithful_test.go`) boots the
+capstone SERVE record on the faithful rig → the assembler assembles + HSAVEs
+`RELEASEIMG` → chains to the **DEMO_CHAIN render** (`render_chain.bin`) → render
+writes `RELEASESRC` to base 40 → chains to the **netboot SERVER** (`nbsrv`) →
+the server comes up (EEPROM/ENC/CSD + the B-DOS store walk that indexes both
+files + the NBMANIFEST long-name map) and serves BOTH disk-backed over TFTP.
+The gate then TFTP-fetches `release.src` (417374 B == `render.Emit`) and
+`release.img` (21752 B == GNU) under their full NBMANIFEST-mapped names and
+byte-matches. ~21.7 s; nb_serve_loop reached; both files byte-exact.
+
+The anticipated hard part — the server's B-DOS walk running AFTER render's raw
+CMD17/CMD24 SD ops — **did NOT wedge**: the DEMO_CHAIN render keeps `IN=4..26`
+(FIX 1) so B-DOS's DOS code page (DOSFLG=29) survives, and the server's own
+come-up re-inits ENC/csd; the walk's HRSAD/HGTHD/HLOAD ran clean on the first
+full boot. No harness change needed.
+
+What landed:
+- `src/netboot/render_disk_boot.asm` — the `DEMO_CHAIN` chain tail now targets the
+  server (`rdb_name_nbsrv` = "nbsrv"); `rdb_chain_stub_src` gained the boot-HMPR
+  save/restore across the 2-page (~19 KB) server HLOAD (the same advance the
+  assembler→render stub handles), and leaves SP in section B (`OVL_STUB_SP`) for
+  the terminal server's come-up + serve stack (no ret frame). All `DEMO_CHAIN`-
+  gated → the b2a build (`render_disk_boot.bin`, no DEMO_CHAIN) is byte-identical.
+- `tools/build-disk/main.go` — a new `-netboot-manifest-map STORE=TFTP` flag adds
+  an NBMANIFEST entry mapping an on-record store name to a full TFTP name WITHOUT
+  placing a file, for the RUNTIME-written `RELEASESRC`/`RELEASEIMG` (`buildManifest`
+  now emits their store→TFTP records; `addNetbootExtras` skips file placement for a
+  `data==nil` map). The existing `-netboot-extra` mangle path is unchanged.
+- `Makefile` — `render_chain.bin` (`-D DEMO_CHAIN`) + `netboot-assemble-first-serve-record`
+  (AUTOasm + render_chain + IN/disasm/d15/enctab/sd13/zx013 + `nbsrv` placed LAST so
+  its body sits above RELEASESRC's base-40 write band + the two manifest maps). Added
+  to `.PHONY` + `netboot-z80-artifacts`.
+
+Record layout verified (`recLin`): RELEASESRC write band 40..858; `nbsrv` 913..950,
+`NBMANIFEST` 951, `sd13` (arena) 907..908, RELEASEIMG (HSAVE'd) 952+ — all survive
+the RELEASESRC write. IN 128..856 + bdos/AUTOasm/render clobbered (consumed first).
+
+Regressions all green: Phase A (`TestAssembleFirstDemoFaithful`), b2a
+(`TestRenderDiskBootFaithful`), b2b (`TestAssembleDiskBootFaithful`), the server
+gates (`TestNetbootServerFaithful` + largefile + manifest), the boot self-tests;
+`render_disk_boot.bin` + `netboot_server.bin` byte-identical; all CI guards pass.
+
+**Not done (deferred, non-gate):** the on-screen RST&10 "Generating source/image…"
+messages (b2a truth #5: RST&10 hangs at come-up under an ALHK record boot; not
+required for the gate — left for a follow-up, ideally the i365e on-hardware run
+where a real screen exists). i365d-b2c merges on the PR (CLAUDE.md rule 5).
+
+## PHASE A — DONE (2026-07-05, assemble-first). [Superseded by Phase B above.]
 
 The assemble-first restructure (§FIX 4) is implemented and **the faithful Phase-A
 gate is GREEN**: `TestAssembleFirstDemoFaithful`
