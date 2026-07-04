@@ -587,10 +587,12 @@
   title: "Brick 4b: prep_run → b8d_chain_paged wiring (two paged images, PREP_OUT→LEX_SRC hand-off) + harness end-to-end gate"
   description: |
     Wire prep_run in front of b8d_chain_paged so source text → prep → chain → .tbn on-Z80, proven in the netboot-oracle paged harness. The prep image (src/asmprep.asm ASMPREP_PAGED_BUFS: page9=prep code, page8=PREP_OUT/PREP_SRC/PREP_FILES) and the b8d chain image (build/asmparse_paged.bin: page9=lex/parse code, page8=PARSE_RECS/LEX_SRC&0800/SYM_NAMES) both occupy page 9 with DIFFERENT code, so this is a sequential two-image hand-off: run prep_paged_run (LMPR=prep window) → expanded text in PREP_OUT → copy expanded bytes to the chain's LEX_SRC (page8 &0800) → run b8d_chain_paged (LMPR=chain window) → .tbn at B8D_SER_OUT &2F00. Add a combined driver (mirror prep_paged_driver + chain_paged_driver) + Makefile target. Harness gate (new Go test, mirror asmprep_paged_test + compact_ir_b8d_test): small preprocessor-bearing fixtures (.set/.if, same-file macro, include-with-cross-file-macro), gated both ways — expanded text byte-equal to frontend.Preprocess, then text→.tbn byte-equal to assemble.CompactTBNBytes. Uses i370's existing oracle-fixture buffer sizes (PP_PREP pool + corpus scale-up is b4c). Depends on i370, b4a.
-  status: IN_PROGRESS
+  status: DONE
   depends_on: [i31b-b4a, i370]
   kind: leaf
   owner: agent
+  prs:
+    - {num: 883, role: completing}
   parent: i31b-b4
 
 - id: i31b-b4c
