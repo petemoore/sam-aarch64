@@ -6398,7 +6398,7 @@
   title: 32-bit OACK tsize for large-file serve
   description: |
     build_oack_opts renders the TFTP OACK 'tsize' option 16-bit (write_dec_u16 of XFER_SIZE low word), so for release.src (417KB) the advertised tsize wraps mod 65536. The DATA stream is byte-correct (the serve path uses the full 32-bit XFER_SIZE), and tsize is advisory (RFC 2349) so standard clients (tftp/curl/atftp) fetch fine, but a strict pre-allocating client would be misled. Render tsize as a full 32-bit decimal before i365e serves release.src on hardware. Flagged by the #861 §3 review; Makefile comment already acknowledges the limit.
-  status: OPEN
+  status: IN_PROGRESS
   kind: leaf
   owner: agent
   parent: i365c
