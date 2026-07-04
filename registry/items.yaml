@@ -6452,7 +6452,7 @@
   title: "i365d demo: assemble→disk bootable — DEMO_ASM vessel reads IN, HSAVEs RELEASEIMG (byte-match GNU)"
   description: |
     The assemble half as a CODE-auto record vessel: compose build/assembler-demo.bin (DEMO_ASM; start: at &8000 -- saves caller SP, ld sp,&C100, main_assemble + save_out_file HSAVE 'RELEASEIMG', restores SP, ret; src/assembler.asm:299-702) as the AUTO* file (or CALLed by a thin driver keeping its stack/return-frame OUTSIDE the assembler's &8000 image + &C100 stack, #859), reading release-unstripped.tbn as DOS file IN (load_in_file loads only the prefix, main_loop.asm:1560), plus the assembler's HLOAD-by-name payloads (enctab.enc, sd13, zx013, d15, p14) on the same record (the existing assembler-vessel payload set, build-disk addAssemblerSlots). Gate (assembler_record_vessel_test.go pattern, FAITHFUL rig): boot -> DEMO_ASM -> HGTHD('RELEASEIMG')/HLOAD == build/release-unstripped.img (byte-matches GNU). Mostly composition of the existing DEMO_ASM binary + existing payloads.
-  status: OPEN
+  status: IN_PROGRESS
   kind: leaf
   owner: agent
   parent: i365d-b2
