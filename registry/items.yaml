@@ -6326,3 +6326,17 @@
   status: WONTFIX
   kind: leaf
   owner: agent
+
+- id: i365
+  title: "Demo disk on a Trinity record: boot release.tbn, then generate+SAVE release.src (list) and release.img (assemble) on-SAM — assembler-core proof, editor-less"
+  description: |
+    Pete's request 2026-07-04 (TOP PRIORITY; he stepped away — proceed autonomously, all pieces exist). Goal: a SAM disk stored on a Trinity SD record containing ONLY release.tbn plus the programs (assembler/disassembler/enctab/sysreg/zx0) — NO release.src, NO release.img on the disk at boot. On boot the disk runs a scripted sequence with on-screen status, then serves the results so the run is network-verifiable:
+     (1) print 'Generating source...' -> produce release.src = the HUMAN-READABLE assembly source (as it would appear on screen / if printed / LLISTed) from release.tbn, save to disk;
+     (2) print 'Generating image...' -> assemble to produce release.img = the assembled target aarch64 binary, save to disk;
+     (3) SERVE both release.src and release.img over TFTP so a host can fetch them and confirm the demo really ran and really produced the files (the end-to-end hardware proof / self-confirmation).
+     Demonstrates the assembler CORE end-to-end (list + assemble + save + serve) with ONLY the interactive editor missing.
+     KNOWN PIECES: build/release.mgt already bundles assembler.bin(prod,&8000)+release.compact.tbn+disasm.bin(d15)+enctab.enc+sysreg+zx0, and its assembler already assembles release.compact.tbn byte-identically to GNU (release gate) => the ASSEMBLE half exists; missing is SAVE-to-disk of the output as a real B-DOS/SAMDOS file (not the SimCoupe OUT side-channel). i93b proved HRECORD->HSAVE->HGTHD->HLOAD on B-DOS 1.5t hw (save API exists). TFTP serve is hw-proven (i96 first-light, i95b-b1 integrated server booted from record 187, 16.8KB/s). Record store+boot proven (i295/i319/i332 sd_push + CODE-auto vessel + boot-record.py).
+     OPEN GAP under research (3 agents 2026-07-04): whether an on-SAM .tbn->source-text LISTER exists (the 'Generating source' half) or must be built/ported, or whether release.src should instead come from disassembling release.img (disasm.bin). Leaves split once research lands.
+  status: IN_PROGRESS
+  kind: umbrella
+  owner: agent
