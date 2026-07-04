@@ -60,3 +60,8 @@
   body: |
     i88c (TLS 6b) hardware-path design — no Go authority settles either half. (a) Paged buffer layout for full-size (up to 16645 B = TLS max) records: measured, the tls_client composite is already &8000-&F7A5 (30629 B) with TC_RX=1056; growing TC_RX to 16645 alone overruns &FFFF, and REASM_BUF (16645) is a further +16645, so both cannot coexist in a flat build — a paged arrangement is required. Which pages hold REASM_BUF vs TC_RX vs the crypto code? (b) Hardware-leg definition: is the i88c RST-8 shot a live-internet TLS-1.3 handshake against a real CDN (needs a post-handshake app-data GET/response/decrypt/store driver that does NOT yet exist beyond i88a's handshake-only 6a scope), or a captured-flight replay proving the wiring on silicon? What does the shot fetch/store (if it stores via HSAVE it additionally depends on i357's free-record fix)?
   owner: pete
+
+- id: q73
+  body: |
+    i359b coverage scope: push ONLY the product disks to Trinity records, or a BROADER set (incl. the 12 transient per-fixture corpus disks) for on-hardware per-image test coverage (the i319b goal)? The i359a catalogue (docs/disk-catalogue.md) shows most of the 27 build/ disks are transient test residue or deletable i12b one-offs, NOT record-worthy. Product set warranting records: test_record.mgt(186 DONE), netboot_server_record.mgt(187 DONE), netboot_serve_record.mgt(145 DONE), release.mgt (needs a -code-auto vessel built first). Disassembler/editor are not standalone disks. Bulk unattended pushing to the shared card is fragile (no-retransmit i348), so a push campaign wants this steer first. Safe sub-step doable regardless: list-records (read-only) to confirm the live mapping in the catalogue.
+  owner: pete
