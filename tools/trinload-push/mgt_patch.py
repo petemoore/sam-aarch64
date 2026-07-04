@@ -25,6 +25,8 @@ MGT-structure functions are a faithful port of the Go authority helpers in
 lock-step.
 """
 
+import os
+
 ORG = 0x8000
 MGT_SIZE = 819200  # 80 cyl x 2 sides x 10 sectors x 512 = one Trinity record
 
@@ -150,9 +152,25 @@ def _read_payload_byte(mgt, track, sector, off):
         base += 510
 
 
-# The i365e demo-record overlay specs: which overlay carries which record symbol.
+# The single authority for the i365e demo-record overlay layout: which overlay
+# (store name) carries which record symbol, in which map, at what width. The CLI
+# (patch-demo-record.py) and the test (test_trinpush.py) both build their patch
+# specs from this — do not re-inline the tuples elsewhere (single source of truth).
 DEMO_RECORD_SPECS = [
     # (store_name, map_path_relative_to_repo, symbol, width)
     ("render", "build/render_chain.map", "RDB_CFG_RECORD", 2),
     ("nbsrv", "build/netboot_server.map", "NB_BOOT_RECORD", 1),
 ]
+
+
+def load_demo_specs(repo_root, overrides=None):
+    """Build the patch specs [(store_name, map_text, symbol, width)] from
+    DEMO_RECORD_SPECS, reading each overlay's map. `overrides` maps a store name
+    to an explicit map path (else the repo-relative default is used)."""
+    overrides = overrides or {}
+    specs = []
+    for store_name, default_map, symbol, width in DEMO_RECORD_SPECS:
+        map_path = overrides.get(store_name) or os.path.join(repo_root, default_map)
+        with open(map_path) as f:
+            specs.append((store_name, f.read(), symbol, width))
+    return specs

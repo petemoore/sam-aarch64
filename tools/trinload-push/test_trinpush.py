@@ -368,14 +368,11 @@ class TestDemoRecordPatch(unittest.TestCase):
     def setUp(self):
         with open(DEMO_MGT, "rb") as f:
             self.orig = f.read()
-        with open(RENDER_MAP) as f:
-            self.render_map = f.read()
-        with open(NBSRV_MAP) as f:
-            self.nbsrv_map = f.read()
-        self.specs = [
-            ("render", self.render_map, "RDB_CFG_RECORD", 2),
-            ("nbsrv", self.nbsrv_map, "NB_BOOT_RECORD", 1),
-        ]
+        # Single source: build specs from mgt_patch.DEMO_RECORD_SPECS.
+        self.specs = mgt_patch.load_demo_specs(REPO)
+        by_name = {name: mt for (name, mt, _sym, _w) in self.specs}
+        self.render_map = by_name["render"]
+        self.nbsrv_map = by_name["nbsrv"]
 
     def test_baked_defaults_are_config(self):
         # The bytes the tool will overwrite currently hold the compile-time

@@ -33,10 +33,10 @@ def main():
     ap.add_argument("mgt", help="path to the demo serve .mgt")
     ap.add_argument("record", type=int, help="the record the .mgt will be stored at (1..255)")
     ap.add_argument("--out", help="write the patched .mgt here (default: patch in place)")
-    ap.add_argument("--render-map", default=os.path.join(REPO, "build/render_chain.map"),
-                    help="pyz80 map for the 'render' overlay (RDB_CFG_RECORD)")
-    ap.add_argument("--server-map", default=os.path.join(REPO, "build/netboot_server.map"),
-                    help="pyz80 map for the 'nbsrv' overlay (NB_BOOT_RECORD)")
+    ap.add_argument("--render-map", default=None,
+                    help="override the pyz80 map for the 'render' overlay (RDB_CFG_RECORD)")
+    ap.add_argument("--server-map", default=None,
+                    help="override the pyz80 map for the 'nbsrv' overlay (NB_BOOT_RECORD)")
     args = ap.parse_args()
 
     if not (1 <= args.record <= 255):
@@ -46,21 +46,17 @@ def main():
     with open(args.mgt, "rb") as f:
         mgt = bytearray(f.read())
 
-    with open(args.render_map) as f:
-        render_map = f.read()
-    with open(args.server_map) as f:
-        server_map = f.read()
-    specs = [
-        ("render", render_map, "RDB_CFG_RECORD", 2),
-        ("nbsrv", server_map, "NB_BOOT_RECORD", 1),
-    ]
+    # Build the patch specs from the single-source DEMO_RECORD_SPECS, honouring
+    # the per-overlay map overrides.
+    specs = mgt_patch.load_demo_specs(
+        REPO, overrides={"render": args.render_map, "nbsrv": args.server_map})
 
     patched = mgt_patch.patch_record_overlays(mgt, args.record, specs)
 
     # Read back every patched value and confirm it took (belt-and-braces: a wrong
     # value here is a data-safety hazard on the shared card).
-    for (store_name, _map, symbol, width) in [(s[0], s[1], s[2], s[3]) for s in specs]:
-        got = mgt_patch.read_record_overlay(mgt, store_name, _map, symbol, width)
+    for (store_name, map_text, symbol, width) in specs:
+        got = mgt_patch.read_record_overlay(mgt, store_name, map_text, symbol, width)
         if got != args.record:
             sys.exit("VERIFY FAILED: %s in overlay %r read back as %d, want %d"
                      % (symbol, store_name, got, args.record))
