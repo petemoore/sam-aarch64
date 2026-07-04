@@ -5984,6 +5984,7 @@
   description: |
     Lowest-priority future perf item (Pete 2026-07-01). After i24 lands option A (uniform per-byte LMPR-bracketed emit into a pool run), the emit hot path pays ~1/4 of its per-byte cost on the page-swap bracket and ~3/4 on register push/pop (ABI), zone/full checks, and OUT_PC/OUT_LEN bookkeeping. Candidates to evaluate: (a) a small staging buffer (8-128 bytes) in an always-paged region, flushed via ONE bracket + ldir per N bytes (amortises the page-swap); (b) restructure so the per-byte hot path is just store-to-buffer + pointer-bump, moving zone/page-run advance + OUT_LEN + the bracket into the per-flush path (potentially ~3x); (c) alternative-register / reduced-stack-op tuning of emit_byte. METHOD: measure EACH candidate by TOTAL T-states to assemble release.s (a representative full source); best T-states that STILL fits the memory budget wins. DO WHEN CODE IS FEATURE-COMPLETE (so the free-memory / staging-buffer budget is known). One-shot cost -> lowest priority.
   status: OPEN
+  depends_on: [i101]
   kind: leaf
   owner: agent
 
