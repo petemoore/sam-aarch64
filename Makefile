@@ -1723,7 +1723,7 @@ test-encoder: sam-aarch64 tables-gen release-unstripped-tbn
 
 ci-encoder: test-encoder
 
-.PHONY: assembler assembler-prod assembler-enc-tests build-disk disk test-mem-offaxis cluster-offaxis paged-call-payload enc-fix-payload overlay-suite sysreg-data disasm-payload disasm-test-payload test-core ci-core check-budget
+.PHONY: assembler assembler-prod assembler-demo assembler-enc-tests build-disk disk test-mem-offaxis cluster-offaxis paged-call-payload enc-fix-payload overlay-suite sysreg-data disasm-payload disasm-test-payload test-core ci-core check-budget
 
 # check-budget — fail if any assembler variant has grown into the
 # &C000 stack page (the silent boot-hang cliff; see
@@ -1768,6 +1768,8 @@ assembler: $(BUILD)/assembler.bin
 
 assembler-prod: $(BUILD)/assembler-prod.bin
 
+assembler-demo: $(BUILD)/assembler-demo.bin
+
 assembler-enc-tests: $(BUILD)/assembler-enc-tests.bin
 
 # Test-variant build also exports the symbol table for the off-axis
@@ -1788,6 +1790,17 @@ $(BUILD)/assembler-prod.bin: src/assembler.asm $(asm_deps/src/assembler.asm)
 	@mkdir -p $(BUILD)
 	pyz80 --obj=$(BUILD)/assembler-prod.bin src/assembler.asm
 	@./tools/check-code-budget.sh $(BUILD)/assembler-prod.bin prod
+
+# Demo variant (DEMO_ASM): the prod assembler built for a `call`-in /
+# `ret`-out demo driver (i365).  It saves the caller's SP at start:,
+# restores it and RETs at the clean exit (instead of prod's di/halt), and
+# HSAVEs the assembled image under the self-describing name "RELEASEIMG"
+# instead of "OUT".  Everything else — the full boot init, payload loads,
+# two-pass assemble, and HSAVE geometry — is identical to prod.
+$(BUILD)/assembler-demo.bin: src/assembler.asm $(asm_deps/src/assembler.asm)
+	@mkdir -p $(BUILD)
+	pyz80 -D DEMO_ASM=1 --obj=$(BUILD)/assembler-demo.bin src/assembler.asm
+	@./tools/check-code-budget.sh $(BUILD)/assembler-demo.bin demo
 
 # Encode self-test variant (i234).  Imports enc_fix_payload.sym for
 # ENC_FIX_PAYLOAD_LEN (the LDIR size in run_encode_inst_self_tests) the
@@ -2059,7 +2072,7 @@ disk-record: assembler test-mem-offaxis cluster-offaxis paged-call-payload sysre
 # need an external zx0 compressor on PATH / a corpus sweep, and their
 # consuming tests fail with an instructive message when absent.
 .PHONY: harness-artifacts
-harness-artifacts: assembler assembler-prod assembler-enc-tests enctab cluster-offaxis test-mem-offaxis enc-fix-payload overlay-suite paged-call-payload sysreg-data disasm-payload disasm-test-payload zx0-payload zx0-test-payload zx0-compress-payload sam-aarch64
+harness-artifacts: assembler assembler-prod assembler-demo assembler-enc-tests enctab cluster-offaxis test-mem-offaxis enc-fix-payload overlay-suite paged-call-payload sysreg-data disasm-payload disasm-test-payload zx0-payload zx0-test-payload zx0-compress-payload sam-aarch64
 
 harness-sweep: harness-artifacts
 	cd tools/z80-test-harness-go && go test -count=1 ./...

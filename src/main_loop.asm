@@ -1876,7 +1876,13 @@ name_IN:        defb    19                  ; type 19 = code
                 defm    "    "
 
 name_OUT:       defb    19
+                if defined(DEMO_ASM)
+; Demo variant saves under a self-describing name (10 chars, space-padded to
+; the SAM catalogue width) that won't collide with the render's RELEASESRC.
+                defm    "RELEASEIMG"
+                else
                 defm    "OUT       "
+                endif
                 defm    "    "
 
 
