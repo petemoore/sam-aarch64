@@ -27,6 +27,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"os"
+	"path/filepath"
 	"testing"
 
 	z80h "github.com/petemoore/sam-aarch64/tools/netboot-oracle/z80"
@@ -291,6 +292,46 @@ func TestChainPagedPrepWiring(t *testing.T) {
 	prepSyms := pagedPrepSyms(t, prepPagedImageMap)
 	for _, in := range prepChainFixtures {
 		t.Run(in.name, func(t *testing.T) {
+			checkPrepChainFixture(t, in, driverBin, parserImage, prepImage, enctabData, sysregData, prepSyms)
+		})
+	}
+}
+
+// prepChainCorpusSlices are preprocessor-bearing spectrum4 slices kept as real
+// fixture files under tests/ (so they double as human-readable examples rather
+// than inline test strings). Each is read from disk and gated exactly like the
+// inline prepChainFixtures: expanded text byte-equal to host -E, then the
+// text→.tbn byte-equal to host CompactTBNBytes through the full paged chain.
+var prepChainCorpusSlices = []struct {
+	name string
+	file string
+}{
+	// The smallest real macro consumer (spec §7): the _str macro plus
+	// adrp/add/:lo12: relocations, excerpted self-contained from spectrum4's
+	// print_w0 test.
+	{name: "test_print_w0", file: "../../../tests/test_print_w0.s"},
+}
+
+// TestChainPagedPrepCorpusSlices extends the b4b end-to-end gate to real
+// spectrum4-slice fixture files on disk (i31b-b4c, spec §7). These fit the
+// current oracle-fixture buffers; the buffer right-sizing for the full corpus /
+// large real includes is i373 (gated on q83).
+func TestChainPagedPrepCorpusSlices(t *testing.T) {
+	driverBin, parserImage, prepImage, enctabData, sysregData := loadPrepChainInputs(t)
+	prepSyms := pagedPrepSyms(t, prepPagedImageMap)
+	for _, sl := range prepChainCorpusSlices {
+		sl := sl
+		t.Run(sl.name, func(t *testing.T) {
+			src, err := os.ReadFile(sl.file)
+			if err != nil {
+				t.Fatalf("read fixture %s: %v", sl.file, err)
+			}
+			in := prepChainFixture{
+				name:  sl.name,
+				src:   string(src),
+				path:  filepath.Base(sl.file),
+				files: incFiles{},
+			}
 			checkPrepChainFixture(t, in, driverBin, parserImage, prepImage, enctabData, sysregData, prepSyms)
 		})
 	}
