@@ -1,5 +1,5 @@
 // asmprep_test.go — host-verification of src/asmprep.asm (i31b: the on-SAM
-// assembler-source preprocessor; Bricks 1 + 2a).
+// assembler-source preprocessor; Bricks 1 + 2a + 2b + 3a).
 //
 // Drives prep_run under the flat-memory koron-go/z80 harness and byte-compares
 // its expanded output against the Go authority, frontend.Preprocess
@@ -11,17 +11,19 @@
 // conditional-assembly core (leading `# <line> "<file>"` directive, `.set`
 // capture + pass-through, `.if`/`.else`/`.endif` nesting). TestAsmprepBrick2aDefine
 // + TestAsmprepBrick2aStorage exercise macro DEFINITION (.macro/.endm parse +
-// collect + store) — a definition is consumed (emits nothing), so the byte-
-// compare still holds, and the stored records are validated via exposed symbols.
-// Macro invocation/expansion is Brick 2b; .include is Brick 3; so the fixtures
-// here contain no macro-invocation or .include, keeping prep_run byte-identical
-// to frontend.Preprocess on this input domain.
+// collect + store). TestAsmprepBrick2bInvoke + TestAsmprepBrick2bRandom exercise
+// macro INVOCATION (arg-split, \param substitution, recursion, reentrant
+// re-preprocessing). TestAsmprepBrick3aInclude exercises .include via the
+// memory-backed reader vector (relative / search-path / missing / skipped-in-
+// false-if / nested / cross-file .set / same-file macro), with the resolved-path
+// `# line` directives byte-compared against a chdir'd frontend.Preprocess.
 package z80_test
 
 import (
 	"bytes"
 	"math/rand"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -543,6 +545,282 @@ func TestAsmprepBrick2bRandom(t *testing.T) {
 		}
 		if !bytes.Equal(got, want) {
 			t.Fatalf("case %d mismatch:\nsrc=%q\n got=%q\nwant=%q", i, src, got, want)
+		}
+	}
+}
+
+// --- Brick 3a: .include via the memory-backed reader vector -----------------
+
+// incFiles maps a resolved (relative) include path to its content. The Z80 side
+// registers these in PREP_FILES; the Go side writes them into a chdir'd temp dir
+// so frontend.Preprocess resolves the SAME relative paths — making the `# line`
+// directives (which name the resolved path) byte-comparable.
+type incFiles map[string]string
+
+// prepZ80Inc runs prep_run with the memory-backed include provider populated
+// from files + incdirs.
+func prepZ80Inc(t *testing.T, mac *z80h.Machine, src []byte, path string, files incFiles, incdirs []string) (out []byte, errFlag bool) {
+	t.Helper()
+	mac.Write(mustSym(t, mac, "PREP_SRC"), src)
+	mac.Write(mustSym(t, mac, "PREP_PATH"), append([]byte(path), 0))
+
+	var ft []byte
+	n := 0
+	for name, content := range files {
+		if len(name) > 255 {
+			t.Fatalf("include name too long: %q", name)
+		}
+		ft = append(ft, byte(len(name)))
+		ft = append(ft, name...)
+		ft = append(ft, byte(len(content)&0xff), byte(len(content)>>8))
+		ft = append(ft, content...)
+		n++
+	}
+	// Guard the flat-harness layout: PREP_FILES is the last buffer, so its
+	// table must not run past 0xFFFF (a file's content span is SRC_PTR..+len,
+	// which must not wrap — the bug the include fuzz caught).
+	filesSym := mustSym(t, mac, "PREP_FILES")
+	if int(filesSym)+len(ft) > 0x10000 {
+		t.Fatalf("PREP_FILES table (%d bytes at 0x%04x) overflows 64K — shrink asmprep buffers", len(ft), filesSym)
+	}
+	mac.Write(filesSym, ft)
+	mac.Write(mustSym(t, mac, "PREP_NFILES"), []byte{byte(n)})
+
+	var it []byte
+	for _, d := range incdirs {
+		it = append(it, byte(len(d)))
+		it = append(it, d...)
+	}
+	mac.Write(mustSym(t, mac, "PREP_INCDIRS"), it)
+	mac.Write(mustSym(t, mac, "PREP_NINCDIRS"), []byte{byte(len(incdirs))})
+
+	res, err := mac.CallEntry("prep_run", z80h.Entry{BC: uint16(len(src))})
+	if err != nil {
+		t.Fatalf("prep_run: %v", err)
+	}
+	errFlag = mac.Read(mustSym(t, mac, "PREP_ERR"), 1)[0] != 0
+	if !errFlag {
+		out = mac.Read(mustSym(t, mac, "PREP_OUT"), int(res.BC))
+	}
+	return out, errFlag
+}
+
+// prepGoInc runs frontend.Preprocess with the same files materialised on disk in
+// a chdir'd temp dir, so its resolved paths match the Z80 memory provider's.
+func prepGoInc(t *testing.T, src []byte, path string, files incFiles, incdirs []string) ([]byte, error) {
+	t.Helper()
+	dir := t.TempDir()
+	t.Chdir(dir)
+	for name, content := range files {
+		if d := filepath.Dir(name); d != "." {
+			if err := os.MkdirAll(d, 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := os.WriteFile(name, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return frontend.Preprocess(src, path, frontend.PreprocessOptions{IncludeDirs: incdirs})
+}
+
+func TestAsmprepBrick3aInclude(t *testing.T) {
+	cases := []struct {
+		name    string
+		src     string
+		path    string
+		files   incFiles
+		incdirs []string
+	}{
+		{
+			name:  "relative",
+			src:   ".include \"inc.s\"\nafter\n",
+			path:  "main.s",
+			files: incFiles{"inc.s": "included_line\n"},
+		},
+		{
+			name:    "search-path",
+			src:     ".include \"helper.s\"\nafter\n",
+			path:    "main.s",
+			files:   incFiles{"libdir/helper.s": "from_helper\n"},
+			incdirs: []string{"libdir"},
+		},
+		{
+			// Not registered anywhere -> both sides report an error.
+			name:  "missing",
+			src:   ".include \"nope.s\"\n",
+			path:  "main.s",
+			files: incFiles{},
+		},
+		{
+			// An .include inside a false .if must not be opened (no file needed).
+			name:  "skipped-in-false-if",
+			src:   ".set GUARD, 0\n.if GUARD\n.include \"nope.s\"\n.endif\ntrailing\n",
+			path:  "main.s",
+			files: incFiles{},
+		},
+		{
+			name:  "nested",
+			src:   "before\n.include \"a.s\"\nafter\n",
+			path:  "main.s",
+			files: incFiles{"a.s": ".include \"b.s\"\nmid\n", "b.s": "deep\n"},
+		},
+		{
+			// .set inside an included file feeds a later .if in the includer
+			// (the setvars table is shared across files).
+			name:  "include-then-if",
+			src:   ".include \"cfg.s\"\n.if FLAG\nyes\n.else\nno\n.endif\n",
+			path:  "main.s",
+			files: incFiles{"cfg.s": ".set FLAG, 1\n"},
+		},
+		{
+			// A macro defined AND invoked inside the same included file (the
+			// expansion directive names that file). Cross-file macro provenance
+			// is deferred to b4.
+			name:  "macro-in-include",
+			src:   ".include \"m.s\"\nafter\n",
+			path:  "main.s",
+			files: incFiles{"m.s": ".macro g x\n  use \\x\n.endm\ng 7\n"},
+		},
+		{
+			// Passthrough + comment directive inside an included file.
+			name:  "passthrough-in-include",
+			src:   "top\n.include \"p.s\"\nbottom\n",
+			path:  "main.s",
+			files: incFiles{"p.s": "line1\n  mov x0, #1\nline3\n"},
+		},
+		{
+			// A trailing comment on the .include line is stripped before parse.
+			name:  "include-trailing-comment",
+			src:   ".include \"inc.s\" // load it\nafter\n",
+			path:  "main.s",
+			files: incFiles{"inc.s": "included\n"},
+		},
+		{
+			name:  "include-tab-separated",
+			src:   ".include\t\"inc.s\"\nafter\n",
+			path:  "main.s",
+			files: incFiles{"inc.s": "included\n"},
+		},
+		{
+			name:  "empty-include",
+			src:   "a\n.include \"empty.s\"\nb\n",
+			path:  "main.s",
+			files: incFiles{"empty.s": ""},
+		},
+		{
+			name:  "multi-include",
+			src:   ".include \"a.s\"\n.include \"b.s\"\nend\n",
+			path:  "main.s",
+			files: incFiles{"a.s": "aaa\n", "b.s": "bbb\n"},
+		},
+		{
+			name:  "include-in-active-if",
+			src:   ".set ON, 1\n.if ON\n.include \"inc.s\"\n.endif\nafter\n",
+			path:  "main.s",
+			files: incFiles{"inc.s": "guarded\n"},
+		},
+		{
+			// .if inside an included file (reentrant frame stack, IF_BASE != 0).
+			name:  "if-in-include-true",
+			src:   ".set ON, 1\n.include \"f.s\"\nafter\n",
+			path:  "main.s",
+			files: incFiles{"f.s": ".if ON\nyes\n.endif\n"},
+		},
+		{
+			// .else inside an included file (the case b2b never exercised).
+			name:  "else-in-include",
+			src:   ".include \"f.s\"\nafter\n",
+			path:  "main.s",
+			files: incFiles{"f.s": ".if BAR\nT\n.else\nF\n.endif\n"},
+		},
+		{
+			// The same file included twice — once at top level, once nested
+			// inside a later include (main->a, then main->c->a).
+			name:  "reinclude-nested",
+			src:   ".include \"a.s\"\n.include \"c.s\"\nend\n",
+			path:  "main.s",
+			files: incFiles{"a.s": "aaa\n", "c.s": ".include \"a.s\"\nccc\n"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Load the machine before prepGoInc's t.Chdir (loadAsmprep resolves
+			// the binary by a path relative to the test's working directory).
+			m := loadAsmprep(t)
+			want, wantErr := prepGoInc(t, []byte(tc.src), tc.path, tc.files, tc.incdirs)
+			got, gotErr := prepZ80Inc(t, m, []byte(tc.src), tc.path, tc.files, tc.incdirs)
+
+			if wantErr != nil {
+				if !gotErr {
+					t.Fatalf("expected error (Go: %v), prep_run succeeded; got=%q", wantErr, got)
+				}
+				return
+			}
+			if gotErr {
+				t.Fatalf("prep_run reported error, Go succeeded; want=%q", want)
+			}
+			if !bytes.Equal(got, want) {
+				t.Fatalf("output mismatch:\n got=%q\nwant=%q", got, want)
+			}
+		})
+	}
+}
+
+// genIncludeProg builds a random acyclic file set: files f0..f{k-1} (fN may
+// .include only lower-indexed files, so no cycles) plus a main that includes
+// some of them. Each file body is a balanced .set/.if program (genProg), so the
+// only cross-file interaction is the shared .set table — which both prep_run and
+// frontend.Preprocess resolve identically. Returns (mainSrc, files).
+func genIncludeProg(r *rand.Rand) (string, incFiles) {
+	files := incFiles{}
+	k := 1 + r.Intn(3) // f0..f{k-1}
+	for i := 0; i < k; i++ {
+		var b strings.Builder
+		for j := 0; j < i; j++ {
+			if r.Intn(2) == 0 {
+				b.WriteString(".include \"f")
+				b.WriteByte(byte('0' + j))
+				b.WriteString(".s\"\n")
+			}
+		}
+		genProg(r, &b, 0)
+		files["f"+string(rune('0'+i))+".s"] = b.String()
+	}
+	var main strings.Builder
+	for i := 0; i < k; i++ {
+		if r.Intn(2) == 0 {
+			main.WriteString(".include \"f")
+			main.WriteByte(byte('0' + i))
+			main.WriteString(".s\"\n")
+		}
+	}
+	genProg(r, &main, 0)
+	return main.String(), files
+}
+
+// TestAsmprepBrick3aIncludeRandom fuzzes nested .include (with cross-file .set
+// and .if) against the Go authority. The machine is loaded once, before any
+// prepGoInc t.Chdir, and reused (prep_run re-initialises all state per call).
+func TestAsmprepBrick3aIncludeRandom(t *testing.T) {
+	m := loadAsmprep(t)
+	r := rand.New(rand.NewSource(0x3a3a))
+	for i := 0; i < 200; i++ {
+		src, files := genIncludeProg(r)
+		want, wantErr := prepGoInc(t, []byte(src), "main.s", files, nil)
+		got, gotErr := prepZ80Inc(t, m, []byte(src), "main.s", files, nil)
+
+		if wantErr != nil {
+			if !gotErr {
+				t.Fatalf("case %d: expected error (Go: %v), prep_run succeeded\nsrc=%q\nfiles=%v", i, wantErr, src, files)
+			}
+			continue
+		}
+		if gotErr {
+			t.Fatalf("case %d: prep_run errored, Go succeeded\nsrc=%q\nfiles=%v", i, src, files)
+		}
+		if !bytes.Equal(got, want) {
+			t.Fatalf("case %d mismatch:\nsrc=%q\nfiles=%v\n got=%q\nwant=%q", i, src, files, got, want)
 		}
 	}
 }

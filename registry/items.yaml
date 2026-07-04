@@ -561,7 +561,7 @@
 - id: i31b-b4
   title: "Brick 4: prep_run wiring in front of b8d chain + corpus gate"
   description: |
-    Wire prep_run in front of b8d_chain_paged (own paged image, b8d two-image pattern; PP_PREP buffer tag in the i2 pool). New preprocessor-bearing corpus fixtures incl. a spectrum4 slice (tests/test_print_w0.s), gated: expanded text byte-equal to host -E, then end-to-end text->.tbn byte-equal to host CompactTBNBytes. SimCoupe pre-merge gate incl. real-HLOAD include path. Depends on i31b-b3.
+    Wire prep_run in front of b8d_chain_paged (own paged image, b8d two-image pattern; PP_PREP buffer tag in the i2 pool). New preprocessor-bearing corpus fixtures incl. a spectrum4 slice (tests/test_print_w0.s), gated: expanded text byte-equal to host -E, then end-to-end text->.tbn byte-equal to host CompactTBNBytes. SimCoupe pre-merge gate incl. real-HLOAD include path. PREREQUISITE from b3a scoping (i344-encoded): cross-file macro def-FILE provenance — a macroDef's expansion directive uses defPos.FILE, which b3a stores as the invocation-site CURRENT_FILE (correct only when a macro is defined and invoked in the SAME file). The corpus defines macros in shared includes and invokes them elsewhere, so b4 must add a def-file field to the MACRO_TAB record (interned in PATH_ARENA at define time) and emit it in tryExpandMacroInvocation's pre-directive. Also right-size the flat-harness pools (shrunk in b3a to fit the 32 KB org-&8000 window) appropriately for the paged image. Depends on i31b-b3.
   status: OPEN
   depends_on: [i31b-b3]
   kind: leaf
