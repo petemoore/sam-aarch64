@@ -344,6 +344,15 @@ start:
                 in      a, (250)
                 ld      (LMPR_DEFAULT_RUNTIME), a
 
+; i365d-b2c assemble-first chain: capture the pristine boot HMPR (the &8000
+; exec window ALHK set) now, before any HMPR-changing call, so the DEMO_CHAIN
+; tail can restore it for the render overlay's HLOAD.  DEMO_CHAIN-gated, so
+; prod/b2b builds are byte-identical.
+                if defined(DEMO_CHAIN)
+                in      a, (251)
+                ld      (demo_chain_boot_hmpr), a
+                endif
+
 ; Capture the boot HMPR value too, so the trampoline self-test can
 ; verify that load_enctab's trampoline call restored it correctly.
 ; Only used by the BUILD_TESTS path; production builds zero this
@@ -693,6 +702,13 @@ endif
 
 ; -- Clean exit ---------------------------------------------------------
                 if defined(DEMO_ASM)
+    if defined(DEMO_CHAIN)
+; i365d-b2c assemble-first chain: RELEASEIMG is HSAVE'd on the boot record.
+; Instead of returning to a demo driver, hand the machine to the render overlay
+; (it renders RELEASESRC to the record from the still-intact IN, then DI;HALTs).
+; See demo_chain_to_render below.
+                jp      demo_chain_to_render
+    endif
 ; Demo callable-exit variant: restore the caller's SP (saved at start:) and
 ; RET to the i365 demo driver.  "OK" is already printed above, so the driver
 ; sees a clean return as success — the prod di/halt would instead trap the
@@ -708,6 +724,102 @@ saved_caller_sp:        defw    0
                 di
                 halt
                 endif
+
+    if defined(DEMO_CHAIN)
+; ===========================================================================
+; i365d-b2c assemble-first chain tail (DEMO_CHAIN-gated → prod/b2b builds are
+; byte-identical).  RELEASEIMG is HSAVE'd on the boot record; hand the machine
+; to the render overlay so ONE boot produces BOTH files.  Structural mirror of
+; the render vessel's rdb_chain_next (src/netboot/render_disk_boot.asm), reusing
+; the assembler's own B-DOS idiom (fill_uifa + RST 8/HGTHD, DIFA at &4B50 —
+; see load_enctab):
+;   * restore the pristine boot LMPR (ROM0 in A + B-DOS sysvar page in B) and
+;     the boot HMPR (the &8000 exec window), + DI/IM 1 → a clean B-DOS runtime;
+;   * HGTHD the 'render' CODE file, arming (svde) + depositing the DIFA;
+;   * LDIR a straight-line loader stub to section B (&7C00, clear of the
+;     assembler's &7E00+ trampoline/paged_call slots and above the B-DOS
+;     sysvars ≤&5FFF), and JP it.  The stub HLOADs render (2 pages, 20 KB) to
+;     &8000 — the data lands correctly across sections C+D (no wrap into ROM),
+;     but the >16 KB HLOAD ADVANCES HMPR per 16 KB, so the stub SAVES the boot
+;     HMPR first and RESTORES it after (else render enters at page 2 = its own
+;     2nd half → garbage), then DI;JP &8000.  render is TERMINAL (DI;HALTs at
+;     rdb_done), so no return frame is needed.  render reads the STILL-INTACT IN (the
+;     assembler only HSAVEd RELEASEIMG into free space, never touched IN) and
+;     writes RELEASESRC to base linearSec 40, reusing IN's now-spent sectors —
+;     the capacity+ordering fix (docs/plans/i365d-b2c-orchestrator.md §FIX 4).
+; ===========================================================================
+DEMO_CHAIN_STUB_DST:    equ     &7C00   ; the straight-line loader stub body (section B)
+DEMO_CHAIN_STUB_SP:     equ     &7DF0   ; the stub's section-B HLOAD scratch stack, also
+                                        ; render's come-up SP (section B, above the B-DOS
+                                        ; sysvars ≤&5FFF; render_run/rdb_load_tbn relocate
+                                        ; to &FFFE, so a low caller frame is safe)
+DEMO_CHAIN_STUB_HMPR:   equ     &7DFC   ; 1-byte slot: the boot HMPR (exec window), saved
+                                        ; across the HLOAD (section B, above the stub SP)
+
+demo_chain_to_render:
+                di
+                im      1
+                ld      a, (LMPR_DEFAULT_RUNTIME)   ; ROM0 in A + B-DOS sysvar page in B
+                out     (250), a
+                ld      a, (demo_chain_boot_hmpr)   ; the pristine &8000 exec window
+                out     (251), a
+
+                ; --- arm HGTHD for 'render' -> DIFA (pages, length) at &4B50 ---
+                ld      hl, name_render
+                call    fill_uifa                   ; UIFA + IX = &4B00
+                rst     8
+                defb    HOOK_HGTHD                  ; longjmps (-> DOSER fail) on "not found"
+
+                ; --- copy the loader stub to section B and enter it ---------
+                ld      hl, demo_chain_stub_src
+                ld      de, DEMO_CHAIN_STUB_DST
+                ld      bc, demo_chain_stub_end - demo_chain_stub_src
+                ldir
+                jp      DEMO_CHAIN_STUB_DST
+
+; demo_chain_stub_src — the straight-line overlay loader, copied to
+; DEMO_CHAIN_STUB_DST and run from section B (LMPR-stable, OUTSIDE the &8000
+; window it overwrites).  Absolute addresses only (no self-relative control
+; flow) so it runs correctly wherever it is assembled.  Reads the HGTHD-
+; deposited DIFA (&4B50+34 pages / +35 length, section B — LMPR-stable) for the
+; load geometry, HLOADs render to &8000, relocates SP above the loaded image,
+; then enters render.  SP is first parked in section B so the RST 8 push is safe
+; from HLOAD's section-D auto-page spill (the 16 KB-limit rule, trampoline.asm).
+demo_chain_stub_src:
+                ld      sp, DEMO_CHAIN_STUB_SP      ; section B: RST 8 push clear of the HLOAD spill
+                in      a, (251)                    ; save the boot exec window (section C = page 1);
+                ld      (DEMO_CHAIN_STUB_HMPR), a   ; a 2-page HLOAD ADVANCES HMPR per 16K, so it
+                                                    ; would leave HMPR at page 2 and enter render in
+                                                    ; the wrong window (section C = render's 2nd half)
+                ld      hl, (&4B50 + 35)
+                ld      a, h
+                and     &7F                         ; clear the HGTHD +36 bit-7 marker
+                ld      h, a
+                ld      e, l
+                ld      d, h                         ; DE = length-mod-16K
+                ld      a, (&4B50 + 34)
+                ld      c, a                         ; C = whole-file page count
+                ld      hl, &8000                    ; HLOAD dest = the boot exec window (section C)
+                rst     8
+                defb    HOOK_HLOAD                   ; load render to &8000 (longjmps on read error)
+                di                                   ; PTDOS EIs inside RST 8
+                ld      a, (DEMO_CHAIN_STUB_HMPR)    ; restore the boot exec window so render enters
+                out     (251), a                    ; at section C = page 1 (its jp rdb_main entry)
+                ; Enter render on the section-B stub stack (DEMO_CHAIN_STUB_SP): render's
+                ; come-up runs on it; rdb_load_tbn / render_run relocate SP to &FFFE and
+                ; grow DOWN, so this low caller frame stays clear of that stack (a high SP
+                ; here would be clobbered by rdb_load_tbn's own &FFFE stack -> a wild jump).
+                jp      &8000
+demo_chain_stub_end:
+
+; UIFA name block for the render overlay CODE file "render".
+name_render:    defb    19
+                defm    "render    "                ; 10 chars (6 + 4 trailing spaces)
+                defm    "    "                       ; 4-char ext (unused)
+
+; Boot HMPR (the &8000 exec window ALHK set), captured at start: for the chain.
+demo_chain_boot_hmpr:   defb    0
+    endif
 
 if defined(BUILD_TESTS)
 ; check_paged_test_result — shared tail for the paged self-tests (disasm

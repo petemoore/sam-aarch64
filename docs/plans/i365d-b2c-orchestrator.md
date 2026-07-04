@@ -10,6 +10,50 @@ when the faithful **end-to-end** gate is green (CLAUDE.md rule 5). Internally
 phased; the branch may span sessions. `i365d-b2c` cannot be `split` (id-grammar
 nesting limit), so it stays one item / one completing PR.
 
+## PHASE A — DONE (2026-07-05, assemble-first). Phase B (serve) next.
+
+The assemble-first restructure (§FIX 4) is implemented and **the faithful Phase-A
+gate is GREEN**: `TestAssembleFirstDemoFaithful`
+(`tools/netboot-oracle/z80/assemble_first_demo_faithful_test.go`) boots the
+assemble-first record on the faithful rig → the assembler assembles + HSAVEs
+`RELEASEIMG` (21752 B, at linearSec 913, above RELEASESRC's band → no collision) →
+chains to the render overlay → render reads the still-intact `IN` and writes
+`RELEASESRC` (417374 B, base 40) → DI;HALT (rdb_phase='5' verdict='P', ~67.3M
+steps). BOTH reconstruct by name and byte-match (RELEASESRC==`render.Emit`,
+RELEASEIMG==GNU `release-unstripped.img`); no writes escape the record band.
+
+What landed:
+- `src/assembler.asm` — a `DEMO_CHAIN`-gated chain tail at the DEMO_ASM clean exit
+  (`demo_chain_to_render` + `demo_chain_stub_src`): restores boot LMPR/HMPR, HGTHDs
+  the `render` overlay (assembler's own `fill_uifa`+HGTHD idiom, DIFA at &4B50),
+  LDIRs a straight-line loader stub to section B (&7C00), and JPs it. The stub
+  HLOADs render to &8000 and enters it. Everything gated under `DEMO_CHAIN`, so
+  `assembler-prod.bin`/`assembler-demo.bin` (b2b) are **byte-identical** to before.
+- `Makefile` — `assembler-demo-chain.bin` (`-D DEMO_ASM -D DEMO_CHAIN`) +
+  `netboot-assemble-first-demo-record` (AUTO=assembler-demo-chain, `render`
+  overlay = the b2a `render_disk_boot.bin` **NO DEMO_CHAIN**, + IN/disasm/d15/
+  enctab.enc/sd13/zx013 by name). Added to `.PHONY` + `netboot-z80-artifacts`.
+- Deleted the superseded **render-first** artifacts (`netboot-render-chain` +
+  `netboot-demo-orchestrator-record` Makefile targets, `demo_orchestrator_faithful_test.go`).
+  `render_disk_boot.asm`'s `DEMO_CHAIN` block (FIX 1-3, render-first) is now dead
+  source — left in place (that file is the b2a bootable, kept as-is); its build
+  path is gone, so it never compiles. A follow-up may excise it.
+
+**The real root cause of the come-up crash (supersedes the SD/tNow guesses below):
+the render overlay is 2 pages (20489 B), and a >16 KB HLOAD to &8000 ADVANCES HMPR
+per 16 KB (the ctas per-16K advance IS engaged here) — so the stub left HMPR at
+page 2 and render entered with section C = its own 2nd half → ran garbage.** The
+fix is one line: the stub saves the boot HMPR before the HLOAD and restores it after
+(`demo_chain_stub_src`). The earlier `SP=&FFFE` collision with `rdb_load_tbn`'s own
+&FFFE stack was a *separate* real bug (also fixed — the stub leaves SP in section B).
+The whole "SD-coexistence / high-tNow" trail was a **red herring**: it only *looked*
+tNow-dependent because the debug multi-`ContinueFrom` probe force-set `HMPR=1`
+between stages (and `ContinueFrom` resets the harness tstate cursor), masking the
+HMPR-advance bug.
+
+Phase B (serve leg + NBMANIFEST long names + on-screen RST&10 messages + e2e
+TFTP-fetch gate) is the remaining work under i365d-b2c.
+
 ## Architecture — CHAIN of overlays (not a resident orchestrator)
 
 The three phases are each an `org &8000`, >free-RAM vessel (render ~25 KB C+D,
