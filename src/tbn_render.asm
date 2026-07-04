@@ -899,8 +899,10 @@ render_copy_cstr:
 ; Clobbers: HL, F.  Preserves A, BC, DE.
 ; -----------------------------------------------------------------------
 render_out_append:
-                out     (RENDER_SINK_PORT), a   ; stream the byte (A preserved)
-                push    af
+                push    bc
+                push    de
+                push    af                      ; save the byte (restored at exit: A preserved)
+                call    render_sink_dispatch    ; emit A via the current sink; it RETs here
                 ld      hl, (render_out_len)
                 inc     hl
                 ld      (render_out_len), hl
@@ -912,7 +914,23 @@ render_out_append:
                 ld      (render_out_len + 2), hl
 render_oa_done:
                 pop     af
+                pop     de
+                pop     bc
                 ret
+
+; RENDER_SINK_VEC — the byte sink render_out_append dispatches to. Default =
+; render_sink_port (the &E8 harness capture, the i365a byte-exact gate). A disk
+; build (i365d) points it at render_disk_sink_byte to stream the render straight
+; to an SD record; an OUT touches no memory and no LMPR/HMPR window, and the disk
+; sink saves what it needs, so either sink is valid in any paging state the render
+; passes through.
+render_sink_dispatch:
+                ld      hl, (RENDER_SINK_VEC)
+                jp      (hl)                    ; tail-call the sink; it returns to render_out_append
+render_sink_default:
+                out     (RENDER_SINK_PORT), a   ; the default sink: stream to the capture port
+                ret
+RENDER_SINK_VEC:        defw render_sink_default
 
 ; RENDER_SINK_PORT — the port the streamed source text is written to.  Mirrors
 ; the printer data port (print.asm) so the same "emit a byte" shape drives a
