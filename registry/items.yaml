@@ -5668,7 +5668,7 @@
   title: Reassemble B-DOS 1.5a source under pyz80 to byte-match bdos15a.bin
   description: |
     Foundation brick for i304. Turn the vendored reference/bdos/bdos15a.src.txt (a lossy COMET editor-buffer dump: wrapped order, ORG $+16384, 141-byte gap losing wr.buff/rd.buff/ve.buff/drive.port/seek.track defs, ~19 wrong length bytes, 332 one-arg ALU ops) into a pyz80-assemblable source that assembles EXACTLY to the 10191-byte bdos15a.bin. Method: Edwin's source is the label/comment authority; extracted/bdos15a.bin + bdos15a.dis (objdump) is the byte oracle; iterate assemble->diff until byte-identical. Deliverable: a committed pyz80 source + a make target (bdos15a-bytematch) asserting byte-identity against the public freeware bdos15a.bin (redistributable, already vendored). De-risks the whole toolchain before splicing 1.5t.
-  status: OPEN
+  status: IN_PROGRESS
   kind: leaf
   owner: agent
   parent: i304
