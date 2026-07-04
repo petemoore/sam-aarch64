@@ -6434,9 +6434,37 @@
     Wall/driver (docs/specs/i365-demo-architecture.md, slice i365d-b2). A Z80 CODE-auto driver (org &8000, ALHK-exec'd; a record boot REQUIRES CODE-auto -- i332) that: prints 'Generating source...' (RST &10, pattern src/netboot/mgt_screen_demo_standalone.asm), renders release.tbn->release.src via the b1 sink; prints 'Generating image...', CALLs the DEMO_ASM assembler (build/assembler-demo.bin: start: saves caller SP, HSAVEs RELEASEIMG, ret -- keep the caller stack + return frame OUTSIDE the assembler's &C100-down boot stack AND its &8000 image, #859 review); serves both via the i365c large-file server. ONE release-unstripped.tbn (DOS 'IN') feeds render (whole) + assembler (prefix only, main_loop.asm:1560). Compose via build-disk -code-auto/-netboot-code-auto (netboot-server-record is the template) + NBMANIFEST (RELEASESRC->release.src, RELEASEIMG->release.img). Hardware-confirm a record boot leaves its record selected for HSAVE; else add a one-time driver HRECORD. Gate via assembler_record_vessel_test.go pattern.
   status: OPEN
   depends_on: [i365d-b1, i365c-b1, i365c-b2, i365c-b3]
-  kind: leaf
+  kind: umbrella
   owner: agent
   parent: i365d
+
+- id: i365d-b2a
+  title: "i365d demo: render→disk bootable — load release.tbn from the record + render → release.src (real driver + i365d-b1 sink)"
+  description: |
+    The render half as a standalone CODE-auto record vessel; the direct continuation of i365d-b1. A bootable (org &8000, composed via build-disk -netboot-code-auto AUTO*) that: HLOADs release-unstripped.tbn (DOS file IN) from the boot record into the render IN pages 8..30 (release.tbn spans 23 pages -- the standalone tbn_render_driver assumes the harness PRE-STAGES these, so the NEW piece is loading the 371KB file from disk across the pages), points RENDER_SINK_VEC at render_disk_sink_byte (i365d-b1), runs render_run to stream release.src to the boot record via the raw-CMD24 sink + MGT dir-entry writer, then idles/serves. Composes tbn_render+reader+disasm/paged_call + render_disk_sink + bdos_seam + sd_csd + the come-up (EEPROM/ENC/CSD; render_disk_probe.asm precedent). Record stays HRECORD-selected through ALHK exec (netboot_server_faithful_test.go:19). Gate (assembler_record_vessel_test.go pattern, FAITHFUL rig): boot -> render -> HGTHD('RELEASESRC')/HLOAD read back == render.Emit(release-unstripped.tbn). Architecture: sequential-overlay, render uses pages 7-31 so cannot co-reside with the assembler/server (docs/specs/i365-demo-architecture.md).
+  status: OPEN
+  kind: leaf
+  owner: agent
+  parent: i365d-b2
+
+- id: i365d-b2b
+  title: "i365d demo: assemble→disk bootable — DEMO_ASM vessel reads IN, HSAVEs RELEASEIMG (byte-match GNU)"
+  description: |
+    The assemble half as a CODE-auto record vessel: compose build/assembler-demo.bin (DEMO_ASM; start: at &8000 -- saves caller SP, ld sp,&C100, main_assemble + save_out_file HSAVE 'RELEASEIMG', restores SP, ret; src/assembler.asm:299-702) as the AUTO* file (or CALLed by a thin driver keeping its stack/return-frame OUTSIDE the assembler's &8000 image + &C100 stack, #859), reading release-unstripped.tbn as DOS file IN (load_in_file loads only the prefix, main_loop.asm:1560), plus the assembler's HLOAD-by-name payloads (enctab.enc, sd13, zx013, d15, p14) on the same record (the existing assembler-vessel payload set, build-disk addAssemblerSlots). Gate (assembler_record_vessel_test.go pattern, FAITHFUL rig): boot -> DEMO_ASM -> HGTHD('RELEASEIMG')/HLOAD == build/release-unstripped.img (byte-matches GNU). Mostly composition of the existing DEMO_ASM binary + existing payloads.
+  status: OPEN
+  kind: leaf
+  owner: agent
+  parent: i365d-b2
+
+- id: i365d-b2c
+  title: "i365d demo: overlay orchestrator driver + compose demo .mgt (render→assemble→serve, RST &10 msgs, end-to-end gate)"
+  description: |
+    The fusion (Wall/driver). A CODE-auto orchestrator that keeps its own code+stack+return-frame in a page NO subsystem's exec window occupies (#859 generalized -- render/assembler/server each claim section C &8000 + section D; render off-axis 7-31 collides with assembler 4-15) and SEQUENCES the phases, each RELOADING from disk: print 'Generating source...' (RST &10, mgt_screen_demo_standalone idiom) -> render release.tbn->release.src (b2a mechanism); print 'Generating image...' -> DEMO_ASM &8000 -> RELEASEIMG (b2b); then enter the i365c large-file serve loop -> serve release.src + release.img under LONG TFTP names via NBMANIFEST (RELEASESRC->release.src, RELEASEIMG->release.img). Compose the demo record via build-disk -netboot-code-auto (netboot-server-record template) with release-unstripped.tbn as IN. Record stays HRECORD-selected through ALHK exec (netboot_server_faithful_test.go:19; else a one-time driver HRECORD). End-to-end gate (assembler_record_vessel_test.go + netboot_server_largefile_test.go patterns): boot -> render -> assemble -> serve -> TFTP-fetch both == expected. The i365c serve half is DONE.
+  status: OPEN
+  depends_on: [i365d-b2a, i365d-b2b]
+  kind: leaf
+  owner: agent
+  parent: i365d-b2
 
 - id: i365e
   title: Store demo .mgt on a Trinity record + boot on real SAM + fetch release.src/.img over TFTP (end-to-end hardware proof)

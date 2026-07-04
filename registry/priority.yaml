@@ -3,7 +3,9 @@
 # Re-rank with: registry prioritize --id iN --to-top
 #               registry move --id iN --before iM
 #               registry move --id iN --after iM
-- i365d-b2
+- i365d-b2a
+- i365d-b2b
+- i365d-b2c
 - i365e
 - i359b
 - i41e
