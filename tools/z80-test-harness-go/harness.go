@@ -911,7 +911,7 @@ func runOn(hw *Hardware, assemblerBin, enctabData, inData []byte, files []NamedF
 
 			// HSAVE: capture OUT bytes from the paged OUT buffer.
 			// The assembler has populated UIFA[31..36]:
-			//   UIFA[31]: start page (= 5)
+			//   UIFA[31]: start page (= OUT_RUN_BASE, the dynamic run base)
 			//   UIFA[32-33]: section-C source offset (&8000)
 			//   UIFA[34]: pages count (OUT_LEN >> 14)
 			//   UIFA[35-36]: remainder length (OUT_LEN & 0x3FFF)
