@@ -6194,7 +6194,7 @@
 - id: i361
   title: "Local incremental build: TestBootRecordAssemblerRecordVessel fails on stale build/ (enctab.enc vs vessel out of sync); CI-green"
   description: |
-    On the Pi host, TestBootRecordAssemblerRecordVessel (the i319b-b2 gate) fails locally: 'enctab.enc page 4 bytes differ ... got &40 want &45 — the boot's HLOAD from the record did not deliver it'. It FAILS on clean origin/main (proven by a stash test during i357) and is UNRELATED to any source change — a stale/inconsistent local build/ dir. CI is green (the netboot-oracle job clean-builds), so this is local-only, i352-class. Partial diagnosis (i357 session): make enctab regenerated build/enctab.enc (it was itself stale); make assembler said 'nothing to do'; make disk-record rebuilt build/test_record.mgt but the vessel STILL delivered the old enctab bytes — so the vessel's embedded enctab did not track a regenerated build/enctab.enc. Likely an incremental-build dependency gap: the assembler/vessel pipeline does not mark itself stale when enctab.enc changes. NEXT: confirm whether a clean rebuild clears it (=> pure cruft, document the clean-rebuild fix), or whether a Makefile prereq is genuinely missing (=> add the dep). Low priority; saves the next local session the re-diagnosis this cost.
+    On the Pi host, TestBootRecordAssemblerRecordVessel (the i319b-b2 gate) fails locally: 'enctab.enc page 4 bytes differ ... got &40 want &45 — the boot's HLOAD from the record did not deliver it' (the boot otherwise reaches main_assemble, finalPC=&9D21 reachedStop). FAILS on clean origin/main (proven by stash tests in the i357 AND i360 sessions), UNRELATED to any source change. CI is GREEN — netboot-z80 ran 2m26s->success on #851's run 28694694321 and #850's merge run — so this is LOCAL-ENVIRONMENT-ONLY, i352-class (but a different mechanism: i352 = SimCoupe emulator; this = the Go koron harness + the pyz80 disk-record build). UPDATE (i360 session, 2026-07-04): 'make -B disk-record' (a FORCED full rebuild of the entire vessel chain) STILL fails identically — so this is NOT the incremental-staleness / missing-Makefile-prereq hypothesis from the i357 partial diagnosis (a forced rebuild would clear that). A fresh local build genuinely produces a malformed vessel; a prior-session test_record.mgt (built when the env worked) passed. NEW PRIME SUSPECT: this host's pyz80 differs from CI's pinned pyz80 (CI: pip install git+github.com/simonowen/pyz80), so disk-record assembles a subtly-different/wrong vessel locally (pyz80_packaging asserts byte-identical output only for a matched version). NEXT: diff the locally-built build/test_record.mgt page-4 payload vs build/enctab.enc byte-by-byte to see WHAT is delivered (&40...); compare local pyz80 version/commit vs CI's; if they differ, pin the local pyz80 and re-test. Impairs local dev/verification of the disk-record/vessel path; not a CI gate. Low priority; saves the next local session the re-diagnosis.
   status: OPEN
   kind: leaf
   owner: agent
@@ -6218,3 +6218,11 @@
   owner: agent
   prs:
     - {num: 850, role: completing}
+
+- id: i364
+  title: "Local-only: TestBootRecordAssemblerRecordVessel fails on the Pi host (rebuilt disk-record vessel malformed; enctab HLOAD delivers &40 not &45)"
+  description: |
+    WONTFIX — DUPLICATE of i361 (same local-only TestBootRecordAssemblerRecordVessel failure). Created in error during the i360 session before spotting i361 already tracked it; the new finding (make -B disk-record still fails => not mere staleness; pyz80-version suspect) was folded into i361's description.
+  status: WONTFIX
+  kind: leaf
+  owner: agent
