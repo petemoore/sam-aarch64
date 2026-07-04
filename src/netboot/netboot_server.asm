@@ -811,7 +811,15 @@ ack_advance:
 
 ; send_next_data — read the next block from SRC_PTR+offset, build the DATA
 ; packet, wrap + transmit. Updates XFER_OFFSET and XFER_LAST_SHORT.
+;
+; XFER_DISK selects the path: 0 = the arena path below (SRC_PTR + offset, low-16
+; arithmetic — every arena file is <= NB_FILE_MAX), byte-for-byte unchanged;
+; 1 = send_next_data_disk (the i365c large-file path — 32-bit remaining, the
+; DATA payload re-blocked from the record's MGT sector chain).
 send_next_data:
+                ld      a, (XFER_DISK)
+                or      a
+                jp      nz, send_next_data_disk
                 ; chunk = min(blksize, remaining); remaining = size - offset (low 16).
                 ld      hl, (XFER_SIZE)
                 ld      de, (XFER_OFFSET)
@@ -854,6 +862,255 @@ snd_have_chunk:
                 ld      (XFER_OFFSET), hl
 
                 jp      srv_send_tbuf
+
+; ===========================================================================
+; send_next_data_disk (i365c) — the large-file serve path. The file is NOT in
+; the RAM arena; its payload is streamed from the booted record's MGT sector
+; chain (bd_record_read_hw, absolute LBA) on demand, re-blocked into
+; DISK_BLK_BUF to whatever blksize the client negotiated.
+;
+; The served bytes must equal what HLOAD returns (the PAYLOAD): on disk every
+; file body is [9-byte body header][payload], so payload byte O lives at body
+; offset O+9. The incremental cursor (XFER_CHAIN_TS / XFER_CHAIN_BODYBASE)
+; advances once through the chain across sequential blocks — O(n), not O(n^2).
+; A read failure (CY from bd_record_read_hw) aborts the transfer cleanly (no
+; garbage served): clear XFER_ACTIVE and send nothing (the client retries).
+; ===========================================================================
+send_next_data_disk:
+                ; --- chunk = min(blksize, remaining), remaining = XFER_SIZE -
+                ; XFER_OFFSET (32-bit; blksize <= 1468 < 65536). ---
+                ld      hl, (XFER_SIZE)
+                ld      de, (XFER_OFFSET)
+                or      a
+                sbc     hl, de                 ; HL = remaining low16
+                ld      b, h
+                ld      c, l                   ; BC = remaining low16
+                ld      hl, (XFER_SIZE + 2)
+                ld      de, (XFER_OFFSET + 2)
+                sbc     hl, de                 ; HL = remaining high16
+                ld      a, h
+                or      l
+                jr      nz, sndd_full          ; remaining >= 65536 -> a full block
+                ; remaining high16 == 0: compare remaining low16 (BC) vs blksize
+                ld      hl, (XFER_BLKSIZE)
+                ld      a, c
+                sub     l
+                ld      a, b
+                sbc     a, h                   ; BC - blksize ; CY set if remaining < blksize
+                jr      c, sndd_short
+sndd_full:
+                ld      hl, (XFER_BLKSIZE)
+                ld      (DATA_LEN), hl
+                xor     a
+                ld      (XFER_LAST_SHORT), a
+                jr      sndd_fill
+sndd_short:
+                ld      (DATA_LEN), bc         ; chunk = remaining low16 (the short final block)
+                ld      a, 1
+                ld      (XFER_LAST_SHORT), a
+sndd_fill:
+                ; --- position the chain cursor at body offset XFER_OFFSET+9 --
+                ; body_start = XFER_OFFSET + 9  (32-bit)
+                ld      hl, (XFER_OFFSET)
+                ld      bc, 9
+                add     hl, bc
+                ld      (disk_body_start), hl
+                ld      hl, (XFER_OFFSET + 2)
+                ld      bc, 0
+                adc     hl, bc                 ; +carry from the low add (ld's above preserve flags)
+                ld      (disk_body_start + 2), hl
+
+                ; if body_start < XFER_CHAIN_BODYBASE -> rewind to the chain head.
+                ld      hl, (disk_body_start + 2)
+                ld      de, (XFER_CHAIN_BODYBASE + 2)
+                or      a
+                sbc     hl, de
+                jr      c, sndd_rewind
+                jr      nz, sndd_pos_loop
+                ld      hl, (disk_body_start)
+                ld      de, (XFER_CHAIN_BODYBASE)
+                or      a
+                sbc     hl, de
+                jr      nc, sndd_pos_loop      ; body_start >= bodybase: no rewind
+sndd_rewind:
+                ld      hl, (XFER_START_TS)
+                ld      (XFER_CHAIN_TS), hl
+                ld      hl, 0
+                ld      (XFER_CHAIN_BODYBASE), hl
+                ld      (XFER_CHAIN_BODYBASE + 2), hl
+sndd_pos_loop:
+                ; while body_start >= XFER_CHAIN_BODYBASE + 510: advance one sector.
+                ld      hl, (XFER_CHAIN_BODYBASE)
+                ld      bc, 510
+                add     hl, bc
+                ld      (disk_tmp), hl
+                ld      hl, (XFER_CHAIN_BODYBASE + 2)
+                ld      bc, 0
+                adc     hl, bc
+                ld      (disk_tmp + 2), hl
+                ; done if body_start < disk_tmp
+                ld      hl, (disk_body_start + 2)
+                ld      de, (disk_tmp + 2)
+                or      a
+                sbc     hl, de
+                jr      c, sndd_pos_done
+                jr      nz, sndd_advance
+                ld      hl, (disk_body_start)
+                ld      de, (disk_tmp)
+                or      a
+                sbc     hl, de
+                jr      c, sndd_pos_done
+sndd_advance:
+                call    disk_read_chain_sector ; read the current sector for its link
+                jp      c, sndd_read_fail
+                ld      a, (SECT_BUF + 510)
+                ld      (XFER_CHAIN_TS), a
+                ld      a, (SECT_BUF + 511)
+                ld      (XFER_CHAIN_TS + 1), a
+                call    disk_bodybase_add510
+                jr      sndd_pos_loop
+sndd_pos_done:
+                ; pos = body_start - XFER_CHAIN_BODYBASE (0..509, low 16 suffices)
+                ld      hl, (disk_body_start)
+                ld      de, (XFER_CHAIN_BODYBASE)
+                or      a
+                sbc     hl, de
+                ld      (disk_pos), hl
+
+                ; --- fill DISK_BLK_BUF with DATA_LEN bytes from the chain -----
+                ld      hl, (DATA_LEN)
+                ld      (disk_need), hl
+                ld      hl, DISK_BLK_BUF
+                ld      (disk_dest), hl
+sndd_copy_loop:
+                ld      hl, (disk_need)
+                ld      a, h
+                or      l
+                jr      z, sndd_copy_done
+                call    disk_read_chain_sector ; current chain sector -> SECT_BUF
+                jp      c, sndd_read_fail
+                ; avail = 510 - pos ; copy = min(need, avail)
+                ld      hl, 510
+                ld      de, (disk_pos)
+                or      a
+                sbc     hl, de                 ; HL = avail (1..510)
+                ld      de, (disk_need)
+                push    hl
+                or      a
+                sbc     hl, de                 ; avail - need ; CY set if avail < need
+                pop     hl                     ; HL = avail
+                jr      c, sndd_have_copy      ; avail < need -> copy = avail
+                ex      de, hl                 ; need <= avail -> copy = need
+sndd_have_copy:
+                ld      (disk_copy), hl        ; HL = copy count
+                ld      bc, (disk_copy)
+                ld      hl, SECT_BUF
+                ld      de, (disk_pos)
+                add     hl, de                 ; HL = SECT_BUF + pos (source)
+                ld      de, (disk_dest)
+                ldir                           ; copy count bytes; HL,DE advance, BC=0
+                ld      (disk_dest), de
+                ; need -= copy
+                ld      hl, (disk_need)
+                ld      de, (disk_copy)
+                or      a
+                sbc     hl, de
+                ld      (disk_need), hl
+                ld      a, h
+                or      l
+                jr      z, sndd_copy_done      ; filled -> leave the cursor on this sector
+                ; advance to the next chain sector (link at SECT_BUF+510/511).
+                ld      a, (SECT_BUF + 510)
+                ld      (XFER_CHAIN_TS), a
+                ld      a, (SECT_BUF + 511)
+                ld      (XFER_CHAIN_TS + 1), a
+                call    disk_bodybase_add510
+                ld      hl, 0
+                ld      (disk_pos), hl
+                jr      sndd_copy_loop
+sndd_copy_done:
+                ; DATA_PTR = DISK_BLK_BUF, DATA_LEN already set; block# from XFER_NEXT_BLK.
+                ld      hl, DISK_BLK_BUF
+                ld      (DATA_PTR), hl
+                ld      a, (XFER_NEXT_BLK + 1)
+                ld      (DATA_BLOCK), a
+                ld      a, (XFER_NEXT_BLK)
+                ld      (DATA_BLOCK + 1), a
+                ; advance XFER_OFFSET += chunk (32-bit) BEFORE build_data — the
+                ; carry-propagate clobbers BC, so it must precede build_data,
+                ; whose returned BC = the packet length srv_send_tbuf sends.
+                ld      hl, (XFER_OFFSET)
+                ld      de, (DATA_LEN)
+                add     hl, de
+                ld      (XFER_OFFSET), hl
+                ld      hl, (XFER_OFFSET + 2)
+                ld      bc, 0
+                adc     hl, bc
+                ld      (XFER_OFFSET + 2), hl
+                call    build_data             ; packet at TBUF, BC = length
+                jp      srv_send_tbuf
+sndd_read_fail:
+                ; a card read failed: abort the transfer, serve nothing (no garbage).
+                xor     a
+                ld      (XFER_ACTIVE), a
+                jp      ns_none
+
+; disk_bodybase_add510 — XFER_CHAIN_BODYBASE += 510 (32-bit LE). Clobbers AF/BC/HL.
+disk_bodybase_add510:
+                ld      hl, (XFER_CHAIN_BODYBASE)
+                ld      bc, 510
+                add     hl, bc
+                ld      (XFER_CHAIN_BODYBASE), hl
+                ld      hl, (XFER_CHAIN_BODYBASE + 2)
+                ld      bc, 0
+                adc     hl, bc
+                ld      (XFER_CHAIN_BODYBASE + 2), hl
+                ret
+
+; disk_read_chain_sector — read the record-body sector named by XFER_CHAIN_TS
+; ([track_byte, sector]) into SECT_BUF via the raw CMD17 (bd_record_read_hw,
+; using the boot record in BD_REC_REC + csd_base). CY set on read failure.
+; Clobbers AF/BC/DE/HL.
+disk_read_chain_sector:
+                ld      a, (XFER_CHAIN_TS)
+                ld      d, a                   ; D = track_byte
+                ld      a, (XFER_CHAIN_TS + 1)
+                ld      e, a                   ; E = sector (1-based)
+                call    mgt_ts_to_record_linear ; HL = record-linear (side-major)
+                ld      (BD_REC_LINEAR), hl
+                ld      hl, SECT_BUF
+                jp      bd_record_read_hw      ; CY on fail; rets to our caller
+
+; mgt_ts_to_record_linear (i365c) — map an MGT (track_byte, sector) to the
+; SIDE-major record-linear sector a Trinity record stores, so following the MGT
+; chain lands on the right absolute LBA (sd_push.asm:640-644 mgt_to_record_linear
+; inverse of the seed mapping sideMajorRecordLinear). MGT track_byte carries the
+; side in bit 7, the cylinder in bits 0-6; sector is 1-based:
+;   record_linear = ((track_byte&0x80)>>7)*800 + (track_byte&0x7F)*10 + (sector-1)
+; In:  D = track_byte, E = sector (1-based). Out: HL = record_linear (0..1599).
+; Clobbers AF/BC/HL (D/E preserved).
+mgt_ts_to_record_linear:
+                ld      a, d
+                and     &7F                    ; A = cyl (0..79)
+                ld      l, a
+                ld      h, 0
+                add     hl, hl                 ; 2*cyl
+                ld      c, l
+                ld      b, h                   ; BC = 2*cyl
+                add     hl, hl                 ; 4*cyl
+                add     hl, hl                 ; 8*cyl
+                add     hl, bc                 ; 10*cyl
+                bit     7, d                   ; side 1?
+                jr      z, mtr_addsec
+                ld      bc, 800
+                add     hl, bc                 ; += side*800
+mtr_addsec:
+                ld      a, e
+                dec     a                      ; sector - 1
+                ld      c, a
+                ld      b, 0
+                add     hl, bc
+                ret
 
 ; srv_send_tbuf — wrap the TFTP packet at TBUF (length BC) as a UDP frame (server
 ; IP + server TID -> client IP + client TID) and transmit it.
@@ -1190,6 +1447,39 @@ netboot_main:
                 ; frame chain stays armed — it is coherent there.
                 call    nb_fill_store
 
+                ; --- read the SD CSD -> csd_base / BD_RECORDS (i145b) -----
+                ; The large-file disk-serve path (send_next_data_disk) reads
+                ; record-body sectors by ABSOLUTE LBA (bd_record_read_hw:
+                ; csd_base + 1600*(record-1) + linearSec), so it needs
+                ; csd_base. csd_set_bd_records decodes it from the inserted
+                ; card's CSD. Run it AFTER the B-DOS store walk (a raw &38 SD
+                ; init would disturb a mid-walk B-DOS hook) and BEFORE the
+                ; serve loop; on any read failure csd_base stays 0 and a
+                ; large-file serve reads the wrong LBA — but small files still
+                ; serve from the arena. Mirrors netboot_serve.asm's ordering.
+                call    csd_set_bd_records
+
+                ; --- re-arm the ENC RX path the SD transaction disturbed ---
+                ; The raw SD ladder leaves the ENC's persistent RX state
+                ; (RXEN, ring pointers, MAC/PHY) disturbed; drv_read never
+                ; restores it, so serving is dead until we re-run drv_init's
+                ; RX-arming (enc_rx_reestablish, MINUS chk_trinity — i242/i244).
+                di
+                ld      hl, CONFIG_SERVERMAC
+                call    enc_rx_reestablish
+                ei
+
+                ; --- the boot record number -> BD_REC_REC (the read record) -
+                ; bd_record_read_hw reads BD_REC_REC's body sectors; the whole
+                ; large-file serve streams from the record the server booted
+                ; from. NB_BOOT_RECORD is host/loader-patched (mirror
+                ; boot_record.asm BOOT_CFG_RECORD); the i365c test patches it
+                ; directly. Copy it into BD_REC_REC (16-bit LE) once at boot.
+                ld      a, (NB_BOOT_RECORD)
+                ld      (BD_REC_REC), a
+                xor     a
+                ld      (BD_REC_REC + 1), a
+
                 ; --- own the maskable interrupt for the serve phase -------
                 ; (IM 2 -> ei;reti). The vendored ENC driver re-enables
                 ; interrupts on every drv_* exit (encdrv.asm EI;RET), so the
@@ -1252,6 +1542,13 @@ NB_IM2_TABLE:     equ &FD00              ; 257 bytes: &FD00..&FE00 inclusive
 NB_IM2_VEC:       equ &FE                ; every table byte
 NB_IM2_HANDLER:   equ &FEFE              ; = NB_IM2_VEC * &101 (ei ; reti)
 
+; NB_BOOT_RECORD — the 1-based Trinity record the server booted from, patched
+; by the host/loader before the program runs (mirror boot_record.asm's
+; BOOT_CFG_RECORD; the i365c test patches it directly). netboot_main copies it
+; into BD_REC_REC at boot, and the large-file disk-serve path reads that
+; record's body sectors. Baked default 0 (no large-file serve until patched).
+NB_BOOT_RECORD:   defb 0
+
 nb_chunk_name:    defm "Trinity Network "     ; the flash chunk holding MAC+IP
 nb_lease_vals:    defb 0, 0, &1c, &20         ; lease 7200
                   defb 0, 0, &0e, &10         ; T1 3600
@@ -1294,6 +1591,22 @@ XFER_ACTIVE:      defs 1                 ; 1 = a transfer is armed
 XFER_LAST_SHORT:  defs 1                 ; 1 = the last DATA was a short block
 XFER_JUST_OACKED: defs 1                 ; 1 = the next ACK (block 0) -> FirstData
 
+; Large-file disk-serve transfer state (i365c). XFER_DISK selects the serve
+; path (0 = arena, 1 = stream from the record's MGT sector chain). The cursor
+; (XFER_CHAIN_TS + XFER_CHAIN_BODYBASE) advances once through the chain across
+; sequential blocks; XFER_START_TS is the chain head (for a backward rewind).
+XFER_DISK:           defs 1              ; 1 = the disk-backed streaming path
+XFER_START_TS:       defs 2              ; chain head [track_byte, sector]
+XFER_CHAIN_TS:       defs 2              ; cursor: current chain sector [track,sector]
+XFER_CHAIN_BODYBASE: defs 4             ; cursor: body offset of that sector's byte 0 (LE)
+; send_next_data_disk scratch.
+disk_body_start:  defs 4                 ; XFER_OFFSET + 9 (body offset to serve from)
+disk_tmp:         defs 4                 ; positioning compare scratch
+disk_pos:         defs 2                 ; byte offset within the current chain sector
+disk_need:        defs 2                 ; bytes still to copy into DISK_BLK_BUF
+disk_dest:        defs 2                 ; current DISK_BLK_BUF fill pointer
+disk_copy:        defs 2                 ; bytes copied this sector
+
 RX_LEN:           defs 2
 BODY_LEN:         defs 2
 TFTP_PKT_LEN:     defs 2
@@ -1304,9 +1617,12 @@ RXBUF:            defs 1518              ; the single received-frame buffer
 ; unit (their org is suppressed — no NETBOOT_STANDALONE — so this file's org
 ; governs). encdrv.asm is the real vendored ENC28J60 driver; eeprom.asm is the
 ; real flash config reader; bdos_seam.asm supplies the RST-8 hook bodies +
-; UIFA/DIFA arithmetic the store walk below uses (no NETBOOT_REAL_LISTREAD, no
-; NETBOOT_WANT_CLAIM: the server never scans the free-record list nor writes a
-; record — the card is reached only via the read hooks).
+; UIFA/DIFA arithmetic the store walk below uses.  sd_csd.asm (built with
+; NETBOOT_REAL_LISTREAD + NETBOOT_WANT_RECORD_READ) adds the raw-CMD17
+; record-body read (bd_record_read_hw) the large-file serve streams from — the
+; server never scans the free-record list nor writes a record (no
+; NETBOOT_WANT_CLAIM / CMD24), so the card is reached only via read hooks + the
+; read-only CMD17.
 ; ===========================================================================
                 include "build_udp_frame.asm"
                 include "build_arp_reply.asm"
@@ -1316,6 +1632,7 @@ RXBUF:            defs 1518              ; the single received-frame buffer
                 include "encdrv.asm"
                 include "eeprom.asm"
                 include "bdos_seam.asm"
+                include "sd_csd.asm"
 
 ; ===========================================================================
 ; The B-DOS store walk (i95b-b1) — fill STORE (the flat index resolve walks)
@@ -1355,6 +1672,8 @@ nb_fill_store:
                 ld      (NB_TBL_W), hl
                 ld      hl, FILE_ARENA
                 ld      (NB_ARENA_W), hl
+                ld      hl, NB_DISK_TABLE
+                ld      (NB_DISK_W), hl
 
                 xor     a
                 ld      (NB_WALK_TRACK), a
@@ -1386,12 +1705,19 @@ nbfs_sector:
                 cp      NB_DIR_TRACKS
                 jr      c, nbfs_track
 
-                ; terminate both tables (a single leading NUL = empty).
+                ; terminate the tables (a single leading NUL = empty).
                 ld      hl, (NB_STORE_W)
                 ld      (hl), 0
                 ld      hl, (NB_TBL_W)
                 ld      (hl), 0
-                ; rewrite mangled store names to full TFTP names (i346).
+                ld      hl, (NB_DISK_W)
+                ld      (hl), 0
+                ; rewrite mangled store names to full TFTP names (i346). NOTE:
+                ; nb_apply_manifest rebuilds STORE from NB_SRC_TABLE, so any
+                ; large-file STORE entry survives only while NO manifest is
+                ; present (all names <= 10 chars). Long-named large files (the
+                ; demo's release.src) also need the disk table remapped — a
+                ; tracked follow-up; the i365c serve path uses short names.
                 jp      nb_apply_manifest      ; tail call: rets to our caller
 
 ; nb_walk_entry — consider the 256-byte directory entry at HL: skip anything
@@ -1406,26 +1732,32 @@ nb_walk_entry:
                 cp      NB_TYPE_CODE
                 ret     nz
 
-                ; size pre-filter from the dir entry: full-16K pages must be 0
-                ; and 0 < lengthMod16K <= NB_FILE_MAX (small files only).
+                ; classify by size from the dir entry: full-16K pages (0xEF) +
+                ; lengthMod16K (0xF0-F1). A small plain CODE file (pages 0,
+                ; 0 < len <= NB_FILE_MAX) takes the arena path below; a large
+                ; one (pages != 0, or len > NB_FILE_MAX) is streamed from the
+                ; record's sectors on demand (nbwe_large -> NB_DISK_TABLE).
                 ld      de, NB_ENTRY_PAGES
                 add     hl, de
                 ld      a, (hl)
-                or      a
-                ret     nz                     ; >= 16K: skip (i70 owns spanning)
+                ld      (nbwe_pages), a        ; full-16K pages count
                 inc     hl                     ; -> lengthMod16K low
                 ld      e, (hl)
                 inc     hl
                 ld      a, (hl)
                 and     &3F                    ; lengthMod16K is 14 bits
-                ld      d, a                   ; DE = size
+                ld      d, a                   ; DE = lengthMod16K
+                ld      (nbwe_lenmod), de
+                ld      a, (nbwe_pages)
+                or      a
+                jp      nz, nbwe_large         ; >= 16K: large (disk-backed)
                 ld      a, d
                 or      e
                 ret     z                      ; empty file: skip
                 ld      hl, NB_FILE_MAX
                 or      a
                 sbc     hl, de
-                ret     c                      ; size > NB_FILE_MAX: skip
+                jp      c, nbwe_large          ; size > NB_FILE_MAX: large
                 ld      (NB_WALK_SIZE), de
 
                 ; copy the 10-byte name field into NB_WALK_NAME as a
@@ -1554,6 +1886,133 @@ nbwe_name_end:
                 ld      (NB_ARENA_W), hl
                 ret
 
+; nbwe_large (i365c) — index a LARGE plain CODE file as disk-backed: record a
+; {name, chain-head [track,sector], 32-bit size} descriptor in NB_DISK_TABLE
+; and the {name, 32-bit size} in STORE, so resolve OACKs it and resolve_src
+; streams it from the record's sectors (send_next_data_disk). NO HLOAD — the
+; bytes stay on the card. On entry nbwe_pages/nbwe_lenmod hold the size fields.
+;
+; "Plain" filter: the boot infrastructure is NOT servable content and is
+; skipped (as the small-file walk always skipped it by size) —
+;   * the AUTO* server binary itself (auto-exec armed: dir 0xF2 != 0xFF), and
+;   * the boot DOS (its dir 0xEC start-page carries B-DOS's system bits,
+;     0xEC & 0xE0 != 0, from build-disk's SetStartAddressPageUnusedBits).
+; So an unmodified server record (bdos + AUTOnbsrv large; the pi-standins
+; small) indexes NO large file, leaving the arena tables byte-identical.
+nbwe_large:
+                ld      hl, (NB_WALK_ENT)
+                ld      de, &F2                ; ExecAddrDiv16K
+                add     hl, de
+                ld      a, (hl)
+                cp      &FF
+                ret     nz                     ; auto-exec armed -> the run program, skip
+                ld      hl, (NB_WALK_ENT)
+                ld      de, &EC                ; StartAddressPage
+                add     hl, de
+                ld      a, (hl)
+                and     &E0                    ; B-DOS system/unused page bits
+                ret     nz                     ; the boot DOS, skip
+
+                ; size32 = pages*16384 + lengthMod16K (16384 = 2^14, so the low
+                ; 16 bits are lengthMod16K | (pages&3)<<14 — no carry, since
+                ; lengthMod16K < 2^14 — and the high 16 bits are pages>>2).
+                ld      a, (nbwe_pages)
+                ld      b, a
+                srl     a
+                srl     a                      ; pages >> 2
+                ld      (nbwe_size32 + 2), a
+                xor     a
+                ld      (nbwe_size32 + 3), a
+                ld      a, b
+                and     3
+                add     a, a
+                add     a, a
+                add     a, a
+                add     a, a
+                add     a, a
+                add     a, a                   ; (pages & 3) << 6 -> the high byte
+                ld      h, a
+                ld      l, 0                   ; HL = (pages & 3) << 14
+                ld      de, (nbwe_lenmod)
+                add     hl, de
+                ld      (nbwe_size32), hl      ; nbwe_size32 = full 32-bit size
+
+                ; extract the name into NB_WALK_NAME (space-stop, NUL-terminate).
+                ld      hl, (NB_WALK_ENT)
+                inc     hl                     ; -> the name field (+1..+10)
+                ld      de, NB_WALK_NAME
+                ld      b, 10
+nbwl_name:
+                ld      a, (hl)
+                cp      &21
+                jr      c, nbwl_name_end
+                ld      (de), a
+                inc     hl
+                inc     de
+                djnz    nbwl_name
+nbwl_name_end:
+                xor     a
+                ld      (de), a
+                ld      a, 10
+                sub     b                      ; A = name length (B=0 => 10)
+                ret     z                      ; empty name: skip
+                ld      (NB_WALK_NLEN), a
+
+                ; room checks — STORE needs nlen + 6 (NUL + size4 + terminator);
+                ; NB_DISK_TABLE needs nlen + 8 (NUL + TS2 + size4 + terminator).
+                ld      e, a
+                ld      d, 0
+                ld      hl, (NB_STORE_W)
+                add     hl, de
+                ld      de, 6
+                add     hl, de
+                ex      de, hl                 ; DE = STORE cursor + need
+                ld      hl, STORE + STORE_LEN
+                or      a
+                sbc     hl, de
+                ret     c                      ; STORE full: skip
+                ld      a, (NB_WALK_NLEN)
+                ld      e, a
+                ld      d, 0
+                ld      hl, (NB_DISK_W)
+                add     hl, de
+                ld      de, 8
+                add     hl, de
+                ex      de, hl
+                ld      hl, NB_DISK_TABLE + NB_DISK_TABLE_LEN
+                or      a
+                sbc     hl, de
+                ret     c                      ; disk table full: skip
+
+                ; append the STORE entry: name\0 + 4-byte LE size (full 32-bit).
+                ld      hl, NB_WALK_NAME
+                ld      de, (NB_STORE_W)
+                call    copy_cstr_incl_nul
+                ld      hl, nbwe_size32
+                ld      bc, 4
+                ldir
+                ld      (NB_STORE_W), de
+
+                ; append the NB_DISK_TABLE entry: name\0 + [track,sector] + size4.
+                ld      hl, NB_WALK_NAME
+                ld      de, (NB_DISK_W)
+                call    copy_cstr_incl_nul
+                ld      hl, (NB_WALK_ENT)
+                ld      bc, &0D                ; first (track,sector) at +0x0D..0x0E
+                add     hl, bc
+                ld      a, (hl)                ; track_byte
+                ld      (de), a
+                inc     de
+                inc     hl
+                ld      a, (hl)                ; sector (1-based)
+                ld      (de), a
+                inc     de
+                ld      hl, nbwe_size32
+                ld      bc, 4
+                ldir
+                ld      (NB_DISK_W), de
+                ret
+
 ; nb_put_size32 — write HL at DE as a 4-byte little-endian size (high word 0;
 ; NB_FILE_MAX bounds every staged file well below 64K). DE advances by 4.
 nb_put_size32:
@@ -1623,6 +2082,11 @@ nbuv_fill:
 ; as-is (the host harness presets them and leaves the table empty), CY clear.
 ; ===========================================================================
 resolve_src:
+                ; default the transfer to the arena path; a disk-table match
+                ; below re-sets XFER_DISK to 1 (so a stale flag from a prior
+                ; transfer can never leak into this one).
+                xor     a
+                ld      (XFER_DISK), a
                 ld      hl, NB_SRC_TABLE
 rsv_entry:
                 ld      a, (hl)
@@ -1667,6 +2131,64 @@ rsv_found:
                 scf
                 ret
 rsv_nomatch:
+                ; no arena entry: try the disk-backed table (large files).
+                ; NB_DISK_TABLE entries: name\0 + [track,sector] (2) + size (4 LE),
+                ; single-0 terminated. On a match: XFER_START_TS + XFER_SIZE set,
+                ; the cursor init'd (XFER_CHAIN_TS = head, XFER_CHAIN_BODYBASE=0),
+                ; XFER_DISK = 1, CY set. No match: CY clear (the RRQ 404s upstream).
+                ld      hl, NB_DISK_TABLE
+rsd_entry:
+                ld      a, (hl)
+                or      a
+                jr      z, rsd_nomatch         ; end-of-table sentinel
+                ld      de, (PARSE_FILENAME)
+                push    hl
+rsd_name_cmp:
+                ld      a, (de)
+                cp      (hl)
+                jr      nz, rsd_next
+                or      a
+                jr      z, rsd_found
+                inc     hl
+                inc     de
+                jr      rsd_name_cmp
+rsd_next:
+                pop     hl
+                call    skip_cstr              ; HL past the name's NUL
+                ld      de, 6                  ; [track,sector] (2) + size (4)
+                add     hl, de
+                jr      rsd_entry
+rsd_found:
+                pop     de                     ; discard the entry-start copy
+                inc     hl                     ; past the matched NUL -> [track,sector]
+                ld      a, (hl)
+                ld      (XFER_START_TS), a
+                ld      (XFER_CHAIN_TS), a     ; cursor head = chain head
+                inc     hl
+                ld      a, (hl)
+                ld      (XFER_START_TS + 1), a
+                ld      (XFER_CHAIN_TS + 1), a
+                inc     hl                     ; -> 4-byte LE size
+                ld      a, (hl)
+                ld      (XFER_SIZE), a
+                inc     hl
+                ld      a, (hl)
+                ld      (XFER_SIZE + 1), a
+                inc     hl
+                ld      a, (hl)
+                ld      (XFER_SIZE + 2), a
+                inc     hl
+                ld      a, (hl)
+                ld      (XFER_SIZE + 3), a
+                ; the cursor's first sector is the chain head at body offset 0.
+                ld      hl, 0
+                ld      (XFER_CHAIN_BODYBASE), hl
+                ld      (XFER_CHAIN_BODYBASE + 2), hl
+                ld      a, 1
+                ld      (XFER_DISK), a
+                scf
+                ret
+rsd_nomatch:
                 or      a
                 ret
 
@@ -1919,6 +2441,12 @@ NB_WALK_TRACK:    defs 1                 ; directory walk: track 0-3
 NB_WALK_SECTOR:   defs 1                 ; directory walk: sector 1-10
 NB_WALK_NAME:     defs 11                ; current entry's name + NUL
 
+; large-file (nbwe_large) scratch + the disk-backed table write cursor (i365c).
+nbwe_pages:       defs 1                 ; current entry's full-16K pages count
+nbwe_lenmod:      defs 2                 ; current entry's lengthMod16K (14-bit)
+nbwe_size32:      defs 4                 ; current entry's full 32-bit byte size (LE)
+NB_DISK_W:        defs 2                 ; NB_DISK_TABLE write cursor
+
 ; nb_apply_manifest state (i346).
 NB_MAN_PTR:       defs 2                 ; NBMANIFEST bytes (arena address)
 NB_MAN_END:       defs 2                 ; one past the manifest's last byte
@@ -1938,3 +2466,14 @@ NB_SRC_TABLE:     defs NB_SRC_TABLE_LEN  ; name\0 + ptr + size records + 0
 
 NB_ARENA_LEN:     equ 4096
 FILE_ARENA:       defs NB_ARENA_LEN      ; the staged file bytes SRC_PTR serves
+
+; Large-file disk-serve regions (i365c). NB_DISK_TABLE parallels STORE for the
+; large files (name\0 + [track,sector] + 32-bit size, single-0 terminated).
+; SECT_BUF holds one 512-byte record sector read by bd_record_read_hw;
+; DISK_BLK_BUF holds the re-blocked DATA payload (max the negotiate_blksize
+; ceiling of 1468). These are trailing reservations above the loaded image tail
+; (RAM at boot), below the IM 2 table at &FD00.
+NB_DISK_TABLE_LEN: equ 256
+NB_DISK_TABLE:    defs NB_DISK_TABLE_LEN ; name\0 + [track,sector] + size32 records + 0
+SECT_BUF:         defs 512               ; one record-body sector (bd_record_read_hw dest)
+DISK_BLK_BUF:     defs 1468              ; the re-blocked DATA payload (max blksize)
