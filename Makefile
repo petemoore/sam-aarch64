@@ -112,7 +112,7 @@ ci-registry: registry-gen
 # koron-go/z80 harness (tools/netboot-oracle/z80) and byte-compares its emitted
 # packet against the same golden vectors the Go authority is checked against.
 # Needs pyz80 (the dev container), unlike the pure-Go ci-netboot-oracle.
-.PHONY: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-build-tcp-segment netboot-sha256 netboot-hmac-sha256 netboot-hkdf netboot-hkdf-expand-label netboot-chacha20 netboot-poly1305 netboot-x25519-field netboot-aead netboot-tls-keyschedule netboot-tls-record netboot-tls-transcript netboot-tls-client-hello netboot-tls-server-flight netboot-tls-client netboot-tls-main netboot-encdrv netboot-dhcp-loop netboot-tcp-conn netboot-tcp-conn-stream netboot-http-get netboot-fw-source netboot-body-sink netboot-tls-reasm netboot-fw-span netboot-http netboot-http-boot netboot-http-disk netboot-http-smoke-boot netboot-http-smoke-disk netboot-http-boot-debug netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke netboot-smoke-disk netboot-server netboot-server-disk netboot-serve-boot netboot-serve-boot-debug netboot-serve-trinload netboot-trinpush-test netboot-dumper netboot-csd-probe netboot-sd-push netboot-boot-record netboot-delete-record netboot-list-records netboot-hook-roundtrip netboot-render-disk-probe netboot-render-disk-boot netboot-render-chain netboot-render-disk-boot-record netboot-assemble-disk-boot-record netboot-assemble-first-demo-record netboot-assemble-first-serve-record netboot-samboot-config netboot-trinity-identity netboot-trinload netboot-sd-csd netboot-sd-listread netboot-z80-routines asmlex-z80 asmparse-z80 asmparse-paged-z80 parse-paged-driver-z80 chain-paged-driver-z80 tbn-render-driver-z80 pass1-ir-z80 compact-ir-z80 compact-ser-z80 editmodel-z80 pagepool-z80 spill-z80 viewport-z80 ci-netboot-z80
+.PHONY: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-build-tcp-segment netboot-sha256 netboot-hmac-sha256 netboot-hkdf netboot-hkdf-expand-label netboot-chacha20 netboot-poly1305 netboot-x25519-field netboot-aead netboot-tls-keyschedule netboot-tls-record netboot-tls-transcript netboot-tls-client-hello netboot-tls-server-flight netboot-tls-client netboot-tls-main netboot-encdrv netboot-dhcp-loop netboot-tcp-conn netboot-tcp-conn-stream netboot-http-get netboot-fw-source netboot-body-sink netboot-tls-reasm netboot-fw-span netboot-http netboot-http-boot netboot-http-disk netboot-http-smoke-boot netboot-http-smoke-disk netboot-http-boot-debug netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke netboot-smoke-disk netboot-server netboot-server-disk netboot-serve-boot netboot-serve-boot-debug netboot-serve-trinload netboot-trinpush-test netboot-dumper netboot-csd-probe netboot-sd-push netboot-boot-record netboot-delete-record netboot-list-records netboot-hook-roundtrip netboot-render-disk-probe netboot-render-disk-boot netboot-render-chain netboot-render-disk-boot-record netboot-assemble-disk-boot-record netboot-assemble-first-demo-record netboot-assemble-first-serve-record netboot-samboot-config netboot-trinity-identity netboot-trinload netboot-sd-csd netboot-sd-listread netboot-z80-routines asmlex-z80 asmparse-z80 asmprep-z80 asmparse-paged-z80 parse-paged-driver-z80 chain-paged-driver-z80 tbn-render-driver-z80 pass1-ir-z80 compact-ir-z80 compact-ser-z80 editmodel-z80 pagepool-z80 spill-z80 viewport-z80 ci-netboot-z80
 $(BUILD)/netboot_build_udp_frame.bin $(BUILD)/netboot_build_udp_frame.map: src/netboot/build_udp_frame.asm $(asm_deps/src/netboot/build_udp_frame.asm)
 	@mkdir -p $(BUILD)
 	pyz80 -D NETBOOT_STANDALONE=1 --obj=$(BUILD)/netboot_build_udp_frame.bin \
@@ -1577,6 +1577,17 @@ $(BUILD)/asmparse.bin $(BUILD)/asmparse.map: src/asmparse.asm $(asm_deps/src/asm
 
 asmparse-z80: $(BUILD)/asmparse.bin $(BUILD)/asmparse.map
 
+# asmprep-z80 — on-SAM assembler-source preprocessor, i31b (flat-memory).
+# Same standalone flat-memory harness as asmlex; gated by ci-netboot-z80.
+# Brick 1: .set table + .if/.else/.endif frame stack + pass-through.
+$(BUILD)/asmprep.bin $(BUILD)/asmprep.map: src/asmprep.asm $(asm_deps/src/asmprep.asm)
+	@mkdir -p $(BUILD)
+	pyz80 -D PREP_STANDALONE=1 --obj=$(BUILD)/asmprep.bin \
+	    --mapfile=$(BUILD)/asmprep.map \
+	    src/asmprep.asm
+
+asmprep-z80: $(BUILD)/asmprep.bin $(BUILD)/asmprep.map
+
 # pass1-ir-z80 — Z80 Pass1-over-IR walk, i48c-b8a (flat-memory). A standalone
 # flat harness containing ONLY the pass-1 machinery (the reused leaves
 # expr_eval/symbols/local_labels/litpool/ml + the new IR-walk); the IR record
@@ -1715,7 +1726,7 @@ netboot-z80-routines: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-bu
 # SKIP_PRIVATE_TESTS-gated, and CI (no private data) can't build it.
 NETBOOT_PRIVATE_ARTIFACTS := $(if $(wildcard src/netboot/bootloader_chunk1_data.asm),netboot-eeprom-flash-chunk1)
 .PHONY: netboot-z80-artifacts
-netboot-z80-artifacts: netboot-z80-routines netboot-http-boot-debug netboot-http-smoke-boot editmodel-z80 editmodel-paged-z80 pagepool-z80 spill-z80 viewport-z80 asmlex-z80 asmparse-z80 asmparse-paged-z80 parse-paged-driver-z80 chain-paged-driver-z80 b8d-chain-paged-driver-z80 pass1-ir-z80 compact-ir-z80 compact-ser-z80 sysreg-data netboot-serve-record netboot-server-record netboot-server-largefile-record netboot-server-largefile-manifest-record disk-record tbn-render-driver-z80 netboot-render-disk-probe netboot-render-disk-boot-record netboot-assemble-disk-boot-record netboot-assemble-first-demo-record netboot-assemble-first-serve-record release-unstripped-tbn $(NETBOOT_PRIVATE_ARTIFACTS)
+netboot-z80-artifacts: netboot-z80-routines netboot-http-boot-debug netboot-http-smoke-boot editmodel-z80 editmodel-paged-z80 pagepool-z80 spill-z80 viewport-z80 asmlex-z80 asmparse-z80 asmprep-z80 asmparse-paged-z80 parse-paged-driver-z80 chain-paged-driver-z80 b8d-chain-paged-driver-z80 pass1-ir-z80 compact-ir-z80 compact-ser-z80 sysreg-data netboot-serve-record netboot-server-record netboot-server-largefile-record netboot-server-largefile-manifest-record disk-record tbn-render-driver-z80 netboot-render-disk-probe netboot-render-disk-boot-record netboot-assemble-disk-boot-record netboot-assemble-first-demo-record netboot-assemble-first-serve-record release-unstripped-tbn $(NETBOOT_PRIVATE_ARTIFACTS)
 
 ci-netboot-z80: netboot-z80-artifacts
 	cd tools/sampage && go test ./...
