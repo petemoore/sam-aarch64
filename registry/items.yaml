@@ -1354,9 +1354,28 @@
     The full i70 payoff, blocked on a persist design reconciliation: at FW_RECORD_CAP=6144 (http_main.asm:333) start.elf alone becomes 486 HSAVE files in ONE B-DOS record directory (~80-slot limit) — the fw_span record-spanning design (src/netboot/fw_span.asm, phase3-delivery-design.md) must be reconciled with directory capacity (span across multiple first-FREE records or raise the per-file window) before any multi-MB persist. Also assess the i347 IM2 exposure for the 10-18+ min full fetch (Z80 SHA-256 in the loop dominates; measured bands in trinity-capabilities.md), and decide the cdn reachability story (LAN mirror of the pinned a43df3a firmware blobs vs resolved cdn IP; blobs verified live 2026-07-03, SHA-256-pinned so an untrusted proxy is fine).
   status: OPEN
   depends_on: [i70b, i360]
-  kind: leaf
+  kind: umbrella
   owner: agent
   parent: i70
+
+- id: i70c-b1
+  title: Firmware-persist spanning design reconciliation (spec)
+  description: |
+    Reconcile the fw_span record-spanning convention with B-DOS directory capacity (80 files/record). Spec: docs/specs/firmware-persist-spanning.md — grounds the record/directory model (800 KB record, 80-slot directory, central LIST), corrects the current one-record-per-6144-window waste (485 records for start.elf), and recommends Option B (pack up to 80 windows per record, advance records as directories fill). DONE = spec written; sign-off + cdn choice are q74; impl is i70c-b2.
+  status: DONE
+  kind: leaf
+  owner: agent
+  parent: i70c
+
+- id: i70c-b2
+  title: Directory-safe spanning impl + full 6-file cdn manifest hardware shot
+  description: |
+    Implement Option B (docs/specs/firmware-persist-spanning.md §4): Go authority placement layer (index -> record = base + i/80, host-verified like span_test.go); Z80 storage_sink_leaf record-select base + FW_REC_IDX/FILES_PER_RECORD with format-per-record; store_end claim EVERY spanned record (extends i360b single-record claim); serve-side per-index record mapping (manifest already supports it, manifest.go:294-315); FW_RECORD_CAP stays 6144. Then the 10-18+ min multi-MB hardware shot with the pinned 6-file manifest. Gated on q74 (design sign-off + cdn reachability).
+  status: OPEN
+  depends_on: [q74]
+  kind: leaf
+  owner: agent
+  parent: i70c
 
 - id: i70d
   title: "HTTP-fetch shot config completions: HT_SERVER_PORT knob, IP defines wired into all three recipes, tr_terminate exits (i228) for http_main"

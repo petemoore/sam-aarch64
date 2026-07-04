@@ -306,6 +306,14 @@ host-verified in `bdos/span_test.go`; the Z80 port (`src/netboot/fw_span.asm`,
 mirroring the per-record length + naming) and the real `RST 8` `HSAVE`/`HLOAD`
 per record stay the hardware gate.
 
+**Reconciling the span with B-DOS directory capacity (i70c).** `SpanPlan` is
+byte-cap-only and has no model of how many `<prefix><NNN>` files a single 800 KB
+record's directory can hold (80 slots). For a multi-MB blob that reconciliation —
+pack up to 80 windows per record and advance records as directories fill, vs the
+naive one-record-per-window the store leaf does today — is specified in its own
+spec, [`firmware-persist-spanning.md`](firmware-persist-spanning.md) (the
+authority for placement; awaiting sign-off q74).
+
 ## 9. Host-side iteration (i80) + the empirical oracle
 
 SimCoupé does not emulate the Trinity network hardware, so today the stack only

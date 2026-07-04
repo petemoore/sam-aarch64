@@ -65,3 +65,8 @@
   body: |
     i359b coverage scope: push ONLY the product disks to Trinity records, or a BROADER set (incl. the 12 transient per-fixture corpus disks) for on-hardware per-image test coverage (the i319b goal)? The i359a catalogue (docs/disk-catalogue.md) shows most of the 27 build/ disks are transient test residue or deletable i12b one-offs, NOT record-worthy. Product set warranting records: test_record.mgt(186 DONE), netboot_server_record.mgt(187 DONE), netboot_serve_record.mgt(145 DONE), release.mgt (needs a -code-auto vessel built first). Disassembler/editor are not standalone disks. Bulk unattended pushing to the shared card is fragile (no-retransmit i348), so a push campaign wants this steer first. Safe sub-step doable regardless: list-records (read-only) to confirm the live mapping in the catalogue.
   owner: pete
+
+- id: q74
+  body: |
+    i70c firmware-persist reconciliation: (1) sign off the Option-B design (docs/specs/firmware-persist-spanning.md) — pack up to 80 windows per Trinity SD record, advancing records as directories fill (vs the rejected one-record-per-window today / paged-bigger-window Option C); (2) cdn reachability for the multi-MB hardware shot — a LAN mirror of the SHA-256-pinned firmware blobs (simple, no SAM-side internet routing) vs a resolved cdn IP (needs a gateway/NAT path the link-local SAM stack lacks). Blocks the i70c hardware shot, not the Option-B impl (host/emulation-verifiable).
+  owner: pete
