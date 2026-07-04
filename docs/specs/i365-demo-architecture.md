@@ -144,11 +144,23 @@ faithful tests run locally; public CI runs the mock + raw-CMD24-vs-SPI tests.
     from the boot record into the render IN pages 8..30, point `RENDER_SINK_VEC` at
     `render_disk_sink_byte`, `render_run` → `release.src` on the record. Gate:
     HGTHD/HLOAD `RELEASESRC` == `render.Emit`.
-  - **`i365d-b2b` — assemble→disk bootable.** Compose `assembler-demo.bin` (DEMO_ASM
-    `start:` — saves caller SP, `ld sp,&C100`, HSAVEs `RELEASEIMG`, restores SP, `ret`;
-    keep the caller stack + return frame OUTSIDE the assembler's `&C100` stack and its
-    `&8000` image, #859) reading `IN`, with the assembler's HLOAD-by-name payloads on
-    the record. Gate: HGTHD/HLOAD `RELEASEIMG` byte-matches GNU.
+  - **`i365d-b2b` — assemble→disk bootable (DONE).** Compose `assembler-demo.bin`
+    (DEMO_ASM) as the `AUTOasm` CODE-auto record vessel (`build-disk -code-auto
+    -variant prod`), reading `release-unstripped.tbn` as DOS `IN`, with the prod
+    HLOAD-by-name payloads (`enctab.enc`, `sd13`, `d15`, `zx013`) on the record.
+    Unlike b2a, `release.img` is <64 KB, so DEMO_ASM's `save_out_file` HSAVEs it
+    **directly through real B-DOS** — no raw-sector sink, no ENC/CSD come-up, no IM2
+    takeover. And unlike render's 23-page IN, the assembler's `load_in_file` reads
+    only a ≤6-page (≤96 KB) prefix via one trampoline HLOAD that auto-pages across
+    those pages (`main_loop.asm:1560`; the `.tbn` editor/render tail never enters
+    RAM) — so no MGT re-block either. The record is booted directly (no thin driver
+    needed): the faithful gate stops at `print_status_string` (right after
+    `save_out_file`), before the DEMO `ret` returns into ALHK. Gate
+    (`assemble_disk_boot_faithful_test.go`, FAITHFUL rig): boot → AUTOasm → real-B-DOS
+    IN-prefix load + assemble + HSAVE `RELEASEIMG` on the record, reconstructed from
+    the record's MGT chain == `build/release-unstripped.img` (byte-matches GNU). This
+    proves the multi-page prefix HLOAD works under an ALHK record boot on real B-DOS
+    1.5t — the open question the b2a note flagged.
   - **`i365d-b2c` — overlay orchestrator + compose the demo `.mgt` (depends on b2a+b2b).**
     Sequences the phases with RST `&10` messages (`mgt_screen_demo_standalone` idiom),
     then serves both under long names via NBMANIFEST (`RELEASESRC→release.src`,
