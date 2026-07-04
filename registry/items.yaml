@@ -5462,8 +5462,26 @@
   description: |
     Follow-up to i289 (#755). The enc28j60.go sdInitSettling window is currently a conservative 1200-T-state constant (4x the documented ~50us) — a pure emulator-fidelity knob that never runs on real silicon, safely bounded so it catches the i242/i287 SD-before-ENC ordering bug without latching. This item MEASURES the real settle to make the model faithful rather than conservative, which also independently validates the shared-PIC settle model underpinning the §8ag serve-crash interpretation. Approach (Pete's, 2026-06-30): a trinload-pushed Z80 probe that does the &38 SD-init, waits N T-states, issues an identity probe, and reports stale-vs-fresh over ETHERNET (UDP markers, not screen — so it runs unattended; bisect N between a too-small lower bound and a too-large upper bound to converge on the real settle). Then set the emulator constant to the measured value (+ margin). owner agent: now self-serviceable (i266 TAPO power-cycle + i272 passwordless tcpdump). NOT required for correctness — purely a fidelity refinement. ALSO fold in (PR 820 §3 review residual, 2026-07-02): a window still OPEN at a run boundary carries its old-timeline ABSOLUTE deadline unclamped into the new run, so a run stopping within 1200T of its last SD byte could pin the entire next run's probes stale (the i327 artifact in a narrower shape); clamp on survival to t + (settleUntilT - tNow_old) — the remaining budget — which preserves both committed boundary pins (arithmetic checked in the PR 820 review).
   status: OPEN
+  kind: umbrella
+  owner: agent
+
+- id: i291a
+  title: Clamp the ENC settle window on run-boundary survival (PR 820 §3 residual)
+  description: |
+    A settle window still OPEN at a run boundary carries its OLD-timeline ABSOLUTE settleUntilT deadline unclamped into the new (smaller) run timeline, so a run stopping within sdInitSettleTStates of its last SD byte pins the entire next run's identity probes stale (the i327 artifact in a narrower shape). Fix (Pete, PR 820 review): on survival re-base the deadline to t + (settleUntilT - tNow_old) — the REMAINING budget — preserving the i242 back-to-back microseconds-apart catch while preventing whole-run re-arming. In enc28j60.go SetTState. Host-testable, no hardware.
+  status: IN_PROGRESS
   kind: leaf
   owner: agent
+  parent: i291
+
+- id: i291b
+  title: Measure real ENC28J60/shared-PIC settle time on hardware (unattended UDP bisection); set the emulator constant
+  description: |
+    Replace the conservative 1200-T-state sdInitSettleTStates constant in enc28j60.go (4x the documented ~50us — a pure emulator-fidelity knob that never runs on silicon) with a MEASURED value. Approach (Pete, 2026-06-30): a trinload-pushed Z80 probe does the &38 SD-init, waits N T-states, issues an ENC identity probe, and reports stale-vs-fresh over ETHERNET UDP markers (not screen, so unattended); bisect N between a too-small lower bound and a too-large upper bound to converge on the real settle. Then set the constant to measured + margin. Emulation-first: host-test the probe LOGIC before hardware (the emulator uses its 1200-T model, so validates report correctness). Self-serviceable: i266 TAPO power-cycle + i272 passwordless tcpdump. Also validates the shared-PIC settle model underpinning the SS8ag serve-crash interpretation. NOT required for correctness — fidelity refinement.
+  status: OPEN
+  kind: leaf
+  owner: agent
+  parent: i291
 
 - id: i292
   title: EXECUTE the Trinity SD-write saga cleanup (section E) — purge ALL misinformation + delete the reimplementation
