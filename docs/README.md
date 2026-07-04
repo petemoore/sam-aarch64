@@ -12,6 +12,9 @@ overview and the first document to read after the root `README.md`. Then:
   the healthy state.
 - [`notes/`](notes/README.md) — durable technical references, the `iN`/`qN`
   tracking registries, and the active milestone status doc.
+  - [`notes/backlog-size-over-time.md`](notes/backlog-size-over-time.md) —
+    one-off snapshot (2026-07-06): is the backlog growing? (Open work is flat;
+    DONE keeps pace.)
 - `sam/`, `comet/`, `saa1099/` — vendored third-party reference material
   (SAM Coupé ROM disassembly + Technical Manual + User Guide, the COMET
   assembler manual, the SAA1099 sound-chip datasheet). Not ours; never
