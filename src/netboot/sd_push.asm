@@ -122,10 +122,20 @@ HMPR:       equ &fb                     ; High Memory Page Register
 ; forward `equ`-of-a-later-label). NETBOOT_REAL_LISTREAD selects the real CMD17 list
 ; read in the seam (sd_csd.asm bd_list_read_hw) — the boot image's path, host-
 ; verified against the SD model.
+;
+; SEAM SCOPING (i305 / i303, option b): sd_push's production write path uses
+; bdos_seam.asm's LIST routines (bdos_find_free_record / bdos_claim_record) but
+; NOT its HWSAD/HRECORD rst-8 hooks -- the create-record write is own-LBA (see the
+; header's "WHY OWN-LBA"). Those hooks are therefore UNREACHABLE in sd_push's
+; production flow, yet kept linked deliberately: they are live in the serve /
+; client / http boot images (the WRQ record-write path), and sd_push_faithful_test.go
+; FACT 3/4 drive them (bdos_select_record / bdos_write_record) against real B-DOS
+; 1.5t using sd_push.bin as the vehicle. Do NOT gate them out of sd_push.bin --
+; that would delete real coverage (rule 5). Linked-dead here is harmless (fits 16 KB).
 ; ===========================================================================
                 include "encdrv.asm"          ; drv_init / drv_read / drv_write / enc_rx_reestablish
                 include "eeprom.asm"           ; find_index / read_chunk + value/chunk/name/part/total
-                include "bdos_seam.asm"        ; bdos_find_free_record / bdos_claim_record / BD_CLAIM_ENTRY / bdos_id_str
+                include "bdos_seam.asm"        ; bdos_find_free_record / bdos_claim_record / BD_CLAIM_ENTRY / bdos_id_str (+ HWSAD/HRECORD hooks: prod-dead here, see SEAM SCOPING)
                 include "sd_csd.asm"           ; csd_set_bd_records (BD_RECORDS + csd_base) / bd_list_read_hw / bd_record_write_hw
 
 ; The SAM MAC/IP live in the EEPROM reader's `chunk` buffer (eeprom.asm): the

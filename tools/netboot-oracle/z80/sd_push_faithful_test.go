@@ -25,6 +25,15 @@ import (
 //      — and ONLY there (data safety) — for a MULTI-SECTOR payload, with ZERO ENC
 //      re-arm between sectors.
 //
+// SCOPE (i305): FACT 3/4 exercise the SHARED bdos_seam.asm HWSAD/HRECORD hooks —
+// the record-DIRECTED write path the serve / client / http boot images use — with
+// sd_push.bin as the convenient test vehicle (it links the same seam source). They
+// are NOT sd_push's own-LBA production create-record path: i295 reversed sd_push OFF
+// HRECORD/HWSAD (the rst-8 crash class) to raw own-LBA writes, and that production
+// path is covered by the own-LBA facts. Keeping FACT 3/4 is why sd_push.bin keeps the
+// HWSAD/HRECORD block linked (see sd_push.asm "SEAM SCOPING", i305 option b) — do not
+// remove these without relocating the coverage to another seam-linking binary.
+//
 // THE FAITHFUL DISPATCH ARMING (the i293 emulator-fidelity fix). On real hardware a
 // trinload-pushed program is an EXTERNAL caller of B-DOS — NOT a routine running inside
 // a DOS call. The B-DOS hook dispatcher (&8319) reaches the handlers cleanly only in
