@@ -255,6 +255,44 @@ section-D stack landing on a page render left dirty, or an off-axis page collisi
 Once the assembler completes + `ret`s onto CHAIN_DONE, verify both files
 reconstruct → Phase A green → Phase B (serve + long names + on-screen messages).
 
+**FIX 4 debug harness note (StopPC aliases — use step brackets):** a page-agnostic
+`StopPC` on any assembler address in `&8000-&B341` also trips during the render
+(render's code spans `&8000-&D06D`), so you cannot `StopPC` on assembler symbols
+cleanly. Bracket by STEP COUNT instead: render finishes at ~62.5M steps, the crash
+is at ~62.77M — run `ContinueFrom` with `StepCap` = 62.6M, 62.7M, 62.75M… dumping
+`res.PC`/`res.A/BC/DE/HL` + `mac.Read(0x8000,…)` each time to watch the assembler
+run and pin the exact step the PC leaves the assembler's code for a text page.
+Cross-check against the standalone b2b boot (`assemble_disk_boot_faithful_test.go`,
+which assembles cleanly): dump its PC at the same relative step offset into the
+assemble and diff. Ruled out already: the boot-window section-D page is RAM (render
+used it for buffers, so it is not the DOS/ROM), so the assembler's `&C100` stack is
+not clobbering the DOS; and the assembler's paged_call (page 14) / trampoline
+(`&7E00`) are its own, distinct from render's (28 / the chain slots at `&7C00-7DF0`).
+Prime suspect: an off-axis page the assembler reads before (re)loading it, or a
+`paged_call`/jump landing on a page still holding render IN data.
+
+**FIX 4 localization (step-bracketed this session):** the assembler runs NORMALLY
+up to ~62.7M steps and crashes at ~62.77M — a ~70k-step window. Brackets:
+- @62.700M: PC=`&69BB` = a B-DOS SD block-read `INI` loop (port `&DF`, B=bytes
+  left) — a payload/IN body read in progress. Normal.
+- @62.765M: PC=`&5C96` (section B = the paged-in B-DOS DOS code), A=`&2F`, HL=`&79D4`
+  — the assembler is DEEP IN A B-DOS CALL. Normal, still running.
+- @62.770M: crashes — PC leaves for a render text page and HALTs (~`&B015`).
+So the crash is **inside / on return from a B-DOS operation** during the assembler's
+B-DOS-heavy come-up (its payload + IN loads). HGTHD (the directory read) SUCCEEDED,
+so it is not a wholesale SD failure — but a *later* B-DOS SD op wedges/mis-returns.
+**This is very likely the SD-COEXISTENCE issue resurfacing** (render's raw CMD17/
+CMD24 ops disturbing B-DOS's SPI/SD state — the earlier "red herring" was only a
+red herring for the DOS-clobber HANG; with the DOS now preserved, real B-DOS runs
+and a data/state read finally trips on it). Reconnect to the rule-8 B-DOS SD-driver
+investigation (in this session's git log / the memory): B-DOS steady-state SD ops
+rely on boot-time SPI-mode persistence and don't re-init; render's raw READ path
+re-issues `&38` every call while the write core is init-once. NEXT: (a) identify
+WHICH assembler B-DOS op fails (bracket to the exact step, read its result/error),
+(b) try resetting/re-establishing the SD to a B-DOS-compatible state at the top of
+`rdb_chain_next` (re-run B-DOS's HDINIT-equivalent, or make render's raw reads
+init-once so the boot SPI mode persists), then re-test.
+
 **Superseded fix menu (kept for context):** preserve the B-DOS DOS page across the
 reblock. Two options:
 1. **Save/restore the DOSFLG page.** Read `DOSFLG` (`&5BC2`) for the DOS page (`&1D`
