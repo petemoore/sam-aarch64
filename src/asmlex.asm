@@ -11,10 +11,12 @@
 ; span + base); B1b added the int64 value of numeric literals (parseIntInBase)
 ; and character literals (readCharLit); B1c added local-label refs (Nf/Nb,
 ; readNumberOrLocal); B1d adds string literals (readString). This completes the
-; editor lexer. cpp line-directives are out of scope (a preprocessor artifact,
-; like the host Preprocess pass — a line-start '#' lexes as a line comment).
-; asmlex is byte-faithful to Lex on the input domain spanned by the supported
-; tokens.
+; editor lexer. A line-start '#' is normally a line comment, EXCEPT a cpp line
+; directive (# <n> "<file>") emitted by the preprocessor, which is consumed for
+; position and emits no token (lex_try_line_directive, porting lexer.go's
+; tryConsumeLineDirective) — comments are preserved in the .tbn (i78), so a
+; `# line` kept as a comment would wrongly appear there. asmlex is byte-faithful
+; to Lex on the input domain spanned by the supported tokens.
 ;
 ; TOKEN RECORD (LEX_TOKS, 14 bytes each, in emission order):
 ;   kind:1 | span_ptr:2 LE | span_len:2 LE | base:1 | value:8 LE
@@ -171,7 +173,14 @@ lex_d_hash:
                 ld      a, (LEX_ATLINE)
                 or      a
                 jr      z, lex_hash_mid
-                jp      lex_line_comment_char ; '#' at line start: line comment
+                ; '#' at line start: a cpp line directive (# <n> "<file>") emitted
+                ; by the preprocessor is consumed and skipped (like the host lexer,
+                ; which tracks position from it — the on-SAM .tbn has no position
+                ; store, so it is simply dropped rather than kept as a comment).
+                ; Anything else beginning with '#' is a normal line comment.
+                call    lex_try_line_directive
+                jp      c, lex_next             ; consumed: emit the next real token
+                jp      lex_line_comment_char   ; not a directive: line comment
 lex_hash_mid:
                 call    lex_advance
                 ld      a, TOK_HASH
@@ -642,6 +651,117 @@ lex_lc_end:
                 ld      a, TOK_LINECOMMENT
                 ld      (LEX_RK), a
                 jp      lex_put
+
+; ---------------------------------------------------------------------------
+; lex_try_line_directive — try to consume a cpp line directive at LEX_CUR
+; (which points at a line-start '#'): `# <digit>+ "<file>"` then newline/EOF.
+; Ports lexer.go tryConsumeLineDirective; the on-SAM .tbn does not track source
+; positions (v1 reports expanded-text lines), so the directive is validated and
+; SKIPPED — never stored — matching the host, which consumes it for position
+; tracking and emits no token.
+;   In:  LEX_CUR -> '#'; LEX_END = one past last source byte.
+;   Out: CF=1 with LEX_CUR advanced past the directive (and its newline) if a
+;        well-formed directive was consumed; CF=0 with LEX_CUR unchanged else.
+; ---------------------------------------------------------------------------
+lex_try_line_directive:
+                ld      hl, (LEX_CUR)
+                inc     hl                  ; past '#'
+                ; require a space after '#'
+                call    ltd_in_range
+                jr      nc, ltd_fail
+                ld      a, (hl)
+                cp      &20
+                jr      nz, ltd_fail
+ltd_ws1:                                    ; skip whitespace (space/tab)
+                call    ltd_in_range
+                jr      nc, ltd_fail
+                ld      a, (hl)
+                cp      &20
+                jr      z, ltd_ws1_adv
+                cp      9
+                jr      nz, ltd_after_ws1
+ltd_ws1_adv:
+                inc     hl
+                jr      ltd_ws1
+ltd_after_ws1:                              ; require at least one digit
+                cp      &30
+                jr      c, ltd_fail
+                cp      &3A
+                jr      nc, ltd_fail
+ltd_digits:
+                inc     hl
+                call    ltd_in_range
+                jr      nc, ltd_fail        ; digits must be followed by ` "file"`
+                ld      a, (hl)
+                cp      &30
+                jr      c, ltd_after_digits
+                cp      &3A
+                jr      nc, ltd_after_digits
+                jr      ltd_digits
+ltd_after_digits:                           ; require a space (host: exactly ' ')
+                cp      &20
+                jr      nz, ltd_fail
+ltd_ws2:                                    ; skip whitespace before the quote
+                call    ltd_in_range
+                jr      nc, ltd_fail
+                ld      a, (hl)
+                cp      &20
+                jr      z, ltd_ws2_adv
+                cp      9
+                jr      nz, ltd_after_ws2
+ltd_ws2_adv:
+                inc     hl
+                jr      ltd_ws2
+ltd_after_ws2:                              ; require opening quote
+                cp      &22
+                jr      nz, ltd_fail
+                inc     hl
+ltd_path:                                   ; scan to the closing quote
+                call    ltd_in_range
+                jr      nc, ltd_fail
+                ld      a, (hl)
+                cp      &22
+                jr      z, ltd_path_end
+                cp      10                  ; newline before close -> not a directive
+                jr      z, ltd_fail
+                inc     hl
+                jr      ltd_path
+ltd_path_end:
+                inc     hl                  ; past closing quote
+ltd_ws3:                                    ; skip trailing whitespace (sp/tab/CR)
+                call    ltd_in_range
+                jr      nc, ltd_commit      ; EOF after directive: valid (no newline)
+                ld      a, (hl)
+                cp      &20
+                jr      z, ltd_ws3_adv
+                cp      9
+                jr      z, ltd_ws3_adv
+                cp      13
+                jr      z, ltd_ws3_adv
+                cp      10                  ; require a terminating newline
+                jr      nz, ltd_fail
+                inc     hl                  ; consume the newline
+                jr      ltd_commit
+ltd_ws3_adv:
+                inc     hl
+                jr      ltd_ws3
+ltd_commit:
+                ld      (LEX_CUR), hl       ; skip the whole directive
+                scf
+                ret
+ltd_fail:
+                or      a                   ; CF=0
+                ret
+
+; ltd_in_range — CF=1 iff HL < LEX_END (a byte is available at HL).  Preserves
+; HL and A; uses DE and the flags.
+ltd_in_range:
+                push    hl
+                ld      de, (LEX_END)
+                or      a
+                sbc     hl, de              ; CF=1 iff HL < LEX_END
+                pop     hl
+                ret
 
 ; ---------------------------------------------------------------------------
 ; lex_block_comment — TOK_BLOCKCOMMENT, body between "/*" and "*/".
