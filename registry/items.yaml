@@ -6367,7 +6367,7 @@
   title: Serve release.src + release.img over TFTP from the demo (network-verifiable end-to-end proof)
   description: |
     Serve BOTH produced files (release.src ~417KB, release.img ~21KB) over TFTP so a host fetch confirms the run. SCOPE CORRECTION (2026-07-04, i365cd investigation): the server serves ONLY <=1518B files staged in a RAM arena (nb_walk_entry SKIPS files >=16KB, NB_FILE_MAX=1518; send_next_data reads SRC_PTR+offset from RAM, 16-bit). Both demo outputs are oversize -> this needs NEW large-file serve-from-disk: nb_walk_entry records a disk-backed descriptor {name,start,size} for large CODE files; send_next_data follows the MGT sector chain (510 data + 2 link bytes) from a 32-bit XFER_OFFSET, reading each record sector via bd_record_read_hw (CMD17, i362, exists) and re-blocking 510->512 into TFTP DATA blocks. Long TFTP names via NBMANIFEST (buildManifest, exists). Independently gateable: seed a record with a large file via seedRecordFromMGT, boot the server, assert byte-exact serve (netboot_server_faithful_test.go template). Design: docs/specs/i365-demo-architecture.md (Wall 2).
-  status: OPEN
+  status: IN_PROGRESS
   kind: leaf
   owner: agent
   parent: i365
