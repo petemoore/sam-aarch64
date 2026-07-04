@@ -200,18 +200,37 @@ correctly, but the operation FAILS and B-DOS drops into its error-prompt "press 
 key" loop (hangs in emulation, no key).
 
 **FIX 2 — NEXT (the directory clobber).** HGTHD(asmdemo) fails "not found" because
-`render_disk_write_dirent` (`render_disk_sink.asm`) **zeroes the whole linearSec-0
+`render_disk_write_dirent` (`render_disk_sink.asm:422`) **zeroes the whole linearSec-0
 directory sector** when it writes RELEASESRC — leaving a **type-0 (empty) entry in
-slot 1** that halts B-DOS's directory scan BEFORE `asmdemo` (linearSec 1). Fix:
-append RELEASESRC into the first FREE dir slot (RMW that sector), preserving all
-existing entries + the `BDOS`@232 stamp — do NOT zero linearSec 0. This is also a
-real shared-card data-safety fix (render currently destroys other files' entries).
-Update b2a's `TestRenderDiskBootFaithful` to reconstruct RELEASESRC by name
-(`reconstructRecordFileByName`) since it will no longer be at linearSec-0 slot 0.
-(A confounded experiment writing the dirent to an empty linearSec confirmed the
-DOS fix but corrupted RELEASESRC's own entry, so it did NOT cleanly validate FIX 2
-— implement the real free-slot writer.) After FIX 2, HGTHD should find asmdemo,
-the chain loads+runs the assembler, and Phase A's gate should pass.
+slot 1**. **Confirmed B-DOS 1.5t HALTS its directory scan at the first type-0 entry**
+(that's why asmdemo at linearSec 1 becomes invisible → HGTHD "not found" → the
+KYIP/WAITKEY error prompt). So RELEASESRC must land in the FIRST FREE slot with NO
+type-0 before it — a fixed later linearSec won't do (it leaves the earlier gap).
+
+Worked-out implementation (do this next session with fresh context):
+- **Build the 256-byte entry at `RDS_WORK_BUF+0` as now, but** (a) zero only 256
+  bytes not 512, and (b) **drop the `BDOS`@232 stamp** — it lives in linearSec 0,
+  which we now PRESERVE. Keep the field code + `rds_fill_bitmap` unchanged.
+- **Scan for the first free slot:** for linearSec L=0..39, `bd_record_read_hw` the
+  sector into `RDS_FIRST_BUF` (spent after the +0xD3 header-cache copy — so scan
+  AFTER building the entry), test byte[0] (slot0 type) then byte[256] (slot1 type);
+  first type==0 → (L, offset O). RMW: `ldir` the 256-byte entry from `RDS_WORK_BUF`
+  into `RDS_FIRST_BUF+O`, then `bd_record_write_hw` `RDS_FIRST_BUF` at linearSec L.
+- **BUILD-FLAG GOTCHA:** `bd_record_read_hw` needs `NETBOOT_WANT_RECORD_READ`, which
+  `render_disk_boot` has but **`render_disk_probe` does NOT** (it's `WRITE`-only,
+  `Makefile:1272`). Either add `-D NETBOOT_WANT_RECORD_READ=1` to the probe build
+  (simplest — the probe's scratch record is ~empty so the scan lands RELEASESRC at
+  linearSec-0 slot 0, keeping its test working), or gate the scan under that define
+  and keep the old linearSec-0 write for the probe. Prefer adding the flag.
+- **Test updates:** b2a's `TestRenderDiskBootFaithful` uses `reconstructRecordFile`
+  (linearSec-0 slot 0) + `assertDirEntry` — switch both to by-NAME lookup
+  (`reconstructRecordFileByName`, and an assertDirEntry variant that scans for the
+  "RELEASESRC" entry) since it's no longer at slot 0. Check the probe's test too.
+
+After FIX 2: HGTHD finds asmdemo → the chain loads+runs the assembler → Phase A's
+gate should pass (then verify the assembler ret lands on CHAIN_DONE and both files
+reconstruct). This is a real shared-card data-safety fix too (render currently
+destroys the first directory sector's other files).
 
 **Superseded fix menu (kept for context):** preserve the B-DOS DOS page across the
 reblock. Two options:
