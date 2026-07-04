@@ -140,6 +140,78 @@ func TestWaitReadyHealthyDoesNotTimeOut(t *testing.T) {
 	}
 }
 
+// TestWrBufMemBoundedOnStuckBusy proves the per-byte ENC TX buffer-write busy-poll
+// (wr_buf_lp) is now BOUNDED (i291b), the direct sibling of the wait_ready bound above.
+// This is the loop behind the settle_probe hardware hang: a heavy SD-init (OUT &DC,&38)
+// holds &DC bit 3 BUSY past drv_write's leading wait_ready, and the previously-unbounded
+// wr_buf_lp then spun forever transmitting — no frame egressed, trinload never resumed.
+// With the bound, drv_write must TERMINATE (return rather than hit the runaway cap) and
+// set enc_timed_out. StuckBusy models the wedged controller; a healthy TX never reaches
+// the budget (TestDrvWriteFrameOnWire is the healthy positive control).
+func TestWrBufMemBoundedOnStuckBusy(t *testing.T) {
+	mac := loadEnc(t)
+	enc := z80h.NewENC28J60()
+	enc.AttachSD(z80h.CSDForV2(0x001D59))
+	enc.StuckBusy = true // &DC BUSY (bit 3) never clears
+	mac.AttachIO(enc)
+
+	flag := sym(t, mac, "enc_timed_out")
+	mac.Write(flag, []byte{0})
+
+	// HL=source, DE=byte count. Under StuckBusy wr_buf_lp bails before the first OUTI, so
+	// the source is never dereferenced; the contract under test is termination.
+	if _, err := mac.CallEntry("wr_buf_mem", z80h.Entry{HL: 0x7000, DE: 4}); err != nil {
+		t.Fatalf("wr_buf_mem under StuckBusy did not terminate (wr_buf_lp still unbounded?): %v", err)
+	}
+	if got := mac.Read(flag, 1)[0]; got != 1 {
+		t.Fatalf("enc_timed_out = %d after a stuck-BUSY wr_buf_mem, want 1", got)
+	}
+}
+
+// TestRdBufMemBoundedOnStuckBusy proves the per-byte ENC RX/status buffer-read busy-poll
+// (rd_buf_lp) is now BOUNDED (i291b). The probe reads TX status through rd_buf_mem after
+// a transmit, so an unbounded spin here was part of the same hang. Same shape as
+// TestWrBufMemBoundedOnStuckBusy.
+func TestRdBufMemBoundedOnStuckBusy(t *testing.T) {
+	mac := loadEnc(t)
+	enc := z80h.NewENC28J60()
+	enc.AttachSD(z80h.CSDForV2(0x001D59))
+	enc.StuckBusy = true
+	mac.AttachIO(enc)
+
+	flag := sym(t, mac, "enc_timed_out")
+	mac.Write(flag, []byte{0})
+
+	if _, err := mac.CallEntry("rd_buf_mem", z80h.Entry{HL: 0x7000, DE: 8}); err != nil {
+		t.Fatalf("rd_buf_mem under StuckBusy did not terminate (rd_buf_lp still unbounded?): %v", err)
+	}
+	if got := mac.Read(flag, 1)[0]; got != 1 {
+		t.Fatalf("enc_timed_out = %d after a stuck-BUSY rd_buf_mem, want 1", got)
+	}
+}
+
+// TestWaitSentBoundedWhenTxNeverCompletes proves the TX-complete poll (wait_sent) is now
+// BOUNDED (i291b). Its hang is the link-down case: on a HEALTHY &DC bus, if the transmit
+// never completes (TXIF/TXERIF never set — no cable, or an aborted frame after a
+// buffer-write bail), the previously-unbounded loop spun forever. No transmit is issued
+// here, so TXIF stays clear; wait_sent (a self-contained entry that inits its own
+// ENC_BUSY_LIMIT budget) must exhaust it and RETURN, setting enc_timed_out.
+func TestWaitSentBoundedWhenTxNeverCompletes(t *testing.T) {
+	mac := loadEnc(t)
+	enc := z80h.NewENC28J60()
+	mac.AttachIO(enc) // healthy bus: BUSY clears; only TXIF-never-set drives the timeout
+
+	flag := sym(t, mac, "enc_timed_out")
+	mac.Write(flag, []byte{0})
+
+	if _, err := mac.CallEntry("wait_sent", z80h.Entry{StepCap: 6_000_000}); err != nil {
+		t.Fatalf("wait_sent with TXIF never set did not terminate (still unbounded?): %v", err)
+	}
+	if got := mac.Read(flag, 1)[0]; got != 1 {
+		t.Fatalf("enc_timed_out = %d after wait_sent gave up on an unconfirmed TX, want 1", got)
+	}
+}
+
 // TestDrvWriteFrameOnWire is increment goal (2): a frame handed to drv_write
 // lands byte-exact on the virtual wire (the emulated TX buffer).
 func TestDrvWriteFrameOnWire(t *testing.T) {

@@ -80,10 +80,13 @@ func TestBootRecordFromRealFirstBootTrinloadIdle(t *testing.T) {
 	// --- Phase 1: the WHOLE first boot, one continuous run: reset -> ROM ->
 	// bootblock -> B-DOS init -> decision -> fallback -> bdos_boot_record(3)
 	// -> ALHK loads trinload -> trinload read_loop.
+	readLoop := trinloadSym(t, "read_loop")
+	chunkVar := int(trinloadSym(t, "chunk"))
+
 	from1 := len(*lg)
 	res1, err := mac.RunBootFrom(0x0000, z80h.Entry{
 		StepCap: 200_000_000, FrameIntPeriod: 60000,
-		StopPC: trinloadReadLoop,
+		StopPC: readLoop,
 		Trace:  func(pc uint16) { lastPC = pc },
 	})
 	if err != nil {
@@ -94,7 +97,7 @@ func TestBootRecordFromRealFirstBootTrinloadIdle(t *testing.T) {
 		res1.PC, res1.ReachedStop, res1.Steps, dir1, body1, out1, mac.Pager().LMPR, mac.Pager().HMPR)
 	if !res1.ReachedStop {
 		t.Fatalf("the real first boot did not reach trinload's read_loop (&%04X): finalPC=&%04X halted=%v",
-			trinloadReadLoop, res1.PC, res1.Halted)
+			readLoop, res1.PC, res1.Halted)
 	}
 	if body1 == 0 {
 		t.Fatal("phase 1 read no record-3 BODY sectors — trinload cannot have been loaded from the card")
@@ -103,8 +106,8 @@ func TestBootRecordFromRealFirstBootTrinloadIdle(t *testing.T) {
 	// trinload's adopted identity (settings buffer in page 0).
 	var samMAC [6]byte
 	var samIP [4]byte
-	copy(samMAC[:], mac.Pager().RAM[0][trinloadChunkVar-0x4000:])
-	copy(samIP[:], mac.Pager().RAM[0][trinloadChunkVar-0x4000+6:])
+	copy(samMAC[:], mac.Pager().RAM[0][chunkVar-0x4000:])
+	copy(samIP[:], mac.Pager().RAM[0][chunkVar-0x4000+6:])
 	t.Logf("phase 1: trinload idle from the REAL first boot; identity MAC=% X IP=%d.%d.%d.%d",
 		samMAC[:], samIP[0], samIP[1], samIP[2], samIP[3])
 
