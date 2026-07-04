@@ -1736,9 +1736,16 @@ netboot-z80-routines: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-bu
 # netboot-eeprom-flash-chunk1 joins the set only when the gitignored private
 # bootloader data (q55) is present — its consuming test is
 # SKIP_PRIVATE_TESTS-gated, and CI (no private data) can't build it.
+#
+# prep-reader-z80 is a BUILD guard, not a loaded artifact: the real .include
+# reader (prep_sam_reader, i31b-b3b) is behaviourally tested by the dev-only
+# SAM-fidelity harness (tools/z80-test-harness-go, not a CI gate), so listing it
+# here is the only thing that keeps a build-break in prep_reader_driver.asm /
+# prep_sam_reader.asm from reaching main uncaught. Its SimCoupé behavioural gate
+# lands with the end-to-end .include exercise (i371).
 NETBOOT_PRIVATE_ARTIFACTS := $(if $(wildcard src/netboot/bootloader_chunk1_data.asm),netboot-eeprom-flash-chunk1)
 .PHONY: netboot-z80-artifacts
-netboot-z80-artifacts: netboot-z80-routines netboot-http-boot-debug netboot-http-smoke-boot editmodel-z80 editmodel-paged-z80 pagepool-z80 spill-z80 viewport-z80 asmlex-z80 asmparse-z80 asmprep-z80 asmparse-paged-z80 parse-paged-driver-z80 chain-paged-driver-z80 b8d-chain-paged-driver-z80 pass1-ir-z80 compact-ir-z80 compact-ser-z80 sysreg-data netboot-serve-record netboot-server-record netboot-server-largefile-record netboot-server-largefile-manifest-record disk-record tbn-render-driver-z80 netboot-render-disk-probe netboot-render-disk-boot-record netboot-assemble-disk-boot-record netboot-assemble-first-demo-record netboot-assemble-first-serve-record release-unstripped-tbn $(NETBOOT_PRIVATE_ARTIFACTS)
+netboot-z80-artifacts: netboot-z80-routines netboot-http-boot-debug netboot-http-smoke-boot editmodel-z80 editmodel-paged-z80 pagepool-z80 spill-z80 viewport-z80 asmlex-z80 asmparse-z80 asmprep-z80 prep-reader-z80 asmparse-paged-z80 parse-paged-driver-z80 chain-paged-driver-z80 b8d-chain-paged-driver-z80 pass1-ir-z80 compact-ir-z80 compact-ser-z80 sysreg-data netboot-serve-record netboot-server-record netboot-server-largefile-record netboot-server-largefile-manifest-record disk-record tbn-render-driver-z80 netboot-render-disk-probe netboot-render-disk-boot-record netboot-assemble-disk-boot-record netboot-assemble-first-demo-record netboot-assemble-first-serve-record release-unstripped-tbn $(NETBOOT_PRIVATE_ARTIFACTS)
 
 ci-netboot-z80: netboot-z80-artifacts
 	cd tools/sampage && go test ./...
