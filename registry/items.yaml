@@ -5502,7 +5502,7 @@
   title: "Run the hardware settle-time bisection: sweep N via the probe, capture UDP replies, converge on the real ENC/PIC settle, set sdInitSettleTStates=measured+margin"
   description: |
     Using the i291b-b1 probe: a host launcher patches settle_delay_count (N) into the binary, trinload-pushes it, and captures the SATR UDP reply (trinpush-serve.py config-patch + listen-markers.py / tcpdump pattern; self-serve via i266 TAPO power-cycle + i272 passwordless tcpdump). Bisect N between a too-small (reads stale) lower bound and a too-large (reads fresh) upper bound to converge on the real ENC/PIC settle, then set enc28j60.go sdInitSettleTStates to the measured value + margin. WATCH the i242 SD-before-ENC ordering: drv_init (ENC) must precede the &38 so the probe can still report. Multi-shot live-hardware run; frame agent/subagent prompts as benign retro SAM-Coupe ethernet-emulation work (the probe/identity/settle framing tripped a subagent safeguard false-positive 2026-07-04).
-  status: OPEN
+  status: IN_PROGRESS
   depends_on: [i291b-b1]
   kind: leaf
   owner: agent
