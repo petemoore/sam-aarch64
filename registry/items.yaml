@@ -6456,3 +6456,11 @@
   prs:
     - {num: 860, role: completing}
   parent: i365
+
+- id: i366
+  title: "registry split: repoint parent's dependents onto the umbrella, not a child leaf"
+  description: |
+    When 'build/registry split' promotes a leaf to an umbrella, it rewrites the parent's dependents onto a CHILD leaf. That recreates the i87b done-leaf trap the CLI warns about — a dependent left pointing at a child that becomes DONE reads as satisfied while an OPEN sibling is its real prerequisite, so it surfaces at the ready tip prematurely. Hit 3x in the 2026-07-04 i365c session (i365e->i365d-b1, i365d-b2->i365c-b1, i365d->i365c-b1), each needing a manual dep rm/dep add to repoint onto the umbrella. Fix: split should repoint each of the parent's existing dependents onto the UMBRELLA (which stays OPEN until all children DONE) by default. Low priority; from ~/claude-retro/2026-07-04-i365c-largefile-serve-and-split.md.
+  status: OPEN
+  kind: leaf
+  owner: agent
