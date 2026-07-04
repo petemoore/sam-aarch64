@@ -1792,6 +1792,15 @@ check-hosttest-carveouts:
 check-trinity-authority:
 	bash tools/check-trinity-authority.sh
 
+# check-attachbdos-ledger — the i311 AttachBDOS mock-retirement ratchet. The
+# per-file `.AttachBDOS(` call-site counts are pinned in tools/attachbdos-ledger.txt
+# and may only shrink toward zero: a new/un-listed mock use fails, and eliminating
+# one requires ratcheting the ledger down. Retires the mock-substitutes-for-real
+# anti-pattern (CLAUDE.md rule 8); migration to the faithful rig is i311b (gated on i254).
+.PHONY: check-attachbdos-ledger
+check-attachbdos-ledger:
+	bash tools/check-attachbdos-ledger.sh
+
 # bdos15a-bytematch — reassemble the reconstructed B-DOS 1.5a source (pyz80) and
 # assert byte-identity with the freeware bdos15a.bin. This proves the pyz80
 # toolchain reproduces Edwin Blink's binary exactly (the i304a foundation:

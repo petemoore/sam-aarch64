@@ -1,0 +1,48 @@
+# attachbdos-ledger.txt — the shrink-to-zero ledger for the i311 AttachBDOS
+# mock-retirement guard (tools/check-attachbdos-ledger.sh).
+#
+# The AttachBDOS Go mock (tools/netboot-oracle/z80/bdos_store.go: BDOSStore +
+# Machine.AttachBDOS) stands in for real B-DOS by registering an RST 8 double.
+# It HID the serve/WRQ write-path failure across the SD-write saga (i274 axis A,
+# "mock-substitutes-for-real"). The authority for B-DOS behaviour is real Z80
+# B-DOS in emulation — the faithful rig (LoadROMImage + Colin's ROM + B-DOS 1.5t,
+# e.g. sd_push_faithful_test.go), never this mock (CLAUDE.md rule 8;
+# feedback_trinity_sd_write_settled_truths: "never use the AttachBDOS mock to
+# test B-DOS behaviour").
+#
+# So this ledger + guard make the retirement SYSTEMIC: the count of mock-based
+# test uses can only RATCHET DOWN, never up. A NEW or un-listed `.AttachBDOS(`
+# call site FAILS the build (don't add mock-based B-DOS tests — use the faithful
+# rig). The end state is an empty ledger, at which point the mock itself
+# (bdos_store.go) is deleted.
+#
+# This is NOT a list of "approved forever" exceptions — it is the shrinking set
+# of mock uses still awaiting migration to the faithful rig under i311b (which is
+# GATED ON i254: the faithful rig is SKIP_PRIVATE_TESTS-gated and does not run in
+# CI until i254 makes the repo's CI materialise the private captures, so a mock
+# test cannot be migrated to it before then without deleting CI coverage).
+#
+# Format: one "<count> <path>" line per _test.go file that still contains
+# AttachBDOS call sites, where <count> is the EXACT number of `.AttachBDOS(`
+# call sites in that file. Blank lines and #-comments are ignored.
+#
+# The guard exact-matches this ledger against the live tree and FAILS on ANY
+# divergence: more than listed (or an un-listed file) = a NEW mock use was added;
+# fewer than listed (or a stale entry) = a use was migrated but the ledger wasn't
+# ratcheted down. Baseline at adoption (i311a): 25 uses across 14 files, all
+# pending migration under i311b.
+
+2 tools/netboot-oracle/z80/bdos_boot_test.go
+2 tools/netboot-oracle/z80/bdos_card_test.go
+2 tools/netboot-oracle/z80/bdos_store_test.go
+3 tools/netboot-oracle/z80/bdos_write_test.go
+2 tools/netboot-oracle/z80/boot_record_test.go
+1 tools/netboot-oracle/z80/http_main_dbg_test.go
+1 tools/netboot-oracle/z80/http_main_loop_test.go
+1 tools/netboot-oracle/z80/http_main_store_test.go
+3 tools/netboot-oracle/z80/netboot_fetch_boot_test.go
+1 tools/netboot-oracle/z80/netboot_serve_boot_test.go
+3 tools/netboot-oracle/z80/netboot_serve_wrq_record_test.go
+1 tools/netboot-oracle/z80/raw_record_sink_test.go
+1 tools/netboot-oracle/z80/tcp_conn_bodysink_test.go
+2 tools/netboot-oracle/z80/trinity_autoboot_verify_test.go

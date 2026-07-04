@@ -283,6 +283,8 @@ jobs:
         run: make check-hosttest-carveouts
       - name: trinity-authority provenance ledger (i273)
         run: make check-trinity-authority
+      - name: AttachBDOS mock-retirement ratchet (i311)
+        run: make check-attachbdos-ledger
       - name: deploy-guard detection test (i336)
         run: make deploy-guard-test
 
