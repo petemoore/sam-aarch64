@@ -5503,7 +5503,16 @@
   description: |
     Using the i291b-b1 probe: a host launcher patches settle_delay_count (N) into the binary, trinload-pushes it, and captures the SATR UDP reply, bisecting N (stale lower / fresh upper) to converge on the real ENC/PIC settle, then set enc28j60.go sdInitSettleTStates = measured + margin. LAUNCHER BUILT (2026-07-04): tools/hardware-shot/settle-bisect.py on branch i291b-settle-bisect (WIP, pushed, NOT merged) — --selftest proves the SATR capture+classify path; --single N is a diagnostic shot. BLOCKED by a hardware finding: the settle_probe HANGS on real hardware before reporting (a live push/execute succeeded once, but no SATR was captured and trinload never resumed → hang before test_report/tr_terminate). Prime suspect drv_wait_link (fresh drv_init resets the PHY; silicon link-renegotiation >> the emulator's instant link-up); secondary: test_report's SATR TX never hardware-proven, and the i228 tr_terminate hw-vs-emu branch. Also: trinload push-readiness lags ping (wait longer after boot before the first shot). NEXT (emulation-first): triage the hang in koron-go (drop drv_wait_link? model a slow link-up?), A/B port_probe (shares drv_init+drv_wait_link+test_report) to prove the TX path on hardware, THEN resume the bisection. Self-serve via i266 TAPO + i272 tcpdump. See the settle-bisect.py HARDWARE FINDINGS header.
   status: OPEN
-  depends_on: [i291b-b1]
+  depends_on: [i291b-b1, i291b-b3]
+  kind: leaf
+  owner: agent
+  parent: i291b
+
+- id: i291b-b3
+  title: "Root-cause + fix the settle_probe hardware hang (unbounded ENC shared-&DC busy-polls) so the probe reports instead of hanging"
+  description: |
+    i291b-b2's bisection is blocked: settle_probe HANGS on real hardware before reporting (no SATR captured, trinload never resumed). Emulation passes (b1), so this is a hardware-only symptom = an emulator-fidelity gap to close (rule 7). LEADING HYPOTHESIS (code-traced 2026-07-04): the shared-controller busy-polls in the ENC TX/RX path are UNBOUNDED, unlike wait_ready (bounded by ENC_BUSY_LIMIT, i280b-b2c) and sdc_wait_ready (i241) -- specifically wr_buf_lp/rd_buf_lp (encdrv.asm per-byte &DC bit-3 poll) and rphy_wait/wr_phy_wait (MII MISTAT.BUSY poll). The probe issues OUT (&DC),&38 (heavy SD-init wake) then reports over the SAME shared-&DC ENC bus; the emulator's ~1200 T settle model lets the report egress, but a real SD-init holds &DC busy far longer, so test_report's wr_buf_lp spins forever = the hang (matches: no SATR + no trinload resume). Competing suspects (drv_wait_link/rphy_wait spin) share the same root: an unbounded busy-poll. TASK (emulation-first): (1) VERIFY the root-cause independently + diff the B-DOS 1.5t SD-init AUTHORITY (rule 8) for what &38 does to &DC-busy + its real duration; (2) model a wedged/prolonged &DC-busy in koron-go so the probe HANGS in emulation (reproduce the hardware symptom = close the fidelity gap); (3) extend the i280b bounded-busy-poll hardening to the remaining unbounded ENC polls (hard hang -> recoverable timeout; bound only bites on a wedged bus, healthy paths unaffected) AND/OR drain the shared controller (bounded) before test_report; (4) prove the probe now REPORTS (with a timeout marker if wedged) in emulation. Hardware confirmation rides b2's bisection shot on the fixed probe. Blast radius: encdrv.asm is shared by hardware-proven serve/client/http -- §3 + SimCoupe gate + hardware re-validation matter.
+  status: IN_PROGRESS
   kind: leaf
   owner: agent
   parent: i291b
