@@ -58,10 +58,10 @@ settle_probe_main:
                 call    drv_wait_link           ; proactive transmit -> wait for PHY link-up (i127)
 
                 ; Arm the settle window: the heavy &38 SD-init wake. OUT (C),A with
-                ; BC=&00DC — the same select idiom as chk_trinity's OUT (C),H. From
-                ; here the PIC is settling and no further SD traffic follows, so the
-                ; deadline anchors at this &38.
-                ld      bc, &00DC               ; B=0, C=&DC (Trinity select port)
+                ; BC = SD_CTL (&00DC, B=0) — the same select idiom as chk_trinity's
+                ; OUT (C),H. From here the PIC is settling and no further SD traffic
+                ; follows, so the deadline anchors at this &38.
+                ld      bc, SD_CTL              ; B=0, C=&DC (Trinity select port)
                 ld      a, SD_INIT
                 out     (c), a
 
