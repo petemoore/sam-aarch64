@@ -202,6 +202,156 @@ func genProg(r *rand.Rand, b *strings.Builder, depth int) {
 	}
 }
 
+// prepCasesB2a are the brick-2a fixtures: macro DEFINITIONS that are never
+// invoked. A definition is consumed (emits nothing), so frontend.Preprocess and
+// prep_run must still agree byte-for-byte; invocation is Brick 2b.
+var prepCasesB2a = []struct {
+	name string
+	src  string
+	path string
+}{
+	{"define-consumed", ".macro foo\n  body_line\n.endm\nafter\n", "x.s"},
+	{"define-empty-body", ".macro foo\n.endm\nafter\n", "x.s"},
+	{"define-with-params", ".macro strb val, addr\n  x \\val\n  y \\addr\n.endm\nafter\n", "x.s"},
+	{"define-leading-comma", ".macro foo, a, b\n  body\n.endm\nafter\n", "x.s"},
+	{"define-comment-on-header", ".macro foo a // an arg\n  body\n.endm\nafter\n", "x.s"},
+	{"define-tab-separated", ".macro\tfoo a\n  body\n.endm\nafter\n", "x.s"},
+	{"define-preceded-by-set", ".set U, 1\n.macro foo\n  body\n.endm\nafter\n", "x.s"},
+	{"define-inside-active-if", ".set U, 1\n.if U\n.macro foo\n  x\n.endm\n.endif\nafter\n", "x.s"},
+	{"define-inside-inactive-if", ".set U, 0\n.if U\n.macro foo\n  x\n.endm\n.endif\nafter\n", "x.s"},
+	{"multiple-defines", ".macro a\n  aa\n.endm\n.macro b p\n  bb \\p\n.endm\nafter\n", "x.s"},
+	{"define-body-has-directive-text", ".macro foo\n  .set INNER, 1\n  .if INNER\n  q\n  .endif\n.endm\nafter\n", "x.s"},
+
+	// Error cases — Go returns an error, Z80 sets PREP_ERR.
+	{"err-unterminated-macro", ".macro foo\n  body\n", "x.s"},
+	{"err-nested-macro", ".macro foo\n.macro bar\n.endm\n.endm\n", "x.s"},
+	{"err-endm-outside-macro", "code\n.endm\n", "x.s"},
+	{"err-macro-missing-name", ".macro \n.endm\n", "x.s"},
+}
+
+func TestAsmprepBrick2aDefine(t *testing.T) {
+	for _, tc := range prepCasesB2a {
+		t.Run(tc.name, func(t *testing.T) {
+			want, wantErr := frontend.Preprocess([]byte(tc.src), tc.path, frontend.PreprocessOptions{})
+			m := loadAsmprep(t)
+			got, gotErr := prepZ80(t, m, []byte(tc.src), tc.path)
+
+			if wantErr != nil {
+				if !gotErr {
+					t.Fatalf("expected error (Go: %v), prep_run succeeded; got=%q", wantErr, got)
+				}
+				return
+			}
+			if gotErr {
+				t.Fatalf("prep_run reported error, Go succeeded; want=%q", want)
+			}
+			if !bytes.Equal(got, want) {
+				t.Fatalf("output mismatch:\n got=%q\nwant=%q", got, want)
+			}
+		})
+	}
+}
+
+// storedMacro reads MACRO_TAB record k back from the harness, decoding the
+// 12-byte layout {name_ptr:2, name_len:1, nparams:1, params_ptr:2, nbody:2,
+// body_ptr:2, defline:2}. This validates the brick-2a storage format directly
+// (its body/param contents are otherwise not observable until brick 2b invokes
+// a macro), de-risking the reader that 2b will build on.
+type storedMacro struct {
+	name    string
+	params  []string
+	nbody   int
+	defline int
+}
+
+func readStoredMacro(mac *z80h.Machine, k int) storedMacro {
+	tab, _ := mac.Sym("MACRO_TAB")
+	rec := mac.Read(tab+uint16(k*12), 12)
+	namePtr := uint16(rec[0]) | uint16(rec[1])<<8
+	nameLen := int(rec[2])
+	nparams := int(rec[3])
+	paramsPtr := uint16(rec[4]) | uint16(rec[5])<<8
+	nbody := int(uint16(rec[6]) | uint16(rec[7])<<8)
+	defline := int(uint16(rec[10]) | uint16(rec[11])<<8)
+	sm := storedMacro{name: string(mac.Read(namePtr, nameLen)), nbody: nbody, defline: defline}
+	for i := 0; i < nparams; i++ {
+		pe := mac.Read(paramsPtr+uint16(i*4), 4)
+		pptr := uint16(pe[0]) | uint16(pe[1])<<8
+		plen := int(uint16(pe[2]) | uint16(pe[3])<<8)
+		sm.params = append(sm.params, string(mac.Read(pptr, plen)))
+	}
+	return sm
+}
+
+func TestAsmprepBrick2aStorage(t *testing.T) {
+	type want struct {
+		count  int
+		macros []storedMacro
+	}
+	cases := []struct {
+		name string
+		src  string
+		want want
+	}{
+		{
+			"single-no-params",
+			".macro foo\n  a\n  b\n.endm\n",
+			want{count: 1, macros: []storedMacro{{name: "foo", params: nil, nbody: 2, defline: 1}}},
+		},
+		{
+			"params-and-defline",
+			"pad\n.macro strb val, addr\n  x\n.endm\n",
+			want{count: 1, macros: []storedMacro{{name: "strb", params: []string{"val", "addr"}, nbody: 1, defline: 2}}},
+		},
+		{
+			"leading-comma-params",
+			".macro foo, a, b\n.endm\n",
+			want{count: 1, macros: []storedMacro{{name: "foo", params: []string{"a", "b"}, nbody: 0, defline: 1}}},
+		},
+		{
+			"inactive-if-not-stored",
+			".set U, 0\n.if U\n.macro foo\n x\n.endm\n.endif\n",
+			want{count: 0},
+		},
+		{
+			"two-macros",
+			".macro a\n aa\n.endm\n.macro b p, q\n bb\n cc\n.endm\n",
+			want{count: 2, macros: []storedMacro{
+				{name: "a", params: nil, nbody: 1, defline: 1},
+				{name: "b", params: []string{"p", "q"}, nbody: 2, defline: 4},
+			}},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := loadAsmprep(t)
+			_, errFlag := prepZ80(t, m, []byte(tc.src), "x.s")
+			if errFlag {
+				t.Fatalf("prep_run reported error")
+			}
+			cnt := int(m.Read(mustSym(t, m, "MACRO_COUNT"), 1)[0])
+			if cnt != tc.want.count {
+				t.Fatalf("MACRO_COUNT=%d want %d", cnt, tc.want.count)
+			}
+			for k, wm := range tc.want.macros {
+				gm := readStoredMacro(m, k)
+				if gm.name != wm.name {
+					t.Errorf("macro[%d].name=%q want %q", k, gm.name, wm.name)
+				}
+				if strings.Join(gm.params, ",") != strings.Join(wm.params, ",") {
+					t.Errorf("macro[%d].params=%v want %v", k, gm.params, wm.params)
+				}
+				if gm.nbody != wm.nbody {
+					t.Errorf("macro[%d].nbody=%d want %d", k, gm.nbody, wm.nbody)
+				}
+				if gm.defline != wm.defline {
+					t.Errorf("macro[%d].defline=%d want %d", k, gm.defline, wm.defline)
+				}
+			}
+		})
+	}
+}
+
 // TestAsmprepBrick1Random fuzzes prep_run against the Go authority over many
 // randomly-generated balanced .set/.if programs. Deterministic seed so a
 // failure reproduces.
