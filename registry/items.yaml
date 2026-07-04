@@ -5763,7 +5763,7 @@
   title: "AttachBDOS mock: shrink-to-zero ledger + CI guard (no new mock-B-DOS tests)"
   description: |
     First half of i311 (workable now; the migration half is i311b, gated on i254). Put every current AttachBDOS/NewBDOSStore mock-B-DOS test use behind a shrink-to-zero ledger (per-file name->count, modelled on tools/hosttest-carveout-allowlist.txt / i231) + a make check + CI guard: a NEW or unlisted AttachBDOS call site FAILS the build; the ledger only ratchets DOWN (a stale/over-count entry also fails). This freezes the mock (no new mock-based B-DOS tests, CLAUDE.md rule 8) and establishes the retirement mechanism + baseline count, provably retired when the ledger hits zero. Does NOT require the private captures / faithful rig to run -- pure static check, runs unconditionally in CI. Authority: feedback_trinity_sd_write_settled_truths ('never use the AttachBDOS mock to test B-DOS behaviour').
-  status: OPEN
+  status: IN_PROGRESS
   kind: leaf
   owner: agent
   parent: i311
