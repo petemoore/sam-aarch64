@@ -254,11 +254,15 @@ may declare `depends_on: [ids]` naming the items and/or questions it is gated on
 - **Stale gates are errors** (invariant 12). A non-`WONTFIX` item may not depend on
   a `WONTFIX` node; a `DONE` dependency is trivially satisfied. This forces a
   curator to drop/re-point a moot edge rather than leave a dead gate.
-- **Split-rewrites-dependents.** When a depended-on `iN` splits, every item with
-  `depends_on: [iN]` is rewritten to depend on `iN`'s new leaves (default: **all**
-  children — the conservative "the whole thing must finish" reading), which a
-  curator narrows to the specific blocking child. The `split` CLI rewrites;
-  curation refines.
+- **Split-keeps-dependents-on-the-umbrella (i366).** When a depended-on `iN`
+  splits, it becomes an umbrella with derived status (OPEN until every child is
+  DONE/WONTFIX) and its dependents are **left pointing at it** — so each stays
+  gated on the whole deliverable, and `ready` never surfaces it while a child is
+  open. A dependent that genuinely needs only one leaf is re-pointed explicitly
+  with `dep rm`/`dep add`; the umbrella is the safe default. (Rewriting the edge
+  onto the child leaves instead recreated the i87b done-leaf trap: the first
+  split repointed onto the sole child, a later sibling was never added back, and
+  the dependent read as satisfied the moment that child went DONE.)
 
 Because "what gates what" is now structured, an answered question or a completed
 item mechanically unblocks its dependents — which is what makes the `ready` query
@@ -369,7 +373,7 @@ exit-code-clean (0 ok / 1 validation-or-drift / 2 usage). Operates only on
 | `view --id iN\|qN [--format text\|json]` | print one record + computed dependents and priority rank |
 | `next-id [--space items\|questions]` | print the next free id (source ∪ ledger) |
 | `add --id … --title … --desc … --status … --owner … [--parent …] [--dep …] [--ref …]` | append a canonical record |
-| `split --parent iN --child-id iN-bM --title …` | set parent `kind: umbrella`, add a leaf child; rewrite dependents onto the new leaves |
+| `split --parent iN --title …` | set parent `kind: umbrella`, add a leaf child (child id auto-determined from the parent); dependents stay pointing at the umbrella (i366) |
 | `set-status --id iN --status … [--pr N]` | change status (open↔closed move is automatic on regen) |
 | `dep add\|rm --id iN --on iM\|qN` | add / remove a `depends_on` edge (validated acyclic, no WONTFIX target) |
 | `answer --id qN` | curate dependents off `qN`, then delete it (fails if any item still depends on it) |
