@@ -747,3 +747,6 @@ i31b-b2a
 i31b-b2b
 i31b-b3a
 i31b-b3b
+i370
+i371
+q82
