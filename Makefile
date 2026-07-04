@@ -850,7 +850,8 @@ secd-loadability: $(BUILD)/secd_probe.bin $(BUILD)/build-disk
 # budget as netboot_serve_boot).
 $(BUILD)/netboot_server.bin $(BUILD)/netboot_server.map: src/netboot/netboot_server.asm $(asm_deps/src/netboot/netboot_server.asm)
 	@mkdir -p $(BUILD)
-	pyz80 --obj=$(BUILD)/netboot_server.bin \
+	pyz80 -D NETBOOT_REAL_LISTREAD=1 -D NETBOOT_WANT_RECORD_READ=1 \
+	    --obj=$(BUILD)/netboot_server.bin \
 	    --mapfile=$(BUILD)/netboot_server.map \
 	    src/netboot/netboot_server.asm
 	@tools/netboot-boot-fit-check.sh $(BUILD)/netboot_server.bin 32768 netboot_server.bin

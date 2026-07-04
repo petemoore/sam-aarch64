@@ -1304,9 +1304,12 @@ RXBUF:            defs 1518              ; the single received-frame buffer
 ; unit (their org is suppressed — no NETBOOT_STANDALONE — so this file's org
 ; governs). encdrv.asm is the real vendored ENC28J60 driver; eeprom.asm is the
 ; real flash config reader; bdos_seam.asm supplies the RST-8 hook bodies +
-; UIFA/DIFA arithmetic the store walk below uses (no NETBOOT_REAL_LISTREAD, no
-; NETBOOT_WANT_CLAIM: the server never scans the free-record list nor writes a
-; record — the card is reached only via the read hooks).
+; UIFA/DIFA arithmetic the store walk below uses.  sd_csd.asm (built with
+; NETBOOT_REAL_LISTREAD + NETBOOT_WANT_RECORD_READ) adds the raw-CMD17
+; record-body read (bd_record_read_hw) the large-file serve streams from — the
+; server never scans the free-record list nor writes a record (no
+; NETBOOT_WANT_CLAIM / CMD24), so the card is reached only via read hooks + the
+; read-only CMD17.
 ; ===========================================================================
                 include "build_udp_frame.asm"
                 include "build_arp_reply.asm"
@@ -1316,6 +1319,7 @@ RXBUF:            defs 1518              ; the single received-frame buffer
                 include "encdrv.asm"
                 include "eeprom.asm"
                 include "bdos_seam.asm"
+                include "sd_csd.asm"
 
 ; ===========================================================================
 ; The B-DOS store walk (i95b-b1) — fill STORE (the flat index resolve walks)
