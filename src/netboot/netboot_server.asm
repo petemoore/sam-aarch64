@@ -1712,12 +1712,11 @@ nbfs_sector:
                 ld      (hl), 0
                 ld      hl, (NB_DISK_W)
                 ld      (hl), 0
-                ; rewrite mangled store names to full TFTP names (i346). NOTE:
-                ; nb_apply_manifest rebuilds STORE from NB_SRC_TABLE, so any
-                ; large-file STORE entry survives only while NO manifest is
-                ; present (all names <= 10 chars). Long-named large files (the
-                ; demo's release.src) also need the disk table remapped — a
-                ; tracked follow-up; the i365c serve path uses short names.
+                ; rewrite mangled store names to full TFTP names (i346/i365c-b2):
+                ; nb_apply_manifest rebuilds STORE, NB_SRC_TABLE (arena) AND
+                ; NB_DISK_TABLE (disk-backed) through the NBMANIFEST map, so a
+                ; long-named large file (the demo's release.src/release.img,
+                ; > 10 chars) serves under its full TFTP name too.
                 jp      nb_apply_manifest      ; tail call: rets to our caller
 
 ; nb_walk_entry — consider the 256-byte directory entry at HL: skip anything
@@ -2193,18 +2192,21 @@ rsd_nomatch:
                 ret
 
 ; ===========================================================================
-; nb_apply_manifest (i346) — rewrite the walk-filled tables through the
-; NBMANIFEST name map, so TFTP names longer than the 10-char B-DOS directory
-; field are served under their real names.
+; nb_apply_manifest (i346, i365c-b2) — rewrite the walk-filled tables through
+; the NBMANIFEST name map, so TFTP names longer than the 10-char B-DOS
+; directory field are served under their real names.
 ;
 ; build-disk mangles each long -netboot-extra name to a unique 10-char store
 ; name and ships an NBMANIFEST file in the same record mapping store name ->
 ; full TFTP name. The walk stages that file like any other; this pass parses
-; it and REBUILDS both STORE and NB_SRC_TABLE with every mapped name replaced
-; by its full TFTP name — resolve and resolve_src both match the request name
-; against these tables, so both must carry the served name. The NBMANIFEST
-; entry itself is dropped from both tables (it is not servable; its bytes
-; stay in the arena, unreferenced).
+; it and REBUILDS all three name tables with every mapped name replaced by its
+; full TFTP name: STORE + NB_SRC_TABLE (the arena small files) AND
+; NB_DISK_TABLE (the disk-backed large files, i365c). resolve, resolve_src and
+; resolve_disk all match the request name against these tables, so each must
+; carry the served name. A long-named LARGE file therefore serves under its
+; real TFTP name too (the demo's release.src/release.img). The NBMANIFEST
+; entry itself is dropped (it is not servable; its bytes stay in the arena,
+; unreferenced) — it is a small file, so it only ever appears in NB_SRC_TABLE.
 ;
 ; NBMANIFEST format (keep in lockstep with the emitter,
 ; tools/build-disk/main.go buildManifest):
@@ -2215,12 +2217,18 @@ rsd_nomatch:
 ; A store name absent from the manifest keeps its walked name (identity), so
 ; a record carrying no NBMANIFEST is served exactly as walked.
 ;
-; The rebuild reads from a copy of NB_SRC_TABLE in RXBUF (idle between the
-; walk's HLOAD bounce and the serve loop; STORE is a name+size projection of
-; NB_SRC_TABLE, so the one copy rebuilds both). Room checks mirror the
-; walk's: an entry whose mapped name would overflow either table falls back
-; to its walked name, and one that fits under neither is dropped — the same
-; degrade-by-skipping the walk applies when a region fills.
+; The rebuild reads from scratch copies of NB_SRC_TABLE and NB_DISK_TABLE in
+; RXBUF (idle between the walk's HLOAD bounce and the serve loop): the arena
+; table -> RXBUF[0, NB_SRC_TABLE_LEN), the disk table -> the next
+; NB_DISK_TABLE_LEN bytes. An arena entry (name\0 + ptr + size4) and a disk
+; entry (name\0 + [track,sector] + size4) share the same shape — a NUL-
+; terminated name, a 2-byte payload, then a 4-byte size — so one emitter
+; (nam_try_emit) rebuilds either table; the caller points it at NB_TBL_W /
+; NB_SRC_TABLE or NB_DISK_W / NB_DISK_TABLE per pass. STORE is the shared
+; name+size projection of both, so one STORE cursor threads both passes. Room
+; checks mirror the walk's: an entry whose mapped name would overflow either
+; table falls back to its walked name, and one that fits under neither is
+; dropped — the same degrade-by-skipping the walk applies when a region fills.
 ; ===========================================================================
 nb_apply_manifest:
                 ; find NBMANIFEST in NB_SRC_TABLE -> NB_MAN_PTR / NB_MAN_END.
@@ -2253,21 +2261,32 @@ nam_found:
                 add     hl, de
                 ld      (NB_MAN_END), hl       ; one past the manifest's last byte
 
-                ; rebuild both tables from a scratch copy of NB_SRC_TABLE in
-                ; RXBUF (RXBUF is 1518 bytes >= NB_SRC_TABLE_LEN).
+                ; scratch copies: the arena table -> RXBUF[0, NB_SRC_TABLE_LEN),
+                ; the disk table -> the next NB_DISK_TABLE_LEN bytes (both fit —
+                ; RXBUF is 1518 >= NB_SRC_TABLE_LEN + NB_DISK_TABLE_LEN).
                 ld      hl, NB_SRC_TABLE
                 ld      de, RXBUF
                 ld      bc, NB_SRC_TABLE_LEN
                 ldir
+                ld      hl, NB_DISK_TABLE
+                ld      de, RXBUF + NB_SRC_TABLE_LEN
+                ld      bc, NB_DISK_TABLE_LEN
+                ldir
                 ld      hl, STORE
-                ld      (NB_STORE_W), hl
+                ld      (NB_STORE_W), hl       ; STORE cursor threads both passes
+
+                ; --- pass 1: the arena table (name\0 + ptr + size4). ---
                 ld      hl, NB_SRC_TABLE
                 ld      (NB_TBL_W), hl
-                ld      hl, RXBUF              ; the scratch read cursor
+                ld      hl, NB_TBL_W
+                ld      (NB_SEC_WPTR), hl      ; nam_try_emit's second-table cursor
+                ld      hl, NB_SRC_TABLE + NB_SRC_TABLE_LEN
+                ld      (NB_SEC_END), hl       ; ... and its capacity end
+                ld      hl, RXBUF              ; the arena scratch read cursor
 nam_entry:
                 ld      a, (hl)
                 or      a
-                jr      z, nam_done            ; scratch terminator
+                jr      z, nam_arena_done      ; scratch terminator
                 ld      (NB_MAP_READ), hl
                 ; the manifest's own entry is dropped (never servable).
                 push    hl
@@ -2290,18 +2309,55 @@ nam_advance:
                 ld      de, 6
                 add     hl, de
                 jr      nam_entry
+nam_arena_done:
+                ; --- pass 2: the disk table (name\0 + [track,sector] + size4);
+                ; the same shape as an arena entry, so nam_try_emit re-emits it
+                ; verbatim under the mapped name. NBMANIFEST is a small file
+                ; (arena only), so the disk pass never carries it — no drop
+                ; check, and STORE keeps growing from the arena pass's cursor.
+                ld      hl, NB_DISK_TABLE
+                ld      (NB_DISK_W), hl
+                ld      hl, NB_DISK_W
+                ld      (NB_SEC_WPTR), hl
+                ld      hl, NB_DISK_TABLE + NB_DISK_TABLE_LEN
+                ld      (NB_SEC_END), hl
+                ld      hl, RXBUF + NB_SRC_TABLE_LEN   ; the disk scratch read cursor
+nad_entry:
+                ld      a, (hl)
+                or      a
+                jr      z, nam_done            ; scratch terminator
+                ld      (NB_MAP_READ), hl
+                call    nb_manifest_map        ; DE = the name to serve under
+                ld      (NB_MAP_NAME), de
+                call    nam_try_emit           ; CY = appended to STORE + disk table
+                jr      c, nad_advance
+                ld      de, (NB_MAP_READ)      ; no room for the mapped name:
+                ld      (NB_MAP_NAME), de      ; fall back to the walked name
+                call    nam_try_emit
+nad_advance:
+                ld      hl, (NB_MAP_READ)
+                call    skip_cstr
+                ld      de, 6
+                add     hl, de
+                jr      nad_entry
 nam_done:
-                ; terminate both rebuilt tables.
+                ; terminate all three rebuilt tables.
                 ld      hl, (NB_STORE_W)
                 ld      (hl), 0
                 ld      hl, (NB_TBL_W)
                 ld      (hl), 0
+                ld      hl, (NB_DISK_W)
+                ld      (hl), 0
                 ret
 
-; nam_try_emit — append the scratch entry at (NB_MAP_READ) to both rebuilt
-; tables under the name at (NB_MAP_NAME), room-checking both first (STORE:
-; name + NUL + size4 + the terminator; NB_SRC_TABLE: name + NUL + ptr2 +
-; size4 + the terminator — the walk's arithmetic).
+; nam_try_emit — append the scratch entry at (NB_MAP_READ) to STORE and to the
+; SECOND table under the name at (NB_MAP_NAME), room-checking both first (STORE:
+; name + NUL + size4 + the terminator; the second table: name + NUL + 2-byte
+; payload + size4 + the terminator — the walk's arithmetic). The second table
+; is the arena NB_SRC_TABLE or the disk NB_DISK_TABLE: (NB_SEC_WPTR) is the
+; address of its write cursor (NB_TBL_W / NB_DISK_W) and NB_SEC_END its
+; capacity end. An arena and a disk entry share the same name\0 + 2-byte
+; payload + size4 shape, so the copy is identical for both.
 ; Out: CY set = appended; CY clear = no room, both cursors untouched.
 ; Clobbers A, BC, DE, HL.
 nam_try_emit:
@@ -2327,14 +2383,19 @@ nte_have_len:
                 or      a
                 sbc     hl, de
                 jr      c, nte_no
-                ; NB_SRC_TABLE room: cursor + len + 8 <= table end?
-                ld      hl, (NB_TBL_W)
+                ; second-table room: cursor + len + 8 <= NB_SEC_END? (the cursor
+                ; is reached through NB_SEC_WPTR — NB_TBL_W or NB_DISK_W.)
+                ld      hl, (NB_SEC_WPTR)
+                ld      e, (hl)
+                inc     hl
+                ld      d, (hl)
+                ex      de, hl                 ; HL = the second-table cursor
                 ld      b, 0
                 add     hl, bc
                 ld      de, 8
                 add     hl, de
                 ex      de, hl
-                ld      hl, NB_SRC_TABLE + NB_SRC_TABLE_LEN
+                ld      hl, (NB_SEC_END)
                 or      a
                 sbc     hl, de
                 jr      c, nte_no
@@ -2345,19 +2406,25 @@ nte_have_len:
                 ld      hl, (NB_MAP_READ)
                 call    skip_cstr
                 inc     hl
-                inc     hl                     ; past the arena ptr -> size4
+                inc     hl                     ; past the 2-byte payload -> size4
                 ld      bc, 4
                 ldir
                 ld      (NB_STORE_W), de
-                ; NB_SRC_TABLE entry: name\0 + ptr2 + size4.
+                ; second-table entry: name\0 + 2-byte payload + size4.
+                ld      hl, (NB_SEC_WPTR)
+                ld      e, (hl)
+                inc     hl
+                ld      d, (hl)                ; DE = the second-table write cursor
                 ld      hl, (NB_MAP_NAME)
-                ld      de, (NB_TBL_W)
                 call    copy_cstr_incl_nul
                 ld      hl, (NB_MAP_READ)
-                call    skip_cstr              ; -> ptr2 + size4
+                call    skip_cstr              ; -> the 2-byte payload + size4
                 ld      bc, 6
                 ldir
-                ld      (NB_TBL_W), de
+                ld      hl, (NB_SEC_WPTR)      ; write the advanced cursor back
+                ld      (hl), e
+                inc     hl
+                ld      (hl), d
                 scf
                 ret
 nte_no:
@@ -2454,6 +2521,8 @@ NB_MAN_REC:       defs 2                 ; manifest scan: current record start
 NB_MAP_READ:      defs 2                 ; rebuild: current scratch-entry start
 NB_MAP_NAME:      defs 2                 ; rebuild: the name to emit
 NB_MAP_LOOKUP:    defs 2                 ; nb_manifest_map: the looked-up name
+NB_SEC_WPTR:      defs 2                 ; nam_try_emit: &(the pass's second-table cursor)
+NB_SEC_END:       defs 2                 ; nam_try_emit: the pass's second-table capacity end
 
 ; NB_SRC_TABLE capacity. Sizing (i346): entries carry the SERVED name after
 ; the manifest rewrite, so the full Pi-4 + Pi-3 boot name set (~12 names,

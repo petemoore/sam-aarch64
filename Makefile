@@ -909,6 +909,29 @@ netboot-server-largefile-record: $(BUILD)/netboot_server.bin $(BUILD)/build-disk
 	    -netboot-extra ramp.bin=$(BUILD)/largefile_ramp.bin \
 	    $(BUILD)/netboot_server_largefile_record.mgt
 
+# netboot-server-largefile-manifest-record (i365c-b2) — like the largefile
+# record but the large file rides the NBMANIFEST name map: a big CODE file with
+# a LONG (> 10-char) TFTP name (bigramp.data) is stored under a mangled 10-char
+# store name plus an NBMANIFEST record, so nb_apply_manifest must rebuild
+# NB_DISK_TABLE (not just the arena table) through the map for it to serve under
+# its real name. The record ALSO carries a SHORT-named big file (ramp.bin) to
+# prove a manifest present does not drop the short large-file entries (the
+# i365c-b2 bug), plus config.txt (small, arena). The two ramps use distinct
+# formulae AND sizes, so a wrong-chain or wrong-size read cannot masquerade as a
+# match. Gate: TestNetbootServerLargeFileManifest.
+$(BUILD)/largefile_ramp2.bin:
+	@mkdir -p $(BUILD)
+	python3 -c "import sys; sys.stdout.buffer.write(bytes((i*7+3)&0xff for i in range(30000)))" > $@
+
+.PHONY: netboot-server-largefile-manifest-record
+netboot-server-largefile-manifest-record: $(BUILD)/netboot_server.bin $(BUILD)/build-disk $(BUILD)/largefile_ramp.bin $(BUILD)/largefile_ramp2.bin
+	$(BUILD)/build-disk -netboot $(BUILD)/netboot_server.bin -netboot-name AUTOnbsrv \
+	    -netboot-code-auto \
+	    -netboot-extra config.txt=$(NETBOOT_STANDINS)/config.txt \
+	    -netboot-extra ramp.bin=$(BUILD)/largefile_ramp.bin \
+	    -netboot-extra bigramp.data=$(BUILD)/largefile_ramp2.bin \
+	    $(BUILD)/netboot_server_largefile_manifest_record.mgt
+
 # netboot-serve (i96) — the serve-files TFTP demo server: ARP + TFTP only (no DHCP,
 # no Pi PXE blob), serving a few files baked into the binary to a plain TFTP/curl
 # client.  Two builds from one source:
@@ -1531,7 +1554,7 @@ netboot-z80-routines: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-bu
 # SKIP_PRIVATE_TESTS-gated, and CI (no private data) can't build it.
 NETBOOT_PRIVATE_ARTIFACTS := $(if $(wildcard src/netboot/bootloader_chunk1_data.asm),netboot-eeprom-flash-chunk1)
 .PHONY: netboot-z80-artifacts
-netboot-z80-artifacts: netboot-z80-routines netboot-http-boot-debug netboot-http-smoke-boot editmodel-z80 editmodel-paged-z80 pagepool-z80 spill-z80 viewport-z80 asmlex-z80 asmparse-z80 asmparse-paged-z80 parse-paged-driver-z80 chain-paged-driver-z80 b8d-chain-paged-driver-z80 pass1-ir-z80 compact-ir-z80 compact-ser-z80 sysreg-data netboot-serve-record netboot-server-record netboot-server-largefile-record disk-record tbn-render-driver-z80 release-unstripped-tbn $(NETBOOT_PRIVATE_ARTIFACTS)
+netboot-z80-artifacts: netboot-z80-routines netboot-http-boot-debug netboot-http-smoke-boot editmodel-z80 editmodel-paged-z80 pagepool-z80 spill-z80 viewport-z80 asmlex-z80 asmparse-z80 asmparse-paged-z80 parse-paged-driver-z80 chain-paged-driver-z80 b8d-chain-paged-driver-z80 pass1-ir-z80 compact-ir-z80 compact-ser-z80 sysreg-data netboot-serve-record netboot-server-record netboot-server-largefile-record netboot-server-largefile-manifest-record disk-record tbn-render-driver-z80 release-unstripped-tbn $(NETBOOT_PRIVATE_ARTIFACTS)
 
 ci-netboot-z80: netboot-z80-artifacts
 	cd tools/sampage && go test ./...

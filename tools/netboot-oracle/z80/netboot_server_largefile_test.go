@@ -331,6 +331,257 @@ func TestNetbootServerLargeFile(t *testing.T) {
 	}
 }
 
+// TestNetbootServerLargeFileManifest (i365c-b2) — a large (disk-backed) CODE
+// file whose TFTP name is LONGER than the 10-char B-DOS directory field rides
+// the NBMANIFEST name map: the walk indexes it in NB_DISK_TABLE under its
+// mangled 10-char store name, and nb_apply_manifest must rebuild NB_DISK_TABLE
+// (not just the arena NB_SRC_TABLE) through the map for it to serve under its
+// full name. The vessel ALSO carries a SHORT-named large file (identity) to
+// prove the presence of a manifest does not drop the short large-file STORE
+// entries — the exact i365c-b2 bug — plus config.txt (small, arena). Asserts:
+// (a) the long name streams byte-exact at blksize 512 AND 1024; (b) the mangled
+// store name and NBMANIFEST both ERROR(1) (replaced, not aliased); (c) the
+// short-named large file STILL serves under its short name with the manifest
+// present; the small arena file still serves; and the session issues ZERO SD
+// writes. Gated on the proprietary captures; skips only under SKIP_PRIVATE_TESTS.
+func TestNetbootServerLargeFileManifest(t *testing.T) {
+	const (
+		manifestRecordMGT = "../../../build/netboot_server_largefile_manifest_record.mgt"
+		ramp2Path         = "../../../build/largefile_ramp2.bin"
+		longName          = "bigramp.data" // the full TFTP name
+		mangledName       = "bigramp.da"   // its mangled 10-char store name
+		shortName         = "ramp.bin"     // a short-named large file (identity)
+	)
+	const buildHint = "make netboot-server-largefile-manifest-record"
+
+	mac, _, sd, enc := bootToEditorIdleSDENC(t)
+
+	mgt := mustReadFile(t, manifestRecordMGT, buildHint)
+	ramp1 := mustReadFile(t, largeRampPath, buildHint) // ramp.bin (short, large)
+	ramp2 := mustReadFile(t, ramp2Path, buildHint)     // bigramp.data (long, large)
+	configTxt := mustReadFile(t, standinConfigPath, "restore tools/netboot-oracle/testdata/pi-standins")
+
+	if err := mac.LoadSymbols(serverBootMap); err != nil {
+		t.Fatalf("load server symbols: %v — rebuild with `make netboot-server`", err)
+	}
+	srvSym := func(name string) uint16 {
+		a, err := mac.Sym(name)
+		if err != nil {
+			t.Fatalf("server symbol %q absent from %s — rebuild with `make netboot-server`", name, serverBootMap)
+		}
+		return a
+	}
+	serveLoop := srvSym("nb_serve_loop")
+	cfgMAC := srvSym("CONFIG_SERVERMAC")
+	cfgIP := srvSym("CONFIG_SERVERIP")
+	storeAddr := srvSym("STORE")
+	diskAddr := srvSym("NB_DISK_TABLE")
+	bootRecOff := int(srvSym("NB_BOOT_RECORD")) - 0x8000
+
+	const bootRecord = 2
+	at, as := dirEntryFirstTS(t, mgt, "AUTOnbsrv")
+	patchMGTPayloadByte(t, mgt, at, as, bootRecOff, bootRecord)
+
+	seedRecordFromMGT(sd, bootRecord, mgt, "nbsrv")
+	seedRecordList(sd, map[int]string{1: "rec1", 2: "nbsrv"})
+
+	const page = 1
+	_, brMain := stageBootRecord(t, mac, bootRecord)
+	armServeDispatch(mac, page)
+	mac.Pager().HMPR = page
+	res, err := mac.ContinueFrom(brMain, z80h.Entry{
+		StepCap: 400_000_000, FrameIntPeriod: 60000, StopPC: serveLoop,
+	})
+	if err != nil {
+		t.Fatalf("boot_record -> netboot server faulted: %v (PC=&%04X)", err, res.PC)
+	}
+	if !res.ReachedStop {
+		t.Fatalf("server did not reach nb_serve_loop (&%04X): finalPC=&%04X halted=%v — the come-up failed",
+			serveLoop, res.PC, res.Halted)
+	}
+
+	// --- the manifest rewrite carries every served name into STORE: config.txt
+	// (arena), ramp.bin (short large, identity) and bigramp.data (long large,
+	// mapped) — the mangled store name and NBMANIFEST are NOT servable. ---
+	gotStore := parseWalkStore(t, mac.Read(storeAddr, 1024))
+	wantStore := map[string]int{"config.txt": len(configTxt), shortName: len(ramp1), longName: len(ramp2)}
+	if len(gotStore) != len(wantStore) {
+		t.Fatalf("store walk indexed %v, want %v (manifest must rewrite both large names + drop NBMANIFEST)", gotStore, wantStore)
+	}
+	for name, size := range wantStore {
+		if gotStore[name] != size {
+			t.Fatalf("STORE %s = %d, want %d (all: %v)", name, gotStore[name], size, gotStore)
+		}
+	}
+	if _, aliased := gotStore[mangledName]; aliased {
+		t.Fatalf("mangled store name %q still in STORE (should be REPLACED by %q): %v", mangledName, longName, gotStore)
+	}
+	if _, leaked := gotStore["NBMANIFEST"]; leaked {
+		t.Fatalf("NBMANIFEST leaked into STORE: %v", gotStore)
+	}
+
+	// --- NB_DISK_TABLE carries BOTH large files under their served names. ---
+	gotDisk := parseDiskTable(t, mac.Read(diskAddr, 256))
+	for name, want := range map[string][]byte{shortName: ramp1, longName: ramp2} {
+		e, ok := gotDisk[name]
+		if !ok {
+			t.Fatalf("%s absent from NB_DISK_TABLE (%v)", name, gotDisk)
+		}
+		if e.size != len(want) {
+			t.Fatalf("NB_DISK_TABLE %s size = %d, want %d", name, e.size, len(want))
+		}
+		rt, rs := dirEntryFirstTS(t, mgt, dirNameFor(name))
+		if int(e.track) != rt || int(e.sector) != rs {
+			t.Fatalf("NB_DISK_TABLE %s chain head = (%d,%d), want (%d,%d)", name, e.track, e.sector, rt, rs)
+		}
+	}
+	if _, aliased := gotDisk[mangledName]; aliased {
+		t.Fatalf("mangled store name %q still in NB_DISK_TABLE (should be REPLACED by %q): %v", mangledName, longName, gotDisk)
+	}
+	t.Logf("walk: STORE=%v  NB_DISK_TABLE=%v", gotStore, gotDisk)
+
+	var samMAC [6]byte
+	var samIP [4]byte
+	copy(samMAC[:], mac.Read(cfgMAC, 6))
+	copy(samIP[:], mac.Read(cfgIP, 4))
+
+	drive := func(label string, req []byte) []byte {
+		t.Helper()
+		txBefore := len(enc.TXFrames())
+		if req != nil {
+			enc.InjectRX(req)
+		}
+		r, err := mac.Continue(z80h.Entry{
+			StepCap: 40_000_000, FrameIntPeriod: 60000, StopPC: serveLoop, StopPCSkip: 1,
+		})
+		if err != nil {
+			t.Fatalf("%s: serve loop faulted: %v (PC=&%04X)", label, err, r.PC)
+		}
+		if !r.ReachedStop {
+			t.Fatalf("%s: serve loop did not return to nb_serve_loop (PC=&%04X halted=%v)", label, r.PC, r.Halted)
+		}
+		tx := enc.TXFrames()[txBefore:]
+		if len(tx) == 0 {
+			return nil
+		}
+		if len(tx) > 1 {
+			t.Fatalf("%s: server transmitted %d frames, want at most 1", label, len(tx))
+		}
+		return tx[0]
+	}
+	eq := func(label string, got, want []byte) {
+		t.Helper()
+		if got == nil {
+			t.Fatalf("%s: server sent nothing", label)
+		}
+		if !bytes.Equal(got, want) {
+			t.Fatalf("%s != Go authority\n  z80 %x\n  go  %x", label, got, want)
+		}
+	}
+	rrqFor := func(name string, tid uint16, blksize int) []byte {
+		return frame.BuildUDPFrame(frame.UDP{
+			DstMAC: frame.MAC(samMAC), SrcMAC: frame.MAC(mask.ClientMAC),
+			SrcIP: frame.IPv4(mask.ClientIP), DstIP: frame.IPv4(samIP),
+			SrcPort: tid, DstPort: 69,
+			Payload: tftp.BuildRRQ(name, "octet", []tftp.Option{
+				{Name: "tsize", Value: "0"},
+				{Name: "blksize", Value: itoa(blksize)},
+			}),
+		})
+	}
+	ackFrom := func(tid, block uint16) []byte {
+		return frame.BuildUDPFrame(frame.UDP{
+			DstMAC: frame.MAC(samMAC), SrcMAC: frame.MAC(mask.ClientMAC),
+			SrcIP: frame.IPv4(mask.ClientIP), DstIP: frame.IPv4(samIP),
+			SrcPort: tid, DstPort: nbServerTID,
+			Payload: tftp.BuildACK(block),
+		})
+	}
+	serveWhole := func(name string, want []byte, tid uint16, blksize int) []byte {
+		ref := tftp.NewServerLoop(tftp.MapStore{name: uint64(len(want))}, samMAC, samIP, nbServerTID)
+		ref.SetSource(tftp.ByteSource(want))
+		rrq := rrqFor(name, tid, blksize)
+		eq(name+" OACK", drive(name+" OACK", rrq), ref.OnRRQ(rrq))
+
+		var got []byte
+		d := drive(name+" DATA 1", ackFrom(tid, 0))
+		eq(name+" DATA 1", d, ref.FirstData())
+		_, p, _ := tftp.ParseDATA(udpPayload(t, d))
+		got = append(got, p...)
+		for blk := uint16(1); len(p) == blksize; blk++ {
+			a := ackFrom(tid, blk)
+			d = drive(name+" DATA", a)
+			eq(name+" DATA", d, ref.OnACK(a))
+			_, p, _ = tftp.ParseDATA(udpPayload(t, d))
+			got = append(got, p...)
+		}
+		lastBlk := uint16(len(got)/blksize + 1)
+		final := ackFrom(tid, lastBlk)
+		if fin := drive(name+" final ACK", final); fin != nil {
+			t.Errorf("%s: ACK of the final block should end the transfer, got %x", name, fin)
+		}
+		_ = ref.OnACK(final)
+		return got
+	}
+	assertServed := func(name string, want []byte, tid uint16, blksize int) {
+		t.Helper()
+		got := serveWhole(name, want, tid, blksize)
+		if !bytes.Equal(got, want) {
+			diff := 0
+			for diff < len(got) && diff < len(want) && got[diff] == want[diff] {
+				diff++
+			}
+			var g, w byte
+			if diff < len(got) {
+				g = got[diff]
+			}
+			if diff < len(want) {
+				w = want[diff]
+			}
+			t.Fatalf("%s blksize %d: reassembled (%d bytes) != payload (%d bytes); first diff at %#x got &%02X want &%02X",
+				name, blksize, len(got), len(want), diff, g, w)
+		}
+		t.Logf("%s: served byte-exact at blksize %d (%d bytes)", name, blksize, len(got))
+	}
+
+	// --- (a) the LONG-named large file streams byte-exact at both blksizes. ---
+	assertServed(longName, ramp2, 36512, 512)
+	assertServed(longName, ramp2, 37024, 1024)
+
+	// --- (c) the SHORT-named large file STILL serves with a manifest present
+	// (the i365c-b2 regression), and the small arena file still serves. ---
+	assertServed(shortName, ramp1, 38000, 1024)
+	assertServed("config.txt", configTxt, 39000, 1024)
+
+	// --- (b) the mangled store name and NBMANIFEST were REPLACED/dropped, not
+	// aliased: both ERROR(1), byte-matching the Go authority (empty store). ---
+	refMiss := tftp.NewServerLoop(tftp.MapStore{}, samMAC, samIP, nbServerTID)
+	for i, name := range []string{mangledName, "NBMANIFEST"} {
+		tid := uint16(40000 + i)
+		rrq := rrqFor(name, tid, 1024)
+		reply := drive("miss "+name, rrq)
+		eq("ERROR(1) for "+name, reply, refMiss.OnRRQ(rrq))
+		if code, _, err := tftp.ParseError(udpPayload(t, reply)); err != nil || code != tftp.ErrFileNotFound {
+			t.Errorf("RRQ %s -> code %d (err %v), want 1 (file not found)", name, code, err)
+		}
+	}
+	t.Logf("mangled store name %q and NBMANIFEST are not servable", mangledName)
+
+	// --- (d) serve is READ-ONLY: the SD model saw ZERO writes. ---
+	if w := sd.WrittenSectors(); len(w) != 0 {
+		t.Fatalf("READ-ONLY VIOLATION: the serve issued %d SD write(s) at %v", len(w), w)
+	}
+}
+
+// dirNameFor maps a served TFTP name back to the 10-char B-DOS directory name
+// under which build-disk stored it (a name over 10 chars is truncated).
+func dirNameFor(served string) string {
+	if len(served) > 10 {
+		return served[:10]
+	}
+	return served
+}
+
 // itoa is a tiny base-10 helper (avoids importing strconv for one call).
 func itoa(n int) string {
 	if n == 0 {
