@@ -6463,7 +6463,7 @@
   title: "i365d demo: overlay orchestrator driver + compose demo .mgt (render→assemble→serve, RST &10 msgs, end-to-end gate)"
   description: |
     The fusion (Wall/driver). A CODE-auto orchestrator that keeps its own code+stack+return-frame in a page NO subsystem's exec window occupies (#859 generalized -- render/assembler/server each claim section C &8000 + section D; render off-axis 7-31 collides with assembler 4-15) and SEQUENCES the phases, each RELOADING from disk: print 'Generating source...' (RST &10, mgt_screen_demo_standalone idiom) -> render release.tbn->release.src (b2a mechanism); print 'Generating image...' -> DEMO_ASM &8000 -> RELEASEIMG (b2b); then enter the i365c large-file serve loop -> serve release.src + release.img under LONG TFTP names via NBMANIFEST (RELEASESRC->release.src, RELEASEIMG->release.img). Compose the demo record via build-disk -netboot-code-auto (netboot-server-record template) with release-unstripped.tbn as IN. Record stays HRECORD-selected through ALHK exec (netboot_server_faithful_test.go:19; else a one-time driver HRECORD). End-to-end gate (assembler_record_vessel_test.go + netboot_server_largefile_test.go patterns): boot -> render -> assemble -> serve -> TFTP-fetch both == expected. The i365c serve half is DONE.
-  status: OPEN
+  status: IN_PROGRESS
   depends_on: [i365d-b2a, i365d-b2b]
   kind: leaf
   owner: agent
