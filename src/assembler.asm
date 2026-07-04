@@ -299,6 +299,15 @@ PP_TABLE_BASE:  equ     &C9A4
 start:
                 di                     ; disable interrupts (batch program)
 
+                if defined(DEMO_ASM)
+; Demo callable-exit variant: the i365 demo driver `call`s this entry, so
+; save the caller's SP now — before `ld sp,&C100` switches to the boot
+; stack — and the clean exit below restores it and `ret`s back.
+                ld      hl, 0
+                add     hl, sp
+                ld      (saved_caller_sp), hl
+                endif
+
 ; Set up the stack before any call.  The DOS's EI in the RST 8 hook
 ; re-enables interrupts, so DI must be repeated after hook calls.
                 ld      sp, &C100
@@ -683,12 +692,22 @@ endif
                 call    print_status_string
 
 ; -- Clean exit ---------------------------------------------------------
+                if defined(DEMO_ASM)
+; Demo callable-exit variant: restore the caller's SP (saved at start:) and
+; RET to the i365 demo driver.  "OK" is already printed above, so the driver
+; sees a clean return as success — the prod di/halt would instead trap the
+; driver forever.
+                ld      sp, (saved_caller_sp)
+                ret
+saved_caller_sp:        defw    0
+                else
 ; The DI at start: is undone by the DOS's EI inside the RST 8 hook window
 ; (ROM PTDOS does EI before dispatching — see docs/notes/headless-simcoupe.md
 ; "Why the stub ends in DI; HALT").
 ; Re-issue DI so HALT with IFF1=0 triggers SimCoupé's -exitonhalt.
                 di
                 halt
+                endif
 
 if defined(BUILD_TESTS)
 ; check_paged_test_result — shared tail for the paged self-tests (disasm
