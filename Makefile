@@ -741,6 +741,19 @@ $(BUILD)/port_probe.bin $(BUILD)/port_probe.map: src/netboot/port_probe_standalo
 
 netboot-port-probe: $(BUILD)/port_probe.bin $(BUILD)/port_probe.map
 
+# settle_probe — trinload-pushable ENC/PIC settle-time probe (i291b): arms the
+# &38 SD-init window, waits a poked N T-states, then re-runs chk_trinity and
+# reports STALE/FRESH over UDP so a host bisection converges on the real settle.
+# org &8000, gated by ci-netboot-z80; emulation-checked by settle_probe_test.go.
+$(BUILD)/settle_probe.bin $(BUILD)/settle_probe.map: src/netboot/settle_probe.asm $(asm_deps/src/netboot/settle_probe.asm)
+	@mkdir -p $(BUILD)
+	pyz80 --obj=$(BUILD)/settle_probe.bin \
+	    --mapfile=$(BUILD)/settle_probe.map \
+	    src/netboot/settle_probe.asm
+	@tools/netboot-boot-fit-check.sh $(BUILD)/settle_probe.bin 16384 settle_probe.bin
+
+netboot-settle-probe: $(BUILD)/settle_probe.bin $(BUILD)/settle_probe.map
+
 # mgt-screen-demo — trinload-pushable RAM test that redraws the MGT opening
 # screen (rainbow stripes, ported verbatim from the stock ROM &ED1B; banner next).
 # Emulation-tested (mgt_screen_demo_test.go), org &8000, RETs to trinload. i229.
@@ -1461,7 +1474,7 @@ $(BUILD)/b8d_chain_paged_driver.bin $(BUILD)/b8d_chain_paged_driver.map: src/cha
 b8d-chain-paged-driver-z80: $(BUILD)/b8d_chain_paged_driver.bin $(BUILD)/b8d_chain_paged_driver.map
 
 # Every netboot routine binary the harness tests load.
-netboot-z80-routines: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-build-tcp-segment netboot-sha256 netboot-hmac-sha256 netboot-hkdf netboot-hkdf-expand-label netboot-chacha20 netboot-poly1305 netboot-x25519-field netboot-aead netboot-tls-keyschedule netboot-tls-record netboot-tls-transcript netboot-tls-client-hello netboot-tls-server-flight netboot-tls-client netboot-encdrv netboot-dhcp-loop netboot-tcp-conn netboot-http-get netboot-fw-source netboot-body-sink netboot-tls-reasm netboot-fw-span netboot-http netboot-http-boot netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke netboot-server netboot-serve netboot-client netboot-dumper netboot-csd-probe netboot-sd-push netboot-boot-record netboot-delete-record netboot-list-records netboot-hook-roundtrip netboot-samboot-config netboot-trinity-identity netboot-serve-boot netboot-serve-boot-debug netboot-client-boot netboot-fetch-boot-boot netboot-trinload netboot-sd-csd netboot-sd-listread netboot-eeprom-roundtrip netboot-port-probe netboot-mgt-screen-demo
+netboot-z80-routines: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-build-tcp-segment netboot-sha256 netboot-hmac-sha256 netboot-hkdf netboot-hkdf-expand-label netboot-chacha20 netboot-poly1305 netboot-x25519-field netboot-aead netboot-tls-keyschedule netboot-tls-record netboot-tls-transcript netboot-tls-client-hello netboot-tls-server-flight netboot-tls-client netboot-encdrv netboot-dhcp-loop netboot-tcp-conn netboot-http-get netboot-fw-source netboot-body-sink netboot-tls-reasm netboot-fw-span netboot-http netboot-http-boot netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke netboot-server netboot-serve netboot-client netboot-dumper netboot-csd-probe netboot-sd-push netboot-boot-record netboot-delete-record netboot-list-records netboot-hook-roundtrip netboot-samboot-config netboot-trinity-identity netboot-serve-boot netboot-serve-boot-debug netboot-client-boot netboot-fetch-boot-boot netboot-trinload netboot-sd-csd netboot-sd-listread netboot-eeprom-roundtrip netboot-port-probe netboot-settle-probe netboot-mgt-screen-demo
 
 # netboot-z80-artifacts — every artifact the tools/netboot-oracle/z80 suite
 # loads from build/, as ONE aggregate target.  This is the single source of
