@@ -573,7 +573,7 @@
   parent: i31b
 
 - id: i31b-b4a
-  title: "Brick 4a: cross-file macro def-file provenance — MACRO_TAB def-file field + PATH_ARENA intern at define + emit at expansion"
+  title: "Brick 4a: cross-file macro def-file provenance — parallel per-macro def-file arrays + emit at expansion"
   description: |
     The i344-encoded PREREQUISITE from b3a scoping. Port preprocess.go's macroDef.defPos.file semantics: a macro's expansion pre-directive must name the DEFINITION file (m.defPos.file, preprocess.go:546), not the invocation-site current file. Today src/asmprep.asm's MACRO_TAB record (12B: name_ptr,name_len,nparams,params_ptr,nbody,body_ptr,defline) stores defline but no def-file; prep_try_expand emits '# defline+1 CURRENT_FILE' (asmprep.asm:1966-1969) via the invocation CURRENT_FILE_PTR/LEN — correct only when def+invoke share a file. Fix: add a def-file field (ptr:2+len:1) to the MACRO_TAB record, intern the then-current file path into PATH_ARENA at .macro define time (prep_macro_store), emit that stored def-file at expansion instead of CURRENT_FILE; the post-expansion restore directive (asmprep.asm:2028) already correctly uses the call-site file. Oracle: add a cross-file fixture to asmprep_test.go (macro defined in an included file, invoked in the outer file) byte-compared vs frontend.Preprocess; remove the 'deferred to b4' note (asmprep_test.go:676-683). Flat harness only; no wiring/paging. Authority: tools/sam-aarch64/frontend/preprocess.go.
   status: DONE
