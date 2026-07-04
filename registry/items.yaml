@@ -5589,8 +5589,9 @@
 - id: i297
   title: Investigate on-SAM RECORD-list hang after ~824 + DEF PROC error post-sd_push write
   description: |
-    After the 2026-06-30 sd_push HW write, an on-SAM RECORD listing hung after ~824 records + a DEF PROC not found BASIC error. Determine: card record-list state after the incomplete write, vs the RECORD command for many records, vs the SAM post-sd_push BASIC state (unclean exit). Relates to the sd_push-clean-exit item + the slowness.
+    RE-SCOPED (agent, 2026-07-05): the 2026-06-30 anomaly is a downstream SYMPTOM of that push being an INCOMPLETE write. Per i296's Pete-blessed WONTFIX analysis, the push was cut off mid-stream (~8m20s, host sd-push.py timeout, never reached finalize/F->D), leaving a PARTIAL/corrupt record on the card; the on-SAM RECORD-list hang (~824) and the DEF PROC BASIC error are consequences of listing/using that corrupt partial record, NOT a clean-card RECORD-command limit. Sub-question 1 (card-state forensics) is un-reproducible now: the card has been rewritten many times since (i295/i319a/i93b/i95b-b1). Sub-question 3 (unclean exit) is i296 = WONTFIX (sd_push's exit is correct; the wedge was the CPU held during the slow un-finalized write, not the exit). RESIDUAL (the only still-open part): does B-DOS 1.5t's RECORD command HANG rather than error gracefully on a corrupt/partial record? That can only be triggered by an incomplete write leaving a partial record — which i348 (block retransmit + unique-sector finalize counting) prevents. Sequenced depends_on i348; once i348 lands, re-verify RECORD-list integrity on hardware (needs a SAM+card session). If hardening the RECORD command against a corrupt record is worth doing independently of preventing partial writes, split a fresh item then.
   status: OPEN
+  depends_on: [i348]
   kind: leaf
   owner: agent
 
