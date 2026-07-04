@@ -285,14 +285,17 @@ func TestAdd_LedgerUpdated(t *testing.T) {
 
 // --- split ---
 
-// TestSplit_SetsUmbrellaAddsChildRewiresDependents exercises the full split:
+// TestSplit_SetsUmbrellaAddsChildKeepsDependentsOnUmbrella exercises the full split:
 // - parent is promoted to umbrella
 // - new child leaf is added
-// - a dependent that had depends_on:[parentID] is rewritten to depend on the new children
+// - a dependent that had depends_on:[parentID] is LEFT pointing at the parent
+//   (now the umbrella), NOT rewritten onto the child leaves (i366).
 //
 // Setup: add i6 (OPEN, depends_on i2) and then split i2 → umbrella with child i2a.
-// After split: i6.depends_on is rewritten from [i2] to [i2a] (the only child).
-func TestSplit_SetsUmbrellaAddsChildRewiresDependents(t *testing.T) {
+// After split: i6.depends_on stays [i2] (the umbrella) — it must NOT contain i2a.
+// The umbrella carries derived status, so the dependent stays gated on the whole
+// deliverable; rewriting onto the sole child would recreate the i87b done-leaf trap.
+func TestSplit_SetsUmbrellaAddsChildKeepsDependentsOnUmbrella(t *testing.T) {
 	paths := setupMutatorFixture(t)
 
 	// Add a dependent that depends on i2 (the item we will split). Its id is
@@ -352,8 +355,8 @@ func TestSplit_SetsUmbrellaAddsChildRewiresDependents(t *testing.T) {
 		t.Errorf("%s.Kind: got %q, want %q", childID, child.Kind, "leaf")
 	}
 
-	// The dependent previously had depends_on:[i2]; after split it should contain
-	// the new child, not i2 itself.
+	// The dependent had depends_on:[i2]; after split it must STILL point at i2
+	// (now the umbrella) and must NOT have been rewritten onto the child leaf.
 	var dep *Item
 	for i := range reg.Items {
 		if reg.Items[i].ID == depID {
@@ -373,12 +376,74 @@ func TestSplit_SetsUmbrellaAddsChildRewiresDependents(t *testing.T) {
 			foundParent = true
 		}
 	}
-	if !foundChild {
-		t.Errorf("%s.DependsOn after split: expected %s; got %v", depID, childID, dep.DependsOn)
+	if !foundParent {
+		t.Errorf("%s.DependsOn after split: expected the umbrella i2 to remain; got %v", depID, dep.DependsOn)
 	}
-	if foundParent {
-		t.Errorf("%s.DependsOn after split: still contains i2 (should be replaced by children); got %v", depID, dep.DependsOn)
+	if foundChild {
+		t.Errorf("%s.DependsOn after split: was rewritten onto child %s (the i87b done-leaf trap); should stay on the umbrella i2; got %v", depID, childID, dep.DependsOn)
 	}
+}
+
+// TestSplit_MultipleSplitsKeepDependentOnUmbrella is the direct i366 regression:
+// across TWO splits of the same parent, a dependent must stay pinned to the
+// umbrella and stay gated until BOTH children close. The former rewrite-onto-child
+// behaviour repointed the dependent onto the FIRST child at the first split, never
+// added the SECOND child at the second split, and so let the dependent read as
+// satisfied the moment the first child went DONE while the sibling was still OPEN
+// (the i87b done-leaf trap this hit 3x in the 2026-07-04 i365c session).
+func TestSplit_MultipleSplitsKeepDependentOnUmbrella(t *testing.T) {
+	paths := setupMutatorFixture(t)
+
+	// A dependent on i2 (the item we will split twice). Id auto-allocated.
+	depID := expectedNextItemID(t, paths)
+	runAdd([]string{
+		"--title", "Item depending on the whole of i2",
+		"--desc", "Must stay gated until every child of i2 is done.",
+		"--status", "OPEN",
+		"--owner", "agent",
+		"--dep", "i2",
+	}, paths)
+
+	// First split: i2 → i2a.
+	child1 := expectedNextSubID(t, paths, "i2")
+	runSplit([]string{"--parent", "i2", "--title", "First child of i2"}, paths)
+	// Second split of the same (now-umbrella) parent: i2 → i2b.
+	child2 := expectedNextSubID(t, paths, "i2")
+	runSplit([]string{"--parent", "i2", "--title", "Second child of i2"}, paths)
+
+	assertValidFromPaths(t, paths)
+	reg := loadRegFromPaths(t, paths)
+
+	// The dependent must still depend on exactly the umbrella i2 — never a child.
+	dep := findItem(reg, depID)
+	if dep == nil {
+		t.Fatalf("%s not found after splits", depID)
+	}
+	if len(dep.DependsOn) != 1 || dep.DependsOn[0] != "i2" {
+		t.Fatalf("%s.DependsOn after two splits: want exactly [i2] (the umbrella); got %v", depID, dep.DependsOn)
+	}
+
+	// Close the FIRST child; the SECOND stays OPEN. The umbrella must remain OPEN,
+	// so the dependent (on the umbrella) is still gated — NOT surfaced by ready.
+	runSetStatus([]string{"--id", child1, "--status", "DONE"}, paths)
+	reg = loadRegFromPaths(t, paths)
+	umbrella := findItem(reg, "i2")
+	if umbrella == nil || umbrella.Kind != "umbrella" {
+		t.Fatalf("i2 should be an umbrella after splits; got %+v", umbrella)
+	}
+	if umbrella.Status != StatusOpen {
+		t.Errorf("umbrella i2 with child %s DONE but %s OPEN: derived status = %q, want OPEN (dependent must stay gated)", child1, child2, umbrella.Status)
+	}
+}
+
+// findItem returns a pointer to the item with the given id, or nil.
+func findItem(reg *Registry, id string) *Item {
+	for i := range reg.Items {
+		if reg.Items[i].ID == id {
+			return &reg.Items[i]
+		}
+	}
+	return nil
 }
 
 // --- set-status ---
