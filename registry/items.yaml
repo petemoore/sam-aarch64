@@ -1341,7 +1341,7 @@
   description: |
     The scoped hardware validation: boot the smoke-variant fetcher on the real SAM, fetch LICENCE.broadcom (1594 B) from the LAN HTTP mirror, persist via HSAVE RST-8 into the first-FREE SD record, confirm via tcpdump + :9001 markers + post-cycle record read-back. SHOT 2 (2026-07-03): CMD17 scan + ARP + TCP + GET + 1072/1594 body bytes hardware-proven, then a NEW wedge at the stream-end store leg (first real RST-8 store). SHOT 3 (2026-07-03, after i355 fix #839): the HMPR source-page fix (verified present in the pushed binary) did NOT clear it — identical signature: markers to LINK_UP + FILE_START, body streamed to the FIN, then rx DEAD at the store leg, no FILE_SAVED, a wild-jump (tr_terminate never reached; tapo recovered the SAM). ROOT CAUSE (i356 DONE, 2026-07-03): reproduced in FAITHFUL emulation (real ROM+B-DOS 1.5t+SPI SD, no mock) — storage_sink_leaf HRECORD-selects the first FREE record, and B-DOS 1.5t HRECORD longjmps ('Invalid record') on a record lacking the 'BDOS' +232 stamp, which a free record has none of; the leaf reaches bdos_select_record and never returns. The i355 source-page fix was downstream of this HRECORD wedge (necessary-but-insufficient). The come-up + the leaf-on-a-VALID-record already pass in faithful emulation; only the free-record path wedges. FIX tracked as i357 (direction gated on q71). Re-shoot only AFTER i357 lands + its faithful free-record store-leaf test is green. i347-class exposure (EI d loop, no IM2) remains assessed-low for the seconds-long smoke.
   status: OPEN
-  depends_on: [i70a, i70d, i70e, i355, i357]
+  depends_on: [i70a, i70d, i70e, i355, i357, i360]
   kind: leaf
   owner: agent
   parent: i70
