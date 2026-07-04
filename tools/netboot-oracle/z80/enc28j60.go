@@ -132,6 +132,27 @@ const busyByteTStates = 16
 // stale, preserving the i242/i287 back-to-back catch.
 const sdInitSettleTStates = 1200
 
+// sdInitBusyTStates models the SEPARATE, LONGER window during which the &38 SD-init
+// holds the shared controller's &DC bit-3 BUSY flag SET (distinct from the ~50µs
+// identity settle above, and from the one-SPI-byte busyByteTStates). Authority:
+// B-DOS 1.5t (~/sam-archive/bdos/analysis/bdos15t-beta6.annotated.dis, the SD-init at
+// &A623): immediately after `OUT (&DC),&38` it busy-polls &67CC (IN &DC; AND &08; RET
+// Z; else loop) until bit 3 clears, and never touches the controller again until it
+// does — proving the &38 leaves bit 3 SET for the (heavy, SPI-warmup) SD-init
+// duration, drained ONLY by polling to completion (NOT released by a status read).
+// The exact duration is Genuinely-unspecified (it is what i291b-b2 measures on
+// hardware); this is a nominal value, VASTLY shorter than the real elapsed time but
+// LONGER than a probe's &38→report gap, so an ENC transmit issued after the &38
+// WITHOUT draining bit 3 (the i291b settle_probe hang) spins its unbounded &DC
+// busy-poll (encdrv.asm wr_buf_lp) in emulation exactly as on silicon — closing the
+// fidelity gap that let the un-drained probe pass the harness yet hang on hardware
+// (CLAUDE.md rule 7). Surfaced ONLY on the &DC bit-3 status read (ctlStatus), NOT the
+// select/data-drop path, so it does not perturb the identity-probe settle model that
+// governs the probe's measured boundary (the dropped-vs-stale identity question is
+// b2's to resolve, not ours to bake in). Time-based, so a full boot whose SD-init
+// precedes its next &DC poll by ~192k instructions (i288) sees bit 3 long clear.
+const sdInitBusyTStates = 12000
+
 // statusENCINT is &DC bit 0 (ENCINT): mirrors the ENC's pending-interrupt state
 // (manual:19,99,100; gap 5). The supported v1.1 polling path reads it here.
 const statusENCINT = 0x01
@@ -305,6 +326,14 @@ type ENC28J60 struct {
 	// tests (which run drv_init first) are unaffected.
 	sdInitSettling bool
 	settleUntilT   uint64
+
+	// sdInitBusyUntilT is the T-state deadline of the SEPARATE &DC bit-3 BUSY hold the
+	// &38 SD-init arms (sdInitBusyTStates from the &38). Surfaces ONLY on the &DC
+	// bit-3 status read (ctlStatus) and is NOT released by a status IN — only by
+	// tNow reaching the deadline (the SD-init completing). This is the authority-
+	// grounded behaviour (B-DOS's post-&38 &67CC busy-poll) that hangs an ENC transmit
+	// issued after a &38 without first draining bit 3. See sdInitBusyTStates.
+	sdInitBusyUntilT uint64
 
 	// rxDisarmed models the ONE thing that disturbs the ENC28J60's autonomous receive
 	// engine: an ENC reset (&28 ereset). It is NOT set by an ordinary SD device mux-
@@ -591,8 +620,27 @@ func (e *ENC28J60) autoNullFor(p peripheral) bool {
 func (e *ENC28J60) SetTState(t uint64) {
 	if t < e.tNow {
 		e.busyUntilT = 0
-		if e.sdInitSettling && e.tNow >= e.settleUntilT {
-			e.sdInitSettling = false
+		if e.sdInitSettling {
+			if e.tNow >= e.settleUntilT {
+				e.sdInitSettling = false // already elapsed in the old timeline: spent
+			} else {
+				// Still open at the boundary: re-base the absolute deadline onto
+				// the new (smaller) timeline, preserving ONLY the remaining budget
+				// (settleUntilT - tNow). Carrying the old absolute deadline would
+				// re-arm the window for the whole next run — pinning the next
+				// run's probes stale (the i327 artifact in a narrower shape, PR
+				// 820 §3 residual). t + remaining keeps the microseconds-apart
+				// i242 back-to-back catch without the whole-run overhang.
+				e.settleUntilT = t + (e.settleUntilT - e.tNow)
+			}
+		}
+		// Re-base the &38 SD-init BUSY deadline the same way (spent if already
+		// elapsed, else preserve only the remaining budget) so a run boundary neither
+		// re-arms it for a whole next run nor drops a still-open hold.
+		if e.tNow < e.sdInitBusyUntilT {
+			e.sdInitBusyUntilT = t + (e.sdInitBusyUntilT - e.tNow)
+		} else {
+			e.sdInitBusyUntilT = 0
 		}
 	}
 	e.tNow = t
@@ -685,7 +733,10 @@ func (e *ENC28J60) trackSDClose(v uint8, onDC bool) {
 // supplies ENCINT (its EIR interrupt-pending state surfaced on the status byte).
 func (e *ENC28J60) ctlStatus() uint8 {
 	s := e.sd.ctlStatus()
-	if e.isBusy() {
+	// BUSY is set by either the one-SPI-byte window (isBusy, released by the next IN)
+	// or the &38 SD-init hold (sdInitBusyUntilT, released only by tNow reaching the
+	// deadline — a status IN does NOT clear it, matching B-DOS's post-&38 &67CC poll).
+	if e.isBusy() || e.tNow < e.sdInitBusyUntilT {
 		s |= statusBusy
 	} else {
 		s &^= statusBusy
@@ -1045,6 +1096,11 @@ func (e *ENC28J60) ctlSelect(v uint8) {
 			// left alone here too.)
 			e.sdInitSettling = true
 			e.settleUntilT = e.tNow + sdInitSettleTStates
+			// The &38 also holds &DC bit 3 BUSY for the (longer) SD-init duration —
+			// surfaced on the status read only, drained by polling to completion, not
+			// by a status IN. An ENC transmit after the &38 that does not drain bit 3
+			// first spins encdrv.asm's unbounded wr_buf_lp (the i291b probe hang).
+			e.sdInitBusyUntilT = e.tNow + sdInitBusyTStates
 		case selSDDeselct:
 			if e.selPeriph == periphSD {
 				e.selPeriph = periphNone // CS high; do not re-deselect (sdSelect already cleared)

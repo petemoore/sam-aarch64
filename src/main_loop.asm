@@ -107,6 +107,14 @@ main_assemble:
                 call    walk_records
                 call    litpool_flush               ; implicit end-of-source
 
+; -- i27c: Cortex-A53 erratum 843419 post-layout ADRP→ADR scan.
+; Runs after pass 2 once the OUT buffer is finalised; rewrites ADRP
+; words at vulnerable page offsets in-place (toggle off = no-op).
+; Excluded from BUILD_TESTS_ENCODE (errata_843419.asm is not included there).
+                if defined(BUILD_TESTS_ENCODE)==0
+                call    errata_843419_scan
+                endif
+
 ; -- Bracket close: restore LMPR so save_out_file's RST 8 finds ROM
 ; in section A.
                 call    enctab_map_out
@@ -216,6 +224,8 @@ reset_out_size_ok:
                 or      c                   ; Z ⇔ (OUT_TOTAL & &3FFF) == 0
                 jr      z, reset_out_no_partial
                 inc     b                   ; + the partial page
+                jr      z, reset_out_oom    ; page count wrapped 255->0: 256 pages
+                                            ; exceed the pool's reach — OOM (tag b3)
 reset_out_no_partial:
                 ld      a, b
                 or      a
@@ -341,6 +351,9 @@ pass_pc_reset_oh:
                 ld      (hl), a
                 inc     hl
                 djnz    pass_pc_reset_oh
+; i27b: clear errata 835769 prev-instruction state at each pass start.
+; A = 0 here (from xor a above, unchanged by the loop).
+                ld      (ERRATA_PREV_VALID), a
                 ret
 
 
@@ -1863,7 +1876,13 @@ name_IN:        defb    19                  ; type 19 = code
                 defm    "    "
 
 name_OUT:       defb    19
+                if defined(DEMO_ASM)
+; Demo variant saves under a self-describing name (10 chars, space-padded to
+; the SAM catalogue width) that won't collide with the render's RELEASESRC.
+                defm    "RELEASEIMG"
+                else
                 defm    "OUT       "
+                endif
                 defm    "    "
 
 

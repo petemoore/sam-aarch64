@@ -82,10 +82,11 @@ PROV_WINDOW:    defw 0
 ;   6. call conn_verify_init (reset SHA-256)
 ;   7. fw_plan_path(BC=i) -> ld hl,FW_PATH / ld (HTTP_PATH_PTR),hl
 ;   8. fw_manifest_entry(BC=i) -> BC=rec ptr; copy rec+4 (32 B) -> CONN_PINNED_HASH
+;      (the pinned digest storage_sink_leaf content-addresses record names from)
 ;   9. arm sink: CONN_SINK_FILTER_MODE=1, CONN_SINK_FILTER=body_sink_write,
 ;      BODY_DST_PTR=storage_sink_leaf
-;  10. call store_begin (open this file in the store: remember its name for
-;       record naming, reset the record index)
+;  10. call store_begin (open this file in the store: reset the record index, pick
+;       the first free Trinity SD record)
 ; ===========================================================================
 prov_start:
                 ; --- step 1: CONN_CLIENT_PORT = BASE_PORT + i (BE) ---
@@ -157,19 +158,13 @@ ps_mac_zero:    ld      (hl), a
                 ld      (HTTP_HOST_PTR), hl
                 pop     bc                      ; restore BC=i
 
-                ; --- step 8: fw_manifest_entry(BC=i) -> copy rec+4 -> CONN_PINNED_HASH;
-                ;             also stash the record's name ptr (rec+0) for store_begin ---
-                call    fw_manifest_entry       ; BC=i -> BC = record ptr (preserved
-                                                ; until the ldir below clobbers it)
+                ; --- step 8: fw_manifest_entry(BC=i) -> copy rec+4 (the pinned
+                ;             SHA-256) -> CONN_PINNED_HASH. storage_sink_leaf then
+                ;             content-addresses each record name from this digest. ---
+                call    fw_manifest_entry       ; BC=i -> BC = record ptr
                 ; record layout: name ptr@0, path ptr@2, SHA-256@4 (32 bytes), size@36.
                 ld      h, b
-                ld      l, c                    ; HL = record ptr (rec+0)
-                ld      e, (hl)
-                inc     hl
-                ld      d, (hl)                 ; DE = name ptr (from rec+0)
-                push    de                      ; save name ptr for step 10 (store_begin)
-                ld      h, b
-                ld      l, c                    ; HL = record ptr again
+                ld      l, c                    ; HL = record ptr
                 ld      de, 4
                 add     hl, de                  ; HL = rec+4 = SHA-256 field
                 ld      de, CONN_PINNED_HASH
@@ -184,11 +179,11 @@ ps_mac_zero:    ld      (hl), a
                 ld      hl, storage_sink_leaf
                 ld      (BODY_DST_PTR), hl
 
-                ; --- step 10: store_begin(HL = manifest name ptr) ---
-                ; Opens this file in the store: remembers its name (for record
-                ; naming) and resets the record index; storage_sink_leaf writes the
-                ; body window-by-window as it streams.
-                pop     hl                      ; HL = name ptr (saved in step 8)
+                ; --- step 10: store_begin ---
+                ; Opens this file in the store: resets the record index and picks the
+                ; first free Trinity SD record; storage_sink_leaf writes the body
+                ; window-by-window as it streams, content-addressing each record name
+                ; from CONN_PINNED_HASH (set in step 8).
                 call    store_begin
                 ret
 
@@ -533,10 +528,6 @@ ht_iss:           defb 0, 0, 4, 0              ; per-file base initial send sequ
 ; FW_REC_IDX — the record index within the current file (0-based); store_begin
 ; resets it, storage_sink_leaf increments it per flushed window.
 FW_REC_IDX:        defs 2
-; FW_STORE_NAME_PTR — the current file's logical name pointer (the manifest name
-; ptr prov_start passes to store_begin); fw_span_record_name builds each record
-; name from it.
-FW_STORE_NAME_PTR: defs 2
 ; FW_BASE_RECORD — the first free Trinity SD record for the current file, set by
 ; store_begin (via bdos_find_free_record). storage_sink_leaf uses FW_BASE_RECORD +
 ; FW_REC_IDX as the per-window Trinity record number. Stays 0 when BD_RECORDS=0
@@ -544,22 +535,19 @@ FW_STORE_NAME_PTR: defs 2
 ; a graceful-decline path — the pre-SD-card-read default.
 FW_BASE_RECORD:    defs 2
 
-; store_begin(HL = the file's logical name ptr) — open a file in the store: remember
-; its name for record naming, reset the record index, and pick the first free Trinity
-; SD record for the whole file. bdos_find_free_record scans 1..BD_RECORDS (set at
-; boot by csd_set_bd_records) and stores the first free record in BD_FREE_RECORD;
-; we latch that into FW_BASE_RECORD so every storage_sink_leaf window for THIS file
-; uses a contiguous band starting at the free record. When BD_RECORDS=0 (no card or
-; CSD read failed), BD_FREE_RECORD stays 0 and storage_sink_leaf uses record 0.
-; Clobbers AF, BC, DE, HL.
+; store_begin — open a file in the store: reset the record index and pick the first
+; free Trinity SD record for the whole file. Each record's NAME is content-addressed
+; from CONN_PINNED_HASH by storage_sink_leaf, so store_begin takes no name input.
+; bdos_find_free_record scans 1..BD_RECORDS (set at boot by csd_set_bd_records) and
+; stores the first free record in BD_FREE_RECORD; we latch that into FW_BASE_RECORD so
+; every storage_sink_leaf window for THIS file uses a contiguous band starting at the
+; free record. When BD_RECORDS=0 (no card or CSD read failed), BD_FREE_RECORD stays 0
+; and storage_sink_leaf uses record 0. Clobbers AF, BC, DE, HL.
 store_begin:
 if defined(NETBOOT_DEBUG)
-                push    hl
                 ld      a, DBG_HTTP_FILE_START
                 call    dbg_marker
-                pop     hl
 endif
-                ld      (FW_STORE_NAME_PTR), hl
                 ld      hl, 0
                 ld      (FW_REC_IDX), hl
                 call    bdos_find_free_record   ; BD_FREE_RECORD = first free 1..BD_RECORDS (0 if none)
@@ -571,13 +559,47 @@ endif
 ; it against the pinned hash (conn_verify_final sets CONN_HASH_MATCH). The fetched
 ; bytes are already persisted (storage_sink_leaf HSAVE'd each window); this only
 ; finalises the verify verdict. Acting on a mismatch — reject / retry / surface it
-; — is the picker UX (i100c). Clobbers A, BC, DE, HL, IX.
+; — is the picker UX (i100c).
+;
+; Under NETBOOT_WANT_CLAIM (i360b), it then CLAIMS the record — writes its central
+; record-LIST name entry via bdos_claim_record — so the NEXT file's store_begin ->
+; bdos_find_free_record advances to the next free record instead of re-picking this
+; one (find_free tests the list entry blank, which store_format_record's +232 dir
+; stamp does not touch). The claimed name is the base record's content-addressed
+; <hash6>000 (matching the window-0 HSAVE filename). This claims only FW_BASE_RECORD,
+; correct for a single-record file; a multi-record file must claim every record it
+; spans — the i70c record-spanning reconciliation (see the sd_csd include note).
+; Clobbers A, BC, DE, HL, IX.
 store_end:
 if defined(NETBOOT_DEBUG)
                 ld      a, DBG_HTTP_FILE_VERIFY
                 call    dbg_marker
 endif
+if defined(NETBOOT_WANT_CLAIM)
+                call    conn_verify_final       ; finalise the verify verdict first
+                ; --- claim FW_BASE_RECORD so the next file's find_free advances ---
+                ; Decline when there is no real SD record (FW_BASE_RECORD == 0 is
+                ; store_begin's no-card / floppy-decline path): bdos_claim_record does
+                ; a raw CMD24 list-sector write that would spin on an absent card, and
+                ; the card-less host harness must reach here without wedging. Same
+                ; guard as store_format_record.
+                ld      hl, (FW_BASE_RECORD)
+                ld      a, h
+                or      l
+                ret     z
+                ld      (BD_FREE_RECORD), hl    ; bdos_claim_record claims BD_FREE_RECORD
+                ; base-record name = <hash6>000 (content-addressed from the pinned
+                ; digest, index 0) — the same name storage_sink_leaf's window 0 gave
+                ; the HSAVE'd disk image, so the record-LIST name matches its content.
+                ld      hl, CONN_PINNED_HASH
+                ld      bc, 0
+                call    fw_span_record_name     ; FW_SPAN_NAME = <hash6>000
+                ld      hl, FW_SPAN_NAME
+                ld      (BD_CLAIM_NAME_PTR), hl
+                jp      bdos_claim_record       ; write the list entry; returns to caller
+else
                 jp      conn_verify_final
+endif
 
 ; storage_sink_leaf(HL = window ptr, BC = window length) — the per-window store
 ; leaf the streaming flush reaches (through the body-skip filter). It (1) hashes
@@ -592,6 +614,28 @@ endif
 ; (ptr&0x3FFF | &8000). Deriving the page from the section index (ptr>>14) instead
 ; was the i355 store-leg wedge. Clobbers A, BC, DE, HL, IX.
 storage_sink_leaf:
+if defined(NETBOOT_WANT_RECORD_WRITE)
+                ; --- (0) pre-format the free record's directory (i357) ---
+                ; A genuinely FREE Trinity record has no "BDOS" +232 stamp, so real
+                ; B-DOS 1.5t HRECORD rejects it ("Invalid record", longjmp) and the
+                ; store leaf wild-jumps — the i70b store-leg wedge (i356 root cause).
+                ; Reproduce B-DOS FORMAT's record-level EFFECT ourselves before the
+                ; HRECORD/HSAVE hooks run: blank the directory region (tracks 0-3) and
+                ; stamp "BDOS" into its first sector, via the hardware-proven raw-CMD24
+                ; record write (bd_record_write_hw). Done ONCE, on the first window
+                ; (FW_REC_IDX == 0 -> FW_BASE_RECORD, the record bdos_find_free_record
+                ; confirmed free); later windows of a multi-record file target records
+                ; not proven free, so they are left to the i99/q16 record-spanning work
+                ; rather than formatted here (which would risk a used record).
+                push    hl                      ; save window ptr across the format
+                push    bc                      ; save window length across the format
+                ld      hl, (FW_REC_IDX)
+                ld      a, h
+                or      l
+                call    z, store_format_record  ; only the first window formats FW_BASE_RECORD
+                pop     bc
+                pop     hl
+endif
                 ; --- (1) hash this window into the running SHA-256 verify ---
                 push    hl                      ; save window ptr across the hash
                 push    bc                      ; save window length across the hash
@@ -602,10 +646,16 @@ storage_sink_leaf:
                 ; --- (2) HSAVE this window as the next record ---
                 push    hl                      ; save window ptr (HSAVE source addr)
                 push    bc                      ; save window length (HSAVE size)
-                ; build the record name <prefix><NNN> from the logical name + index.
-                ld      hl, (FW_STORE_NAME_PTR) ; HL = logical name ptr
+                ; build the content-addressed record name <hash6><NNN> from the
+                ; current file's pinned SHA-256 digest (CONN_PINNED_HASH) + index.
+                ; fw_span_record_name hex-encodes digest[0..2]; CONN_PINNED_HASH is the
+                ; blob hash the streamed-body verify enforces (bdos.SpanRecordName
+                ; content-addresses by exactly this hash — CLAUDE.md rule 6). It is the
+                ; PINNED hash (known up-front), not the running hash, because HSAVE
+                ; happens per-window before conn_verify_final finalises the stream.
+                ld      hl, CONN_PINNED_HASH    ; HL = the file's 32-byte pinned digest
                 ld      bc, (FW_REC_IDX)        ; BC = record index
-                call    fw_span_record_name     ; FW_SPAN_NAME = <prefix><NNN>
+                call    fw_span_record_name     ; FW_SPAN_NAME = <hash6><NNN>
                 ld      hl, FW_SPAN_NAME
                 ld      (BD_NAME_PTR), hl
                 pop     bc                      ; BC = window length (HSAVE size)
@@ -652,18 +702,113 @@ endif
                 ld      (FW_REC_IDX), hl
                 ret
 
+if defined(NETBOOT_WANT_RECORD_WRITE)
+; ===========================================================================
+; store_format_record — reproduce B-DOS FORMAT's directory-level effect for the
+; free record FW_BASE_RECORD, so the subsequent HRECORD/HSAVE hooks accept it.
+;
+; AUTHORITY (B-DOS 1.5t, Trinity-HW; see the i357 row + docs/notes provenance):
+;   - HRECORD accepts a record IFF its first directory sector (linearSec 0) has
+;     "BDOS" at +232 (bdos15t annotated.dis:1982-2007, &8DE0 — the SOLE test).
+;   - HSAVE keeps NO on-disk free-sector bitmap: B-DOS rebuilds the RAM BAM by
+;     SCANNING the directory (hd.lds &AA3D) and allocation is hard-coded to start
+;     at track 4 (find.free &0401), so HSAVE can never overwrite the directory
+;     (tracks 0-3). BUT every one of the 80 directory entries' type byte (offset 0
+;     of each 256-byte entry) must be ZERO, else a stale non-zero entry is scanned
+;     as a live file and poisons the BAM (a phantom file marks real data sectors
+;     used). A record freed by bdos_free_record keeps its dir data (only its LIST
+;     entry is cleared), so a "free" record can hold stale directory bytes.
+; Hence blank the DIRECTORY region — tracks 0-3 = linearSec 0..39 (40 sectors) —
+; and stamp "BDOS" into sector 0. This is FORMAT's record-level effect WITHOUT its
+; full 1600-sector zero-fill (i357 direction, q71 = Pete option A). new.lab also
+; writes a disk label at +210/+250; the label is cosmetic (HRECORD ignores it,
+; get.label reads it only after acceptance) and the claim path that would name the
+; record is out of budget here, so it is omitted — the record is a valid unnamed
+; formatted disk.
+;
+; In:  FW_BASE_RECORD  the 1-based free record to format (>= 1).
+; Uses BD_WRITE_BUF (512 B, unused by http_main's HSAVE store) as the sector image.
+; Clobbers AF, BC, DE, HL. bd_record_write_hw's i295 band guard keeps every CMD24
+; strictly inside FW_BASE_RECORD's own body sectors (data safety on the shared card).
+; ===========================================================================
+SFR_DIR_SECTORS:  equ 40                        ; tracks 0-3 (10 sectors/track) = the directory region
+store_format_record:
+                ; Decline when there is no real SD record to format. A free SD record
+                ; is 1-based; FW_BASE_RECORD == 0 is store_begin's no-card path
+                ; (BD_RECORDS == 0 at boot -> the record-0/floppy graceful decline).
+                ; The raw CMD24 writes below would spin forever waiting on an absent
+                ; card (bd_record_write_hw drives the SPI bus directly). This guard is
+                ; also what lets the flat host provision/bodysink harness — which
+                ; attaches no SD model — drive storage_sink_leaf without wedging; the
+                ; real-card format path (a free record >= 1) is emulation-covered by
+                ; http_main_faithful_store_test.
+                ld      hl, (FW_BASE_RECORD)
+                ld      a, h
+                or      l
+                ret     z
+if defined(NETBOOT_DEBUG)
+                ld      a, DBG_HTTP_FILE_START
+                call    dbg_marker
+endif
+                ; select the record all writes target.
+                ld      hl, (FW_BASE_RECORD)
+                ld      (BD_REC_REC), hl
+                ; zero the 512-byte sector image once (reused for every blanked sector).
+                ld      hl, BD_WRITE_BUF
+                ld      de, BD_WRITE_BUF + 1
+                ld      bc, 511
+                ld      (hl), 0
+                ldir
+                ; blank the rest of the directory region: linearSec 1..39 = all-zero
+                ; (neutralises every directory entry's type byte). Sector 0 is written
+                ; last, carrying the stamp.
+                ld      b, SFR_DIR_SECTORS - 1  ; sectors 1..39
+                ld      hl, 1
+sfr_blank:
+                ld      (BD_REC_LINEAR), hl
+                push    bc
+                push    hl
+                ld      hl, BD_WRITE_BUF
+                call    bd_record_write_hw      ; own CMD24 to FW_BASE_RECORD linearSec i
+                pop     hl
+                pop     bc
+                inc     hl
+                djnz    sfr_blank
+                ; stamp "BDOS" at +232 and write the directory's first sector (0).
+                ld      hl, bdos_id_str         ; "BDOS" (bdos_seam.asm)
+                ld      de, BD_WRITE_BUF + 232
+                ld      bc, 4
+                ldir
+                ld      hl, 0
+                ld      (BD_REC_LINEAR), hl
+                ld      hl, BD_WRITE_BUF
+                call    bd_record_write_hw      ; the validity sector (BDOS@232)
+                ret
+endif
+
 ; ===========================================================================
 ; sd_csd.asm — CSD read and BD_RECORDS derivation. Included here (after all the
 ; code) so every symbol it defines — csd_set_bd_records, csd_base, BD_RECORDS
 ; (via bdos_seam.asm already included transitively) — is available above.
 ; NETBOOT_REAL_LISTREAD (set by the Makefile recipes, i70e): the free-record
 ; scan reads the record list via the raw CMD17 path (bd_list_read_hw, below) —
-; the sd_push/i319a hardware-proven mechanism. The record SELECT and the HSAVE
-; still go via real B-DOS RST 8 hooks (hardware-proven by i93b). No
-; NETBOOT_WANT_CLAIM: http_main never issues raw CMD24 SPI writes (B-DOS HSAVE
-; owns the record contents), so the ~540-byte write cluster (bd_list_write_hw /
-; bd_cmd24_write_core / bd_record_write_hw) is omitted, keeping the binary
-; inside the 32 KB budget.
+; the sd_push/i319a hardware-proven mechanism. NETBOOT_WANT_RECORD_WRITE (i357):
+; pulls the raw-CMD24 record-DATA write path (bd_cmd24_write_core /
+; bd_record_write_hw + its i295 band guard) so store_format_record can pre-format
+; a free record's directory before HRECORD/HSAVE. The record SELECT and the file
+; body go via real B-DOS RST 8 hooks (HRECORD / HSAVE, hardware-proven by i93b).
+;
+; NETBOOT_WANT_CLAIM (i360b, set for the full multi-file netboot_http_boot build):
+; pulls bd_list_write_hw + the bdos_seam claim machinery (bdos_claim_record /
+; bdos_build_claim_entry) so store_end writes each stored record's central LIST name
+; entry. That makes the NEXT file's bdos_find_free_record advance to the next free
+; record instead of re-picking the just-formatted one (find_free tests the list-entry
+; blank, which store_format_record's +232 dir stamp does not touch). NETBOOT_WANT_CLAIM
+; implies the record-DATA write path (sd_csd.asm shares bd_cmd24_write_core between the
+; list-write and record-write, so it is assembled once). It claims only FW_BASE_RECORD
+; per file — correct for a single-record file; a multi-record file must claim every
+; record it spans, part of the i70c record-spanning reconciliation. The claim is NOT
+; set in the smoke/debug builds (single-file, no re-pick).
 ; ===========================================================================
                 include "sd_csd.asm"
 

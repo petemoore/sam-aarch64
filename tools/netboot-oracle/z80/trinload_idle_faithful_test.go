@@ -34,6 +34,9 @@ package z80_test
 
 import (
 	"bytes"
+	"os"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/petemoore/sam-aarch64/tools/netboot-oracle/frame"
@@ -41,13 +44,38 @@ import (
 	z80h "github.com/petemoore/sam-aarch64/tools/netboot-oracle/z80"
 )
 
+// trinloadSym returns a trinload landmark address from build/trinload.map (format
+// "ADDR=name", org &6000). The record image these tests boot is composed from
+// build/trinload.bin, so trinload's addresses are looked up from its map rather than
+// hardcoded: a change to trinload or any file it includes (e.g. encdrv.asm) shifts
+// them, and a stale literal silently stops at the wrong PC or reads the wrong bytes.
+func trinloadSym(t *testing.T, name string) uint16 {
+	t.Helper()
+	data, err := os.ReadFile("../../../build/trinload.map")
+	if err != nil {
+		t.Fatalf("read trinload.map (run `make netboot-trinload`): %v", err)
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		i := strings.IndexByte(line, '=')
+		if i <= 0 || strings.TrimSpace(line[i+1:]) != name {
+			continue
+		}
+		v, err := strconv.ParseUint(strings.TrimSpace(line[:i]), 16, 16)
+		if err != nil {
+			t.Fatalf("trinload.map: bad address for %q: %v", name, err)
+		}
+		return uint16(v)
+	}
+	t.Fatalf("symbol %q not found in trinload.map", name)
+	return 0
+}
+
 const (
-	// trinload landmarks (build/trinload.map; the record image is composed from
-	// build/trinload.bin, so these are OUR binary's addresses, org &6000 = physical
-	// page 1... loaded by B-DOS to physical page 0 offset &2000, visible at &6000
-	// under the LMPR=&1F system map).
-	trinloadReadLoop = 0x6060 // the idle poll loop
-	trinloadChunkVar = 0x666F // settings buffer: sam_mac = +0, sam_ip = +6
+	// trinload landmarks come from build/trinload.map via trinloadSym (read_loop = the
+	// idle poll loop, chunk = the settings buffer with sam_mac at +0, sam_ip at +6),
+	// org &6000 = physical page 1... loaded by B-DOS to physical page 0 offset &2000,
+	// visible at &6000 under the LMPR=&1F system map. They are NOT hardcoded — any
+	// change to trinload or a file it includes shifts them.
 
 	// Record-band geometry on the csdV2(0x001D59) card (base=152, 1600 sectors per
 	// record): record N's body band is [base+1600*(N-1), base+1600*N).
@@ -115,11 +143,11 @@ func composeCodeAutoMGT(t *testing.T, autoName string, payload []byte, load uint
 		bit := track*10 + (sector - 1) - 40
 		s1[0x0F+bit/8] |= 1 << (bit % 8)
 	}
-	s1[0xEC] = startPage                              // StartAddressPage
+	s1[0xEC] = startPage                                 // StartAddressPage
 	s1[0xED], s1[0xEE] = byte(offForm), byte(offForm>>8) // StartAddressPageOffset, &8000-form
-	s1[0xEF] = pages                                  // full 16K pages
-	s1[0xF0], s1[0xF1] = byte(lenMod), byte(lenMod>>8) // LengthMod16K
-	s1[0xF2] = execPage                               // ExecAddrDiv16K
+	s1[0xEF] = pages                                     // full 16K pages
+	s1[0xF0], s1[0xF1] = byte(lenMod), byte(lenMod>>8)   // LengthMod16K
+	s1[0xF2] = execPage                                  // ExecAddrDiv16K
 	s1[0xF3], s1[0xF4] = byte(offForm), byte(offForm>>8) // ExecAddrMod16K, &8000-form
 
 	// Body: 9-byte header + payload, chained 510 bytes per sector from T6S1.
@@ -282,10 +310,13 @@ func TestBootRecordFromTrinloadIdle(t *testing.T) {
 	armServeDispatch(mac, page)
 	mac.Pager().HMPR = page
 
+	readLoop := trinloadSym(t, "read_loop")
+	chunkVar := int(trinloadSym(t, "chunk"))
+
 	from1 := len(*lg)
 	res1, err := mac.ContinueFrom(brMain, z80h.Entry{
 		StepCap: 80_000_000, FrameIntPeriod: 60000,
-		StopPC: trinloadReadLoop,
+		StopPC: readLoop,
 	})
 	if err != nil {
 		t.Fatalf("phase 1 (boot_record -> record 3) faulted: %v (PC=&%04X)", err, res1.PC)
@@ -295,7 +326,7 @@ func TestBootRecordFromTrinloadIdle(t *testing.T) {
 		res1.PC, res1.ReachedStop, res1.Steps, dir1, body1, out1)
 	if !res1.ReachedStop {
 		t.Fatalf("boot_record(3) did not reach trinload's read_loop (&%04X): finalPC=&%04X halted=%v — the first boot broke before trinload idle",
-			trinloadReadLoop, res1.PC, res1.Halted)
+			readLoop, res1.PC, res1.Halted)
 	}
 	if body1 == 0 {
 		t.Errorf("phase 1 read no record-3 BODY sectors — trinload cannot have been loaded from the card")
@@ -312,8 +343,8 @@ func TestBootRecordFromTrinloadIdle(t *testing.T) {
 	// trinload's adopted identity, read back from its settings buffer.
 	var samMAC [6]byte
 	var samIP [4]byte
-	copy(samMAC[:], mac.Pager().RAM[0][trinloadChunkVar-0x4000:])
-	copy(samIP[:], mac.Pager().RAM[0][trinloadChunkVar-0x4000+6:])
+	copy(samMAC[:], mac.Pager().RAM[0][chunkVar-0x4000:])
+	copy(samIP[:], mac.Pager().RAM[0][chunkVar-0x4000+6:])
 	t.Logf("phase 1: trinload idle; identity MAC=% X IP=%d.%d.%d.%d", samMAC[:], samIP[0], samIP[1], samIP[2], samIP[3])
 
 	// --- Phase 2: liveness — a '?' discovery must be answered '!' (the probe

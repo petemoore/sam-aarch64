@@ -87,6 +87,7 @@ class MustNotFire(unittest.TestCase):
         # "trinload-push" matching the old un-anchored arg regex.
         "python3 -m py_compile tools/trinload-push/sd-push.py",
         "python3 -m py_compile tools/trinload-push/boot-record.py",
+        "python3 -m py_compile tools/trinload-push/push-and-boot.py",
         "python3 -m compileall tools/trinload-push/",
         # i340: a grep whose PATTERN or target names pushers / deploy tokens
         # (the 2026-07-01e registry-view grep shape).
@@ -138,6 +139,10 @@ class MustFire(unittest.TestCase):
         "python3 tools/trinload-push/boot-record.py 192.168.2.75 186",
         "python3 tools/trinload-push/delete-record.py 192.168.2.75 187",
         "python3 tools/trinload-push/list-records.py 192.168.2.75",
+        # i284: the one-command push+boot wrapper drives an sd_push write then a
+        # boot in-process — a deploy that must fire by basename, from any path.
+        "python3 tools/trinload-push/push-and-boot.py 192.168.2.75 cj.mgt",
+        "./push-and-boot.py 192.168.2.75 x.mgt --no-boot",
         "python3 /tmp/scratch/sd-push-timing.py 192.168.2.75 junk.mgt sd_push_meter.bin",
         "./sd-push.py 192.168.2.75 x.mgt",
         # i340: -m runs the MODULE — a pusher module fires, a stdlib one doesn't.

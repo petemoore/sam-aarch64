@@ -5,7 +5,9 @@ after the root `README.md`. Each section summarizes one subsystem and links
 the deep spec or reference that owns the detail; nothing here is normative
 on its own. For current milestone state see `notes/m9-status.md`; for the
 work backlog and open questions see `notes/item-registry-open.md` and
-`notes/question-registry-open.md`.
+`notes/question-registry-open.md`; for a catalogue of every `.mgt` disk
+image the build produces — what each is, its source, how to run it, and its
+Trinity record number — see [`disk-catalogue.md`](disk-catalogue.md).
 
 ## 1. What this is
 

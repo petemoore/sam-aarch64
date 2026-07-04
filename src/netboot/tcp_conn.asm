@@ -313,6 +313,11 @@ conn_accumulate:
                 jp      nz, conn_accumulate_sink
                 endif
                 ; --- legacy: append to CONN_DATA ---
+                ; Only the non-streaming builds carry CONN_DATA; the NETBOOT_STREAM
+                ; bootable always has CONN_SINK_ENABLED=1 (jp nz above always taken),
+                ; so this fall-through is dead there and the buffer it needs is gone
+                ; (i360). Excluded from the stream build to reclaim the 4 KB buffer.
+                if defined(NETBOOT_STREAM)==0
                 push    hl                     ; save length
                 ld      de, (CONN_DATA_LEN)
                 ld      hl, CONN_DATA
@@ -327,6 +332,7 @@ conn_accumulate:
                 ld      hl, (CONN_DATA_LEN)
                 add     hl, bc
                 ld      (CONN_DATA_LEN), hl
+                endif
                 ret
 
                 if defined(NETBOOT_HOSTTEST) | defined(NETBOOT_STREAM)
@@ -707,7 +713,17 @@ CONN_RX_LEN:      defs 2                   ; length of the last received frame
 CONN_DATA_LEN:    defs 2                   ; accumulated inbound bytes
 RXBUF:            defs 1518                ; received frame buffer
 CONN_TX_PAYLOAD:  defs 1460                ; outbound payload staging (control segs use 0)
+                  ; The 4 KB whole-body accumulate buffer is only used by the legacy
+                  ; (non-streaming) path — conn_accumulate's CONN_DATA append and
+                  ; http_parse_response, both present in the host-test/default builds.
+                  ; The NETBOOT_STREAM bootable streams into CONN_FLUSH_BUF instead and
+                  ; never touches CONN_DATA, so excluding it there reclaims 4 KB of the
+                  ; &8000-&FFFF boot window (i360) — headroom the record-write cluster +
+                  ; record-list claim need. Keeping it out also shifts the streaming
+                  ; buffers below down, deeper into section C.
+                  if defined(NETBOOT_STREAM)==0
 CONN_DATA:        defs 4096                ; accumulated response body (test inspects)
+                  endif
 
 ; ===========================================================================
 ; Streaming sink state (i99) — opt-in bounded flush of inbound body bytes

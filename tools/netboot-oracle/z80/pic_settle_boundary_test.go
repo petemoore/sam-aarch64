@@ -73,6 +73,33 @@ func TestPICSettleBoundary(t *testing.T) {
 		}
 	})
 
+	// The re-base: a window still OPEN at the boundary must carry only its
+	// REMAINING budget into the new (smaller) timeline, not its old absolute
+	// deadline. Arm the window deep in a long run (a large absolute deadline)
+	// with only a little budget left, then start a new run near t=0: without
+	// re-basing, the old absolute deadline re-arms the window for the whole next
+	// run, pinning every probe stale (the PR 820 §3 residual — the i327 artifact
+	// in a narrower shape). With re-basing the window closes after the remaining
+	// budget elapses, so a probe well past it reads fresh.
+	t.Run("open window re-bases its remaining budget across the boundary", func(t *testing.T) {
+		enc := newENC()
+		enc.SetTState(100_000)
+		enc.Out(0xDC, 0x38)    // arm deep in the run: absolute deadline 101_200
+		enc.SetTState(100_100) // still open: 1_100 T-states of budget left
+		enc.SetTState(50)      // run boundary: re-base to 50 + 1_100 = 1_150
+		// Within the re-based budget the window still pins the probe stale — the
+		// i242 back-to-back catch is preserved, not thrown away by the re-base.
+		if d, e := probeIdent(enc, 100); d == 'T' && e == 'R' {
+			t.Error("probe inside the re-based budget read fresh — the i242 back-to-back catch was lost")
+		}
+		// Past the re-based deadline (1_150) but far below the OLD absolute
+		// deadline (101_200): fresh only if the deadline was re-based. Without
+		// the clamp this reads stale — the whole-next-run stale pin.
+		if d, e := probeIdent(enc, 2_000); d != 'T' || e != 'R' {
+			t.Errorf("probe past the re-based deadline = %q%q, want \"TR\" — the old absolute deadline re-armed the window for the whole next run (PR 820 §3 residual)", d, e)
+		}
+	})
+
 	// The end-anchor: SD traffic while the window is open refreshes the
 	// deadline, so it measures quiet time after the transaction's LAST byte,
 	// not after the opening select.

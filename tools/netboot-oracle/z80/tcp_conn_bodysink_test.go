@@ -51,9 +51,10 @@ func loadHTTPMainForStream(t *testing.T) *z80h.Machine {
 }
 
 // spanRecordName mirrors src/netboot/fw_span.asm fw_span_record_name: the record
-// name is the first 3 bytes of nameBytes emitted as 6 lowercase hex chars followed
+// name is the first 3 bytes of hashBytes emitted as 6 lowercase hex chars followed
 // by the 3-digit zero-padded record index. storage_sink_leaf builds each record's
-// name this way from FW_STORE_NAME_PTR (set by store_begin) and FW_REC_IDX.
+// name this way from the file's pinned SHA-256 digest (CONN_PINNED_HASH) and
+// FW_REC_IDX — content-addressing, not the filename.
 func spanRecordName(nameBytes []byte, index int) string {
 	return fmt.Sprintf("%02x%02x%02x%03d", nameBytes[0], nameBytes[1], nameBytes[2], index)
 }
@@ -125,12 +126,16 @@ func TestStreamThroughBodySink(t *testing.T) {
 	store := z80h.NewBDOSStore()
 	mac.AttachBDOS(store)
 
-	// Open a file in the store leaf so the record names + index are deterministic:
-	// store_begin(HL = a known name ptr) sets FW_STORE_NAME_PTR + zeroes FW_REC_IDX.
-	// FW_HOST ("cdn.githubraw.com") is a convenient NUL-terminated name source; the
-	// record name is fw_span_record_name(FW_HOST bytes, recIdx).
-	nameBytes := []byte(readCStr(t, mac, "FW_HOST"))
-	if _, err := mac.CallEntry("store_begin", z80h.Entry{HL: symAddr(t, mac, "FW_HOST")}); err != nil {
+	// Open a file in the store leaf so the record index is deterministic: store_begin
+	// zeroes FW_REC_IDX (it takes no name input — record names are content-addressed
+	// from CONN_PINNED_HASH by storage_sink_leaf). Pin the body's own SHA-256 as that
+	// digest up-front (BEFORE the body streams), so each record is named
+	// fw_span_record_name(pinnedHash, recIdx) — the same content-addressing the verify
+	// (below) enforces. The pin is known up-front because HSAVE happens per-window
+	// before conn_verify_final finalises the streamed hash.
+	wantHash := sha256.Sum256(body)
+	pinHash(t, mac, wantHash)
+	if _, err := mac.Call("store_begin"); err != nil {
 		t.Fatalf("store_begin: %v", err)
 	}
 
@@ -176,9 +181,9 @@ func TestStreamThroughBodySink(t *testing.T) {
 	}
 	var total uint32
 	for i, s := range saves {
-		wantName := spanRecordName(nameBytes, i)
+		wantName := spanRecordName(wantHash[:], i)
 		if s.Name != wantName {
-			t.Errorf("record[%d] name = %q, want %q (fw_span_record_name)", i, s.Name, wantName)
+			t.Errorf("record[%d] name = %q, want %q (fw_span_record_name of the pinned content hash)", i, s.Name, wantName)
 		}
 		wantSize := uint32(len(chunkSink.Chunks[i]))
 		if s.Size != wantSize {
@@ -190,11 +195,10 @@ func TestStreamThroughBodySink(t *testing.T) {
 		t.Errorf("HSAVE'd bytes total %d, want %d (the whole body, header stripped)", total, len(body))
 	}
 
-	// Assert (2): CONN_HASH (after conn_verify_final with the correct pin) must
-	// equal crypto/sha256.Sum256(body) — the digest is over the body only, a
-	// cryptographic proof the streamed bytes are exactly the body (header stripped).
-	wantHash := sha256.Sum256(body)
-	pinHash(t, mac, wantHash)
+	// Assert (2): CONN_HASH (after conn_verify_final with the correct pin — pinned
+	// up-front above) must equal crypto/sha256.Sum256(body) — the digest is over the
+	// body only, a cryptographic proof the streamed bytes are exactly the body
+	// (header stripped).
 	gotHash, match := verifyFinal(t, mac)
 	if gotHash != wantHash {
 		t.Errorf("CONN_HASH mismatch after bodySink interposition:\n  z80  %x\n  want %x\n(digest must be over body only, not including the HTTP header)",

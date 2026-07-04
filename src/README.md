@@ -42,11 +42,11 @@ The boot self-tests outgrew the section-C code budget, so the larger suites were
 | File | Built to | Loaded into | Notes |
 |------|----------|-------------|-------|
 | `test_mem_offaxis.asm` (wraps `test_mem.asm`) | `build/test_mem.bin` (~780 B) | physical page 13 | Largest suite (memory-operand encoders). Background: `https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/plans/2026-05-28-plan-pr3-test-corpus-off-axis.md`. |
-| `test_offaxis_cluster.asm` | `build/test_cluster.bin` (~3.1 KB) | physical page 12 | Suite cluster: wraps `test_symbols`, `test_local_labels`, `test_expr_eval`, `test_slots`, `test_pc_rel`, `test_directives`, `test_ror_imm`, `test_shifted_reg`, `test_extended_reg`, `test_litpool` behind a dispatcher. `https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/2026-05-29-test-variant-budget-relief.md`. |
+| `test_offaxis_cluster.asm` | `build/test_cluster.bin` (~3.1 KB) | physical page 12 | Suite cluster: wraps `test_symbols`, `test_local_labels`, `test_expr_eval`, `test_slots`, `test_pc_rel`, `test_directives`, `test_ror_imm`, `test_shifted_reg`, `test_extended_reg`, `test_litpool`, `test_pagepool`, `test_emit_paged`, `test_erratum835769`, `test_erratum843419` behind a dispatcher. `https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/2026-05-29-test-variant-budget-relief.md`. |
 | `paged_call_test_payload.asm` | `build/paged_call_test_payload.bin` (3 B) | physical page 14 | Trivial `ld a,&42; ret` payload exercising the paged-call mechanism (`test_paged_call.asm`). |
 | `test_encode_inst_payload.asm` | `build/enc_fix_payload.bin` (~530 B, pure data, `org &E100`) | physical page 11 | encode_inst fixture rows + operand streams (`BUILD_TESTS_ENCODE` only); bulk-copied to section-D RAM by `run_encode_inst_self_tests`. |
 
-The remaining `test_*.asm` files (`test_sysname.asm`, `test_reader_paged.asm`, `test_sysreg_paged.asm`, `test_trampoline.asm`, `test_paged_call.asm`) are in-section and run from the `BUILD_TESTS` path in `assembler.asm`; `insn_encode.asm` + `test_encode_inst.asm` are in-section under the `BUILD_TESTS_ENCODE` path (the enc-tests variant); `test_assert_eq32.asm` is in-section under both. The off-axis wrappers above pull in the rest (`test_emit_paged.asm` lives in the page-12 cluster).
+The remaining `test_*.asm` files (`test_sysname.asm`, `test_reader_paged.asm`, `test_sysreg_paged.asm`, `test_trampoline.asm`, `test_paged_call.asm`) are in-section and run from the `BUILD_TESTS` path in `assembler.asm`; `insn_encode.asm` + `test_encode_inst.asm` are in-section under the `BUILD_TESTS_ENCODE` path (the enc-tests variant); `test_assert_eq32.asm` is in-section under both. The off-axis wrappers above pull in the rest.
 
 ## Page-13 production payloads (sysreg + zx0)
 

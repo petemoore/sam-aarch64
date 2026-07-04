@@ -314,7 +314,7 @@ func (w *chunkFileSink) Write(chunk []byte) { w.f.chunks = append(w.f.chunks, le
 // per-file bounded records the Go authority (goStore, driven by the same
 // Provisioner) chunked the stream into — same total count, and for each file the
 // per-record body SIZE (the Go chunk length) and NAME (fw_span_record_name of the
-// manifest name at the record index within that file). Proves the REAL store leaf
+// file's pinned content hash at the record index within that file). Proves the REAL store leaf
 // HSAVE'd exactly the right records, header stripped, without re-deriving the
 // windowing math (the Go Conn+BodySink is the boundary authority).
 func assertStoreRecords(t *testing.T, mac *z80h.Machine, store *z80h.BDOSStore, goStore *chunkStore, plan []nbhttp.FetchSpec) {
@@ -333,7 +333,10 @@ func assertStoreRecords(t *testing.T, mac *z80h.Machine, store *z80h.BDOSStore, 
 			t.Errorf("file %d manifest name %q != plan name %q", i, nameBytes, plan[i].Name)
 		}
 		for recIdx, n := range f.chunks {
-			want = append(want, wantRec{spanRecordName(nameBytes, recIdx), uint32(n)})
+			// Record names are content-addressed: fw_span_record_name of the file's
+			// pinned SHA-256 (CONN_PINNED_HASH = plan[i].SHA256, which driveProvZ80
+			// pins per file), NOT the filename.
+			want = append(want, wantRec{spanRecordName(plan[i].SHA256[:], recIdx), uint32(n)})
 		}
 	}
 	saves := store.Saves()
@@ -342,7 +345,7 @@ func assertStoreRecords(t *testing.T, mac *z80h.Machine, store *z80h.BDOSStore, 
 	}
 	for i, w := range want {
 		if saves[i].Name != w.name {
-			t.Errorf("record[%d] name = %q, want %q (fw_span_record_name)", i, saves[i].Name, w.name)
+			t.Errorf("record[%d] name = %q, want %q (fw_span_record_name of the pinned content hash)", i, saves[i].Name, w.name)
 		}
 		if saves[i].Size != w.size {
 			t.Errorf("record[%d] size = %d, want %d (Go authority chunk size)", i, saves[i].Size, w.size)

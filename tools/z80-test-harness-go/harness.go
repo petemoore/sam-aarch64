@@ -174,6 +174,18 @@ type Result struct {
 	// forgetting -sysreg-data, so page 13's sysreg matcher would be empty).
 	// Populated in dispatch order, deduplicated.
 	UnservedFiles []string
+
+	// ReachedStop reports the run ended by the CPU's PC reaching Config.StopPC
+	// (vs HALT / timeout / trap).  Meaningful only when Config.StopPC != 0; it
+	// is how the DEMO_ASM callable-exit assembler proves control RETURNED (the
+	// demo restores the caller's SP and `ret`s into the planted StopPC return
+	// address) rather than executing the prod di/halt.
+	ReachedStop bool
+
+	// SavedName is the DOS catalogue name (trailing spaces trimmed) the
+	// assembler handed HSAVE — read from UIFA[1..10] on the HSAVE hook.  Lets a
+	// test assert the output filename (e.g. the demo variant's "RELEASEIMG").
+	SavedName string
 }
 
 // RegSnapshot captures the Z80 register file plus paging state at a point
@@ -260,6 +272,14 @@ type Hardware struct {
 	failHSAVE          bool
 	strictFileNotFound bool
 	pendingFault       string
+
+	// stopPC: when non-zero, the run loop stops (successfully, ReachedStop)
+	// the moment the CPU's PC reaches this address.  Used by the DEMO_ASM
+	// callable-exit assembler: the harness plants stopPC as the return
+	// address the demo restores + rets into, so PC==stopPC proves the ret.
+	stopPC uint16
+	// savedName is the DOS name read from UIFA[1..10] on the HSAVE hook.
+	savedName string
 
 	// Optional windowed PC trace.  When traceHi>traceLo, every step whose
 	// PC lies in [traceLo,traceHi) is appended (in order, unbounded) to
@@ -621,6 +641,15 @@ type Config struct {
 	// default — normal runs pay no overhead.  Retrieve the map via the
 	// *Hardware returned by RunConfigHW.
 	EnableCoverage bool
+
+	// StopPC: when non-zero, the run stops (Result.ReachedStop=true) the
+	// instant the CPU's PC reaches this address, and the harness plants StopPC
+	// (little-endian) as the return address at the boot SP (&FFFE).  The
+	// DEMO_ASM callable-exit assembler saves that SP at start:, restores it at
+	// its clean exit, and `ret`s — landing on StopPC.  So a run with StopPC set
+	// distinguishes the demo's ret-exit (ReachedStop) from the prod di/halt.
+	// Choose an address the assembler never executes (e.g. high section D).
+	StopPC uint16
 }
 
 // TrigResult holds the state captured when Config.TrigPC was first reached.
@@ -655,6 +684,7 @@ func RunConfigHW(cfg Config) (Result, []RegSnapshot, TrigResult, *Hardware) {
 	hw.failHGTHD = cfg.FailHGTHD
 	hw.failHSAVE = cfg.FailHSAVE
 	hw.strictFileNotFound = cfg.StrictFileNotFound
+	hw.stopPC = cfg.StopPC
 	if cfg.EnableCoverage {
 		hw.cov = newCoverage()
 	}
@@ -911,12 +941,15 @@ func runOn(hw *Hardware, assemblerBin, enctabData, inData []byte, files []NamedF
 
 			// HSAVE: capture OUT bytes from the paged OUT buffer.
 			// The assembler has populated UIFA[31..36]:
-			//   UIFA[31]: start page (= 5)
+			//   UIFA[31]: start page (= OUT_RUN_BASE, the dynamic run base)
 			//   UIFA[32-33]: section-C source offset (&8000)
 			//   UIFA[34]: pages count (OUT_LEN >> 14)
 			//   UIFA[35-36]: remainder length (OUT_LEN & 0x3FFF)
 			uifaPage := int((hw.pager.LMPR&0x1F + 1) & 0x1F)
 			uifaOffset := int(uifaAddr & 0x3FFF)
+			// Record the save name (UIFA[1..10], trailing spaces trimmed).
+			hw.savedName = strings.TrimRight(
+				string(hw.pager.RAM[uifaPage][uifaOffset+1:uifaOffset+11]), " ")
 			startPage := int(hw.pager.RAM[uifaPage][uifaOffset+31])
 			pagesCount := int(hw.pager.RAM[uifaPage][uifaOffset+34])
 			remLo := uint16(hw.pager.RAM[uifaPage][uifaOffset+35])
@@ -956,8 +989,20 @@ func runOn(hw *Hardware, assemblerBin, enctabData, inData []byte, files []NamedF
 	// as a safe default before the assembler's `ld sp, &C100` executes.
 	cpu.SP = 0xFFFE
 
+	// Plant the StopPC return address at the boot SP (&FFFE, section D).  The
+	// DEMO_ASM callable-exit assembler saves this SP at start:, restores it at
+	// its clean exit, and `ret`s — popping this word into PC.  &FFFE is at the
+	// top of section D, far above the assembler's &C100-down boot stack, so it
+	// survives the whole run untouched.  No-op for the prod binary (it di/halts
+	// and never rets here); only planted when a StopPC is requested.
+	if hw.stopPC != 0 {
+		hw.pager.Set(cpu.SP, uint8(hw.stopPC))
+		hw.pager.Set(cpu.SP+1, uint8(hw.stopPC>>8))
+	}
+
 	deadline := time.Now().Add(timeout)
 	var exitReason string
+	var reachedStop bool
 	var steps uint64
 
 	// Trap detection: if the CPU enters the ROM 0xFF fill region (the fake
@@ -970,6 +1015,14 @@ func runOn(hw *Hardware, assemblerBin, enctabData, inData []byte, files []NamedF
 
 	for time.Now().Before(deadline) {
 		hw.recordPC(cpu.PC)
+		// StopPC reached: the DEMO_ASM callable-exit assembler restored the
+		// boot SP and `ret`ed into the planted StopPC.  Stop here, before
+		// executing whatever sits at StopPC, and flag the clean return.
+		if hw.stopPC != 0 && cpu.PC == hw.stopPC {
+			exitReason = fmt.Sprintf("RET to StopPC=&%04X after %d steps (demo callable exit)", hw.stopPC, steps)
+			reachedStop = true
+			break
+		}
 		if hw.traceHi > hw.traceLo && cpu.PC >= hw.traceLo && cpu.PC < hw.traceHi {
 			hw.windowTrace = append(hw.windowTrace, hw.snapshot())
 		}
@@ -1052,6 +1105,8 @@ func runOn(hw *Hardware, assemblerBin, enctabData, inData []byte, files []NamedF
 		FaultRegs:      faultRegs,
 		Steps:          steps,
 		UnservedFiles:  hw.unservedFiles,
+		ReachedStop:    reachedStop,
+		SavedName:      hw.savedName,
 	}
 }
 

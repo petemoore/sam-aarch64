@@ -194,7 +194,20 @@ OPMEM_OFF:      equ     &D100          ; 8 bytes — OpMem offset (s64 LE)
 ;   &D3C2         LITPOOL_SEGMENT_ALLOC (1 byte)
 ;   &D3C3         LITPOOL_SEGMENT_FLUSH (1 byte)
 ;   &D3C4..&D3C7  LITPOOL_SAVED_PC    (4 bytes)
-;   &D3C8..&D4FF  free (312 B between counters and STAGING_BUF at &D500)
+;   &D3C8..&D3D5  i27b: Cortex-A53 erratum 835769 state (15 B)
+;     &D3C8  FIX_835769_ENABLED   (1 byte: 0=off, 1=on for A53/Pi3 targeting)
+;     &D3C9  ERRATA_PREV_VALID    (1 byte: 1 when prev insn state is valid)
+;     &D3CA  ERRATA_INSN1         (4 bytes: previous instruction word, LE)
+;     &D3CE  ERRATA_PREV_PC       (4 bytes: PASS_PC after processing prev insn)
+;     &D3D2  ERRATA_INSN2         (4 bytes: current instruction word, scratch)
+;   &D3D6..&D3EE  i27c: Cortex-A53 erratum 843419 state (25 B)
+;     &D3D6  FIX_843419_ENABLED   (1 byte: 0=off, 1=on for A53/Pi3 targeting)
+;     &D3D7  E843_SCAN_PAGE       (1 byte: 0-based OUT run page index)
+;     &D3D8  E843_SCAN_PTR        (2 bytes: section-B ptr during post-layout scan)
+;     &D3DA  E843_BYTES_LEFT      (3 bytes: bytes remaining in scan, u24 LE)
+;     &D3DD  E843_SCAN_PC         (2 bytes: low 16 of current insn virtual PC)
+;     &D3DF  E843_INSN_BUF        (16 bytes: 4-word lookahead scratch)
+;   &D3EF..&D4FF  free (273 B between 843419 state and STAGING_BUF at &D500)
 ;   &E100..&E27F  LITPOOL_PC_MAP      (64 entries × 6 bytes = 384 B;
 ;                                     moved to &E100+ on 2026-05-28 to
 ;                                     fit the bumped 64-entry cap —
@@ -243,6 +256,18 @@ OPMEM_OFF:      equ     &D100          ; 8 bytes — OpMem offset (s64 LE)
                 include "reader.asm"
                 include "main_loop.asm"
                 include "insn_run.asm"
+                ; i27b: Cortex-A53 erratum 835769 NOP-insertion fix. Predicates,
+                ; per-instruction hazard gate, and mode-0 per-word processing path.
+                include "errata_835769.asm"
+                ; i27c: Cortex-A53 erratum 843419 post-layout ADRP→ADR rewrite.
+                ; Scan runs once after pass 2, before enctab_map_out.
+                ; Excluded from BUILD_TESTS_ENCODE: that variant's budget
+                ; is already near the ceiling (encode_inst fixtures take ~2 KB);
+                ; enc-tests does not produce production AArch64 output for
+                ; real hardware so the errata fix is not relevant there.
+                if defined(BUILD_TESTS_ENCODE)==0
+                include "errata_843419.asm"
+                endif
                 include "symbols.asm"
                 include "local_labels.asm"
                 include "litpool.asm"
@@ -274,6 +299,15 @@ PP_TABLE_BASE:  equ     &C9A4
 start:
                 di                     ; disable interrupts (batch program)
 
+                if defined(DEMO_ASM)
+; Demo callable-exit variant: the i365 demo driver `call`s this entry, so
+; save the caller's SP now — before `ld sp,&C100` switches to the boot
+; stack — and the clean exit below restores it and `ret`s back.
+                ld      hl, 0
+                add     hl, sp
+                ld      (saved_caller_sp), hl
+                endif
+
 ; Set up the stack before any call.  The DOS's EI in the RST 8 hook
 ; re-enables interrupts, so DI must be repeated after hook calls.
                 ld      sp, &C100
@@ -289,6 +323,13 @@ start:
                 ld      (ORIGIN_HIGH + 1), a
                 ld      (ORIGIN_HIGH + 2), a
                 ld      (ORIGIN_HIGH + 3), a
+; Zero the 843419 toggle (default off) at cold boot.  Same reason as
+; ORIGIN_HIGH above: errata_843419_scan reads it before main_assemble,
+; so it needs a known value before the self-tests and the first assemble.
+; Not needed in BUILD_TESTS_ENCODE (errata_843419.asm excluded there).
+                if defined(BUILD_TESTS_ENCODE)==0
+                ld      (FIX_843419_ENABLED), a
+                endif
 
 ; Capture the boot LMPR value (as left by BASIC's CALL 32768) into
 ; LMPR_DEFAULT_RUNTIME so enctab_map_out restores the *real* default,
@@ -651,12 +692,22 @@ endif
                 call    print_status_string
 
 ; -- Clean exit ---------------------------------------------------------
+                if defined(DEMO_ASM)
+; Demo callable-exit variant: restore the caller's SP (saved at start:) and
+; RET to the i365 demo driver.  "OK" is already printed above, so the driver
+; sees a clean return as success — the prod di/halt would instead trap the
+; driver forever.
+                ld      sp, (saved_caller_sp)
+                ret
+saved_caller_sp:        defw    0
+                else
 ; The DI at start: is undone by the DOS's EI inside the RST 8 hook window
 ; (ROM PTDOS does EI before dispatching — see docs/notes/headless-simcoupe.md
 ; "Why the stub ends in DI; HALT").
 ; Re-issue DI so HALT with IFF1=0 triggers SimCoupé's -exitonhalt.
                 di
                 halt
+                endif
 
 if defined(BUILD_TESTS)
 ; check_paged_test_result — shared tail for the paged self-tests (disasm

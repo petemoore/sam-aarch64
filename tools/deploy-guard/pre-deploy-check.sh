@@ -54,10 +54,12 @@ SAM_IP = "192.168.2.75"
 # Pusher scripts run via an interpreter, or invoked directly. The token list is
 # every push-and-run launcher in tools/trinload-push/ — the trinload pushers
 # PLUS sd-push / boot-record / delete-record / list-records (i340: these were
-# previously caught only by ACCIDENT via their directory name, see below).
+# previously caught only by ACCIDENT via their directory name, see below) and
+# push-and-boot (i284: the one-command push+boot wrapper drives an sd_push write
+# followed by a boot in-process, so it deploys and must be gated too).
 _PUSHER_TOKENS = (
     r"(?:trinload-push|trinpush-serve|trinpush"
-    r"|sd-push|boot-record|delete-record|list-records)"
+    r"|sd-push|boot-record|delete-record|list-records|push-and-boot)"
 )
 # Both regexes anchor the pusher token to the START OF THE BASENAME (a path
 # separator or string/token start immediately before it, and no further /

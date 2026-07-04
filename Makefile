@@ -112,7 +112,7 @@ ci-registry: registry-gen
 # koron-go/z80 harness (tools/netboot-oracle/z80) and byte-compares its emitted
 # packet against the same golden vectors the Go authority is checked against.
 # Needs pyz80 (the dev container), unlike the pure-Go ci-netboot-oracle.
-.PHONY: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-build-tcp-segment netboot-sha256 netboot-hmac-sha256 netboot-hkdf netboot-hkdf-expand-label netboot-chacha20 netboot-poly1305 netboot-x25519-field netboot-aead netboot-tls-keyschedule netboot-tls-record netboot-tls-transcript netboot-tls-client-hello netboot-tls-server-flight netboot-tls-client netboot-tls-main netboot-encdrv netboot-dhcp-loop netboot-tcp-conn netboot-tcp-conn-stream netboot-http-get netboot-fw-source netboot-body-sink netboot-tls-reasm netboot-fw-span netboot-http netboot-http-boot netboot-http-disk netboot-http-smoke-boot netboot-http-smoke-disk netboot-http-boot-debug netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke netboot-smoke-disk netboot-server netboot-server-disk netboot-serve-boot netboot-serve-boot-debug netboot-serve-trinload netboot-trinpush-test netboot-dumper netboot-csd-probe netboot-sd-push netboot-boot-record netboot-delete-record netboot-list-records netboot-hook-roundtrip netboot-samboot-config netboot-trinity-identity netboot-trinload netboot-sd-csd netboot-sd-listread netboot-z80-routines asmlex-z80 asmparse-z80 asmparse-paged-z80 parse-paged-driver-z80 chain-paged-driver-z80 pass1-ir-z80 compact-ir-z80 compact-ser-z80 editmodel-z80 pagepool-z80 spill-z80 viewport-z80 ci-netboot-z80
+.PHONY: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-build-tcp-segment netboot-sha256 netboot-hmac-sha256 netboot-hkdf netboot-hkdf-expand-label netboot-chacha20 netboot-poly1305 netboot-x25519-field netboot-aead netboot-tls-keyschedule netboot-tls-record netboot-tls-transcript netboot-tls-client-hello netboot-tls-server-flight netboot-tls-client netboot-tls-main netboot-encdrv netboot-dhcp-loop netboot-tcp-conn netboot-tcp-conn-stream netboot-http-get netboot-fw-source netboot-body-sink netboot-tls-reasm netboot-fw-span netboot-http netboot-http-boot netboot-http-disk netboot-http-smoke-boot netboot-http-smoke-disk netboot-http-boot-debug netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke netboot-smoke-disk netboot-server netboot-server-disk netboot-serve-boot netboot-serve-boot-debug netboot-serve-trinload netboot-trinpush-test netboot-dumper netboot-csd-probe netboot-sd-push netboot-boot-record netboot-delete-record netboot-list-records netboot-hook-roundtrip netboot-render-disk-probe netboot-render-disk-boot netboot-render-disk-boot-record netboot-samboot-config netboot-trinity-identity netboot-trinload netboot-sd-csd netboot-sd-listread netboot-z80-routines asmlex-z80 asmparse-z80 asmparse-paged-z80 parse-paged-driver-z80 chain-paged-driver-z80 tbn-render-driver-z80 pass1-ir-z80 compact-ir-z80 compact-ser-z80 editmodel-z80 pagepool-z80 spill-z80 viewport-z80 ci-netboot-z80
 $(BUILD)/netboot_build_udp_frame.bin $(BUILD)/netboot_build_udp_frame.map: src/netboot/build_udp_frame.asm $(asm_deps/src/netboot/build_udp_frame.asm)
 	@mkdir -p $(BUILD)
 	pyz80 -D NETBOOT_STANDALONE=1 --obj=$(BUILD)/netboot_build_udp_frame.bin \
@@ -542,7 +542,8 @@ netboot-http: $(BUILD)/netboot_http.bin $(BUILD)/netboot_http.map
 # use.
 $(BUILD)/netboot_http_boot.bin $(BUILD)/netboot_http_boot.map: src/netboot/http_main.asm $(asm_deps/src/netboot/http_main.asm)
 	@mkdir -p $(BUILD)
-	pyz80 -D NETBOOT_STREAM=1 -D NETBOOT_REAL_LISTREAD=1 -D HT_SERVER_IP_A=$(HT_SERVER_IP_A) -D HT_SERVER_IP_B=$(HT_SERVER_IP_B) \
+	pyz80 -D NETBOOT_STREAM=1 -D NETBOOT_REAL_LISTREAD=1 -D NETBOOT_WANT_RECORD_WRITE=1 -D NETBOOT_WANT_CLAIM=1 \
+	    -D HT_SERVER_IP_A=$(HT_SERVER_IP_A) -D HT_SERVER_IP_B=$(HT_SERVER_IP_B) \
 	    -D HT_SERVER_IP_C=$(HT_SERVER_IP_C) -D HT_SERVER_IP_D=$(HT_SERVER_IP_D) \
 	    -D HT_SERVER_PORT=$(HT_SERVER_PORT) \
 	    --obj=$(BUILD)/netboot_http_boot.bin \
@@ -570,7 +571,7 @@ HT_SERVER_IP_D ?= 1
 HT_SERVER_PORT ?= 80
 $(BUILD)/netboot_http_smoke_boot.bin $(BUILD)/netboot_http_smoke_boot.map: src/netboot/http_main.asm $(asm_deps/src/netboot/http_main.asm)
 	@mkdir -p $(BUILD)
-	pyz80 -D NETBOOT_STREAM=1 -D NETBOOT_HTTP_SMOKE=1 -D NETBOOT_REAL_LISTREAD=1 \
+	pyz80 -D NETBOOT_STREAM=1 -D NETBOOT_HTTP_SMOKE=1 -D NETBOOT_REAL_LISTREAD=1 -D NETBOOT_WANT_RECORD_WRITE=1 \
 	    -D HT_SERVER_IP_A=$(HT_SERVER_IP_A) -D HT_SERVER_IP_B=$(HT_SERVER_IP_B) \
 	    -D HT_SERVER_IP_C=$(HT_SERVER_IP_C) -D HT_SERVER_IP_D=$(HT_SERVER_IP_D) \
 	    -D HT_SERVER_PORT=$(HT_SERVER_PORT) \
@@ -596,13 +597,17 @@ netboot-http-smoke-disk: $(BUILD)/netboot_http_smoke_boot.bin $(BUILD)/build-dis
 # anyway (a 1-file fetch exercises the complete boot+store path concisely).
 $(BUILD)/netboot_http_boot_debug.bin $(BUILD)/netboot_http_boot_debug.map: src/netboot/http_main.asm $(asm_deps/src/netboot/http_main.asm)
 	@mkdir -p $(BUILD)
-	pyz80 -D NETBOOT_STREAM=1 -D NETBOOT_DEBUG=1 -D NETBOOT_HTTP_SMOKE=1 -D NETBOOT_REAL_LISTREAD=1 \
+	pyz80 -D NETBOOT_STREAM=1 -D NETBOOT_DEBUG=1 -D NETBOOT_HTTP_SMOKE=1 -D NETBOOT_REAL_LISTREAD=1 -D NETBOOT_WANT_RECORD_WRITE=1 \
 	    -D HT_SERVER_IP_A=$(HT_SERVER_IP_A) -D HT_SERVER_IP_B=$(HT_SERVER_IP_B) \
 	    -D HT_SERVER_IP_C=$(HT_SERVER_IP_C) -D HT_SERVER_IP_D=$(HT_SERVER_IP_D) \
 	    -D HT_SERVER_PORT=$(HT_SERVER_PORT) \
 	    --obj=$(BUILD)/netboot_http_boot_debug.bin \
 	    --mapfile=$(BUILD)/netboot_http_boot_debug.map \
 	    src/netboot/http_main.asm
+	@# NETBOOT_WANT_RECORD_WRITE (the i357 free-record pre-format) IS set here now:
+	@# the i360 CONN_DATA trim (4 KB reclaimed from the streaming build) makes the
+	@# ~512 B raw-CMD24 record-write cluster fit alongside the UDP debug-marker
+	@# channel, so the marker-instrumented free-record re-shoot carries the fix.
 	@tools/netboot-boot-fit-check.sh $(BUILD)/netboot_http_boot_debug.bin 32768 netboot_http_boot_debug.bin
 
 netboot-http-boot-debug: $(BUILD)/netboot_http_boot_debug.bin $(BUILD)/netboot_http_boot_debug.map
@@ -750,6 +755,19 @@ $(BUILD)/port_probe.bin $(BUILD)/port_probe.map: src/netboot/port_probe_standalo
 
 netboot-port-probe: $(BUILD)/port_probe.bin $(BUILD)/port_probe.map
 
+# settle_probe — trinload-pushable ENC/PIC settle-time probe (i291b): arms the
+# &38 SD-init window, waits a poked N T-states, then re-runs chk_trinity and
+# reports STALE/FRESH over UDP so a host bisection converges on the real settle.
+# org &8000, gated by ci-netboot-z80; emulation-checked by settle_probe_test.go.
+$(BUILD)/settle_probe.bin $(BUILD)/settle_probe.map: src/netboot/settle_probe.asm $(asm_deps/src/netboot/settle_probe.asm)
+	@mkdir -p $(BUILD)
+	pyz80 --obj=$(BUILD)/settle_probe.bin \
+	    --mapfile=$(BUILD)/settle_probe.map \
+	    src/netboot/settle_probe.asm
+	@tools/netboot-boot-fit-check.sh $(BUILD)/settle_probe.bin 16384 settle_probe.bin
+
+netboot-settle-probe: $(BUILD)/settle_probe.bin $(BUILD)/settle_probe.map
+
 # mgt-screen-demo — trinload-pushable RAM test that redraws the MGT opening
 # screen (rainbow stripes, ported verbatim from the stock ROM &ED1B; banner next).
 # Emulation-tested (mgt_screen_demo_test.go), org &8000, RETs to trinload. i229.
@@ -846,7 +864,8 @@ secd-loadability: $(BUILD)/secd_probe.bin $(BUILD)/build-disk
 # budget as netboot_serve_boot).
 $(BUILD)/netboot_server.bin $(BUILD)/netboot_server.map: src/netboot/netboot_server.asm $(asm_deps/src/netboot/netboot_server.asm)
 	@mkdir -p $(BUILD)
-	pyz80 --obj=$(BUILD)/netboot_server.bin \
+	pyz80 -D NETBOOT_REAL_LISTREAD=1 -D NETBOOT_WANT_RECORD_READ=1 \
+	    --obj=$(BUILD)/netboot_server.bin \
 	    --mapfile=$(BUILD)/netboot_server.map \
 	    src/netboot/netboot_server.asm
 	@tools/netboot-boot-fit-check.sh $(BUILD)/netboot_server.bin 32768 netboot_server.bin
@@ -882,6 +901,54 @@ netboot-server-record: $(BUILD)/netboot_server.bin $(BUILD)/build-disk
 	    -netboot-extra cmdline.txt=$(NETBOOT_STANDINS)/cmdline.txt \
 	    -netboot-extra bcm2711-rpi-400.dtb=$(NETBOOT_STANDINS)/bcm2711-rpi-400.dtb \
 	    $(BUILD)/netboot_server_record.mgt
+
+# netboot-server-largefile-record (i365c) — a boot_record-bootable server vessel
+# whose directory ALSO carries one LARGE plain CODE file (ramp.bin, 40000 bytes
+# = multi-page > 16 KB, but < 64 KB so the OACK tsize fits 16 bits). The server's
+# store walk indexes it as disk-backed (NB_DISK_TABLE) and streams it from the
+# record's sectors on demand; config.txt (small) still serves from the arena.
+# The ramp is a distinctive per-byte pattern (distinct from the AUTOnbsrv/bdos
+# infrastructure bytes) so a wrong-chain read cannot masquerade as a match.
+# Emulation gate: TestNetbootServerLargeFile boots this on the captured real ROM
+# + B-DOS 1.5t and asserts the served bytes byte-match the ramp payload.
+$(BUILD)/largefile_ramp.bin:
+	@mkdir -p $(BUILD)
+	# 70000 bytes (> 64 KB) so the served file exercises BOTH the >64K disk
+	# stream (32-bit XFER_OFFSET/remaining, i365c-b1) AND the 32-bit OACK tsize
+	# (i365c-b3): the OACK byte-comparison vs the Go authority fails if tsize
+	# wraps mod 65536.
+	python3 -c "import sys; sys.stdout.buffer.write(bytes((i*13+7)&0xff for i in range(70000)))" > $@
+
+.PHONY: netboot-server-largefile-record
+netboot-server-largefile-record: $(BUILD)/netboot_server.bin $(BUILD)/build-disk $(BUILD)/largefile_ramp.bin
+	$(BUILD)/build-disk -netboot $(BUILD)/netboot_server.bin -netboot-name AUTOnbsrv \
+	    -netboot-code-auto \
+	    -netboot-extra config.txt=$(NETBOOT_STANDINS)/config.txt \
+	    -netboot-extra ramp.bin=$(BUILD)/largefile_ramp.bin \
+	    $(BUILD)/netboot_server_largefile_record.mgt
+
+# netboot-server-largefile-manifest-record (i365c-b2) — like the largefile
+# record but the large file rides the NBMANIFEST name map: a big CODE file with
+# a LONG (> 10-char) TFTP name (bigramp.data) is stored under a mangled 10-char
+# store name plus an NBMANIFEST record, so nb_apply_manifest must rebuild
+# NB_DISK_TABLE (not just the arena table) through the map for it to serve under
+# its real name. The record ALSO carries a SHORT-named big file (ramp.bin) to
+# prove a manifest present does not drop the short large-file entries (the
+# i365c-b2 bug), plus config.txt (small, arena). The two ramps use distinct
+# formulae AND sizes, so a wrong-chain or wrong-size read cannot masquerade as a
+# match. Gate: TestNetbootServerLargeFileManifest.
+$(BUILD)/largefile_ramp2.bin:
+	@mkdir -p $(BUILD)
+	python3 -c "import sys; sys.stdout.buffer.write(bytes((i*7+3)&0xff for i in range(30000)))" > $@
+
+.PHONY: netboot-server-largefile-manifest-record
+netboot-server-largefile-manifest-record: $(BUILD)/netboot_server.bin $(BUILD)/build-disk $(BUILD)/largefile_ramp.bin $(BUILD)/largefile_ramp2.bin
+	$(BUILD)/build-disk -netboot $(BUILD)/netboot_server.bin -netboot-name AUTOnbsrv \
+	    -netboot-code-auto \
+	    -netboot-extra config.txt=$(NETBOOT_STANDINS)/config.txt \
+	    -netboot-extra ramp.bin=$(BUILD)/largefile_ramp.bin \
+	    -netboot-extra bigramp.data=$(BUILD)/largefile_ramp2.bin \
+	    $(BUILD)/netboot_server_largefile_manifest_record.mgt
 
 # netboot-serve (i96) — the serve-files TFTP demo server: ARP + TFTP only (no DHCP,
 # no Pi PXE blob), serving a few files baked into the binary to a plain TFTP/curl
@@ -1018,6 +1085,10 @@ trinpush-help:
 	@echo '  Push + run any netboot *_trinload.bin (org &8000):'
 	@echo '    DEPLOY_CHECKED=1 tools/trinload-push/trinload-push.py <sam-ip> build/netboot_dumper.bin 1 0x8000'
 	@echo
+	@echo '  Push a .mgt to a free SD record AND boot it — one command (i284):'
+	@echo '    make netboot-sd-push netboot-boot-record'
+	@echo '    DEPLOY_CHECKED=1 tools/trinload-push/push-and-boot.py <sam-ip> mydisk.mgt'
+	@echo
 	@echo 'DEPLOY_CHECKED=1 is required — without it the deploy-guard hook shows the hardware-readiness checklist.'
 	@echo 'Details: tools/trinload-push/README.md ; docs/notes/netboot-trinity-testing.md'
 
@@ -1151,7 +1222,7 @@ netboot-delete-record: $(BUILD)/delete_record.bin $(BUILD)/delete_record.map
 # a SEPARATE follow-up (CLAUDE.md §5 — emulation-verified is not hardware-verified).
 $(BUILD)/list_records.bin $(BUILD)/list_records.map: src/netboot/list_records.asm $(asm_deps/src/netboot/list_records.asm)
 	@mkdir -p $(BUILD)
-	pyz80 -D NETBOOT_REAL_LISTREAD=1 --obj=$(BUILD)/list_records.bin \
+	pyz80 -D NETBOOT_REAL_LISTREAD=1 -D NETBOOT_WANT_RECORD_READ=1 --obj=$(BUILD)/list_records.bin \
 	    --mapfile=$(BUILD)/list_records.map \
 	    src/netboot/list_records.asm
 	@tools/netboot-boot-fit-check.sh $(BUILD)/list_records.bin 16384 list_records.bin
@@ -1181,6 +1252,65 @@ $(BUILD)/hook_roundtrip.bin $(BUILD)/hook_roundtrip.map: src/netboot/hook_roundt
 	@tools/netboot-boot-fit-check.sh $(BUILD)/hook_roundtrip.bin 16384 hook_roundtrip.bin
 
 netboot-hook-roundtrip: $(BUILD)/hook_roundtrip.bin $(BUILD)/hook_roundtrip.map
+
+# netboot-render-disk-probe (i365d-b1) — the trinload-pushable probe that streams a
+# deterministic > free-RAM byte sequence into a host-patched record (RDP_CONFIG:
+# record LE16, length LE32, HLOAD flag) as MGT CODE file "RELEASESRC" via raw CMD24
+# (render_disk_sink.asm), then reads it back through real B-DOS HGTHD (size) and,
+# for a RAM-loadable N, HLOAD (byte-compare), serving the verdict over UDP 0xEDB0
+# ('?' -> "!RD"). The hardware proof of Wall 1 (docs/specs/i365-demo-architecture.md):
+# render_disk_sink produces a real, findable, loadable MGT file. Composes encdrv/
+# eeprom/bdos_seam/sd_csd/render_disk_sink; needs NETBOOT_WANT_RECORD_WRITE (the raw
+# CMD24 write path + i295 band guard), not NETBOOT_WANT_CLAIM (the test pre-seeds the
+# record). ONE build, flag-free (no NETBOOT_HOSTTEST carve-out, i231). Section-C only
+# (16384 budget). render_disk_write_faithful_test.go (SKIP_PRIVATE_TESTS) drives it
+# against Colin's real ROM + B-DOS 1.5t + the SD model and asserts verdict 'P' with
+# the pattern landed in the record band. The on-hardware run is a SEPARATE follow-up
+# (CLAUDE.md §5 — emulation-verified is not hardware-verified).
+$(BUILD)/render_disk_probe.bin $(BUILD)/render_disk_probe.map: src/netboot/render_disk_probe.asm $(asm_deps/src/netboot/render_disk_probe.asm)
+	@mkdir -p $(BUILD)
+	pyz80 -D NETBOOT_WANT_RECORD_WRITE=1 --obj=$(BUILD)/render_disk_probe.bin \
+	    --mapfile=$(BUILD)/render_disk_probe.map \
+	    src/netboot/render_disk_probe.asm
+	@tools/netboot-boot-fit-check.sh $(BUILD)/render_disk_probe.bin 16384 render_disk_probe.bin
+
+netboot-render-disk-probe: $(BUILD)/render_disk_probe.bin $(BUILD)/render_disk_probe.map
+
+# netboot-render-disk-boot (i365d-b2a) — the render->disk BOOTABLE: a CODE-auto
+# Trinity-record vessel that boots, HLOADs release-unstripped.tbn (DOS 'IN') into
+# the render IN pages 8..30 and disasm.bin into page 31, renders release.tbn ->
+# release.src streamed straight to the boot record via render_disk_sink (i365d-b1),
+# then idles. Fuses the render_disk_probe come-up/sink with the tbn_render_driver
+# render engine (docs/specs/i365-demo-architecture.md, slice i365d-b2a). Needs
+# NETBOOT_WANT_RECORD_WRITE (the raw CMD24 write path + i295 band guard). Full
+# &8000-&FFFF window (32768 budget — the fusion spills into section D). One build,
+# no NETBOOT_HOSTTEST carve-out (i231). render_disk_boot_faithful_test.go
+# (SKIP_PRIVATE_TESTS) boots it on Colin's real ROM + B-DOS 1.5t + the SPI SD model
+# and asserts release.src reconstructed from the record == render.Emit. The
+# on-hardware run is a SEPARATE follow-up (CLAUDE.md §5 — emulation != hardware).
+$(BUILD)/render_disk_boot.bin $(BUILD)/render_disk_boot.map: src/netboot/render_disk_boot.asm $(asm_deps/src/netboot/render_disk_boot.asm) $(BUILD)/disasm.bin
+	@mkdir -p $(BUILD)
+	pyz80 -D NETBOOT_WANT_RECORD_WRITE=1 -D NETBOOT_WANT_RECORD_READ=1 -D NETBOOT_REAL_LISTREAD=1 \
+	    --obj=$(BUILD)/render_disk_boot.bin \
+	    --mapfile=$(BUILD)/render_disk_boot.map \
+	    src/netboot/render_disk_boot.asm
+	@tools/netboot-boot-fit-check.sh $(BUILD)/render_disk_boot.bin 32768 render_disk_boot.bin
+
+netboot-render-disk-boot: $(BUILD)/render_disk_boot.bin $(BUILD)/render_disk_boot.map
+
+# netboot-render-disk-boot-record (i365d-b2a) — compose the b2a demo record .mgt:
+# the AUTOrdb CODE-auto vessel + release-unstripped.tbn (DOS 'IN', HLOADed whole
+# into the render IN run) + disasm.bin (the render's decode engine, page 31), via
+# build-disk -netboot-code-auto (the ALHK-bootable record vessel, i332). The
+# faithful gate seeds a scratch record from this .mgt.
+$(BUILD)/render_disk_boot_record.mgt: $(BUILD)/render_disk_boot.bin release-unstripped-tbn $(BUILD)/disasm.bin $(BUILD)/build-disk
+	$(BUILD)/build-disk -netboot $(BUILD)/render_disk_boot.bin -netboot-name AUTOrdb \
+	    -netboot-code-auto \
+	    -netboot-extra IN=$(BUILD)/release-unstripped.tbn \
+	    -netboot-extra disasm=$(BUILD)/disasm.bin \
+	    $(BUILD)/render_disk_boot_record.mgt
+
+netboot-render-disk-boot-record: $(BUILD)/render_disk_boot_record.mgt
 
 # netboot-samboot-config (i176) — the SAMBOOT BIOS config reader: a leaf routine
 # (samboot_read_config) that reads the editable default-boot-record config from a
@@ -1465,8 +1595,21 @@ $(BUILD)/b8d_chain_paged_driver.bin $(BUILD)/b8d_chain_paged_driver.map: src/cha
 
 b8d-chain-paged-driver-z80: $(BUILD)/b8d_chain_paged_driver.bin $(BUILD)/b8d_chain_paged_driver.map
 
+# tbn-render-driver-z80 — standalone driver for the `.tbn` → source-text
+# renderer (i365a).  org &8000; includes reader.asm + tbn_render.asm +
+# paged_bodies.asm.  The renderer reuses build/disasm.bin (the harness loads it
+# into physical page DISASM_PAGE=31) for instruction decode, so disasm.bin is a
+# build prerequisite of the driver.
+$(BUILD)/tbn_render_driver.bin $(BUILD)/tbn_render_driver.map: src/tbn_render_driver.asm $(asm_deps/src/tbn_render_driver.asm) $(BUILD)/disasm.bin
+	@mkdir -p $(BUILD)
+	pyz80 --obj=$(BUILD)/tbn_render_driver.bin \
+	    --mapfile=$(BUILD)/tbn_render_driver.map \
+	    src/tbn_render_driver.asm
+
+tbn-render-driver-z80: $(BUILD)/tbn_render_driver.bin $(BUILD)/tbn_render_driver.map
+
 # Every netboot routine binary the harness tests load.
-netboot-z80-routines: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-build-tcp-segment netboot-sha256 netboot-hmac-sha256 netboot-hkdf netboot-hkdf-expand-label netboot-chacha20 netboot-poly1305 netboot-x25519-field netboot-aead netboot-tls-keyschedule netboot-tls-record netboot-tls-transcript netboot-tls-client-hello netboot-tls-server-flight netboot-tls-client netboot-tls-main netboot-encdrv netboot-dhcp-loop netboot-tcp-conn netboot-http-get netboot-fw-source netboot-body-sink netboot-tls-reasm netboot-fw-span netboot-http netboot-http-boot netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke netboot-server netboot-serve netboot-client netboot-dumper netboot-csd-probe netboot-sd-push netboot-boot-record netboot-delete-record netboot-list-records netboot-hook-roundtrip netboot-samboot-config netboot-trinity-identity netboot-serve-boot netboot-serve-boot-debug netboot-client-boot netboot-fetch-boot-boot netboot-trinload netboot-sd-csd netboot-sd-listread netboot-eeprom-roundtrip netboot-port-probe netboot-mgt-screen-demo
+netboot-z80-routines: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-build-tcp-segment netboot-sha256 netboot-hmac-sha256 netboot-hkdf netboot-hkdf-expand-label netboot-chacha20 netboot-poly1305 netboot-x25519-field netboot-aead netboot-tls-keyschedule netboot-tls-record netboot-tls-transcript netboot-tls-client-hello netboot-tls-server-flight netboot-tls-client netboot-tls-main netboot-encdrv netboot-dhcp-loop netboot-tcp-conn netboot-http-get netboot-fw-source netboot-body-sink netboot-tls-reasm netboot-fw-span netboot-http netboot-http-boot netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke netboot-server netboot-serve netboot-client netboot-dumper netboot-csd-probe netboot-sd-push netboot-boot-record netboot-delete-record netboot-list-records netboot-hook-roundtrip netboot-render-disk-probe netboot-samboot-config netboot-trinity-identity netboot-serve-boot netboot-serve-boot-debug netboot-client-boot netboot-fetch-boot-boot netboot-trinload netboot-sd-csd netboot-sd-listread netboot-eeprom-roundtrip netboot-port-probe netboot-settle-probe netboot-mgt-screen-demo
 
 # netboot-z80-artifacts — every artifact the tools/netboot-oracle/z80 suite
 # loads from build/, as ONE aggregate target.  This is the single source of
@@ -1488,7 +1631,7 @@ netboot-z80-routines: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-bu
 # SKIP_PRIVATE_TESTS-gated, and CI (no private data) can't build it.
 NETBOOT_PRIVATE_ARTIFACTS := $(if $(wildcard src/netboot/bootloader_chunk1_data.asm),netboot-eeprom-flash-chunk1)
 .PHONY: netboot-z80-artifacts
-netboot-z80-artifacts: netboot-z80-routines netboot-http-boot-debug netboot-http-smoke-boot editmodel-z80 editmodel-paged-z80 pagepool-z80 spill-z80 viewport-z80 asmlex-z80 asmparse-z80 asmparse-paged-z80 parse-paged-driver-z80 chain-paged-driver-z80 b8d-chain-paged-driver-z80 pass1-ir-z80 compact-ir-z80 compact-ser-z80 sysreg-data netboot-serve-record netboot-server-record disk-record $(NETBOOT_PRIVATE_ARTIFACTS)
+netboot-z80-artifacts: netboot-z80-routines netboot-http-boot-debug netboot-http-smoke-boot editmodel-z80 editmodel-paged-z80 pagepool-z80 spill-z80 viewport-z80 asmlex-z80 asmparse-z80 asmparse-paged-z80 parse-paged-driver-z80 chain-paged-driver-z80 b8d-chain-paged-driver-z80 pass1-ir-z80 compact-ir-z80 compact-ser-z80 sysreg-data netboot-serve-record netboot-server-record netboot-server-largefile-record netboot-server-largefile-manifest-record disk-record tbn-render-driver-z80 netboot-render-disk-probe netboot-render-disk-boot-record release-unstripped-tbn $(NETBOOT_PRIVATE_ARTIFACTS)
 
 ci-netboot-z80: netboot-z80-artifacts
 	cd tools/sampage && go test ./...
@@ -1702,7 +1845,7 @@ test-encoder: sam-aarch64 tables-gen release-unstripped-tbn
 
 ci-encoder: test-encoder
 
-.PHONY: assembler assembler-prod assembler-enc-tests build-disk disk test-mem-offaxis cluster-offaxis paged-call-payload enc-fix-payload overlay-suite sysreg-data disasm-payload disasm-test-payload test-core ci-core check-budget
+.PHONY: assembler assembler-prod assembler-demo assembler-enc-tests build-disk disk test-mem-offaxis cluster-offaxis paged-call-payload enc-fix-payload overlay-suite sysreg-data disasm-payload disasm-test-payload test-core ci-core check-budget
 
 # check-budget — fail if any assembler variant has grown into the
 # &C000 stack page (the silent boot-hang cliff; see
@@ -1747,6 +1890,8 @@ assembler: $(BUILD)/assembler.bin
 
 assembler-prod: $(BUILD)/assembler-prod.bin
 
+assembler-demo: $(BUILD)/assembler-demo.bin
+
 assembler-enc-tests: $(BUILD)/assembler-enc-tests.bin
 
 # Test-variant build also exports the symbol table for the off-axis
@@ -1767,6 +1912,17 @@ $(BUILD)/assembler-prod.bin: src/assembler.asm $(asm_deps/src/assembler.asm)
 	@mkdir -p $(BUILD)
 	pyz80 --obj=$(BUILD)/assembler-prod.bin src/assembler.asm
 	@./tools/check-code-budget.sh $(BUILD)/assembler-prod.bin prod
+
+# Demo variant (DEMO_ASM): the prod assembler built for a `call`-in /
+# `ret`-out demo driver (i365).  It saves the caller's SP at start:,
+# restores it and RETs at the clean exit (instead of prod's di/halt), and
+# HSAVEs the assembled image under the self-describing name "RELEASEIMG"
+# instead of "OUT".  Everything else — the full boot init, payload loads,
+# two-pass assemble, and HSAVE geometry — is identical to prod.
+$(BUILD)/assembler-demo.bin: src/assembler.asm $(asm_deps/src/assembler.asm)
+	@mkdir -p $(BUILD)
+	pyz80 -D DEMO_ASM=1 --obj=$(BUILD)/assembler-demo.bin src/assembler.asm
+	@./tools/check-code-budget.sh $(BUILD)/assembler-demo.bin demo
 
 # Encode self-test variant (i234).  Imports enc_fix_payload.sym for
 # ENC_FIX_PAYLOAD_LEN (the LDIR size in run_encode_inst_self_tests) the
@@ -2038,7 +2194,7 @@ disk-record: assembler test-mem-offaxis cluster-offaxis paged-call-payload sysre
 # need an external zx0 compressor on PATH / a corpus sweep, and their
 # consuming tests fail with an instructive message when absent.
 .PHONY: harness-artifacts
-harness-artifacts: assembler assembler-prod assembler-enc-tests enctab cluster-offaxis test-mem-offaxis enc-fix-payload overlay-suite paged-call-payload sysreg-data disasm-payload disasm-test-payload zx0-payload zx0-test-payload zx0-compress-payload sam-aarch64
+harness-artifacts: assembler assembler-prod assembler-demo assembler-enc-tests enctab cluster-offaxis test-mem-offaxis enc-fix-payload overlay-suite paged-call-payload sysreg-data disasm-payload disasm-test-payload zx0-payload zx0-test-payload zx0-compress-payload sam-aarch64
 
 harness-sweep: harness-artifacts
 	cd tools/z80-test-harness-go && go test -count=1 ./...

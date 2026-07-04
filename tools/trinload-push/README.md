@@ -115,6 +115,33 @@ real on-hardware auto-load + boot is a **separate hardware shot** (emulation-ver
 not hardware-verified, CLAUDE.md §5). The launcher boots whatever record you name — make
 sure it holds a bootable disk.
 
+## `push-and-boot.py` — push a `.mgt` to a free record and boot it, one command (i284)
+
+The clean, repeatable one-command demo of the network SD write: it chains
+`sd-push.py`'s `push_mgt` (which now REPORTS the record it claimed — the finalize
+`'D'`+record reply, i308) into `boot-record.py`, so the record number never has to
+be copied by hand between the two steps.
+
+```sh
+make netboot-sd-push netboot-boot-record        # build both programs
+DEPLOY_CHECKED=1 tools/trinload-push/push-and-boot.py 192.168.2.75 mydisk.mgt
+```
+
+Args: `<sam-ip> <mgt-path> [--no-boot] [--force] [--sd-push-bin …] [--boot-bin …]
+[--boot-map …] [--page N]`. `--no-boot` pushes and prints the claimed record only;
+`--force` overrides the bootability pre-check.
+
+Before spending the ~2-minute push it runs `boot-record.py`'s bootability check on
+the `.mgt` (the same i331 stack-overlap / i332 BASIC-auto guard) and REFUSES a
+will-not-boot disk up front, so a disk that cannot boot never claims a record. Both
+legs are hardware-proven independently — `sd_push` wrote a `cj.mgt` record that
+booted CJ's Elephant on the real SAM (i295/#784), and `boot-record` booted a stored
+record that TFTP-self-confirmed on the wire (i319b) — this wrapper adds only the
+orchestration (thread the claimed record from the push into the boot). Exit codes
+match the legs: 0 = pushed and booted (or pushed, with `--no-boot`); 1 = failure or
+a refused disk; 3 = the push likely completed but its finalize reply was lost so the
+record is unknown — verify with `list-records.py` and boot with `boot-record.py`.
+
 ## `delete-record.py` — free/delete a Trinity SD record N via `delete_record` (i317)
 
 The store/boot/**delete** toolkit closer: it patches the record number into
@@ -163,10 +190,34 @@ tools/trinload-push/list-records.py 192.168.2.75
 Args: `<sam-ip> [--bin build/list_records.bin] [--page 1]`.
 
 **Data-safety**: `list_records` is structurally **read-only** — built without the
-list-write primitives (`NETBOOT_WANT_CLAIM` absent), it can only issue the CSD read and
-CMD17 list reads; `tools/netboot-oracle/z80/list_records_test.go` asserts the SD model
-sees **zero writes**. Emulation-verified only; the real-Trinity run is a separate shot
-(CLAUDE.md §5).
+list-write primitives (`NETBOOT_WANT_CLAIM` absent) and without any CMD24 write path, it
+can only issue the CSD read and CMD17 reads; `tools/netboot-oracle/z80/list_records_test.go`
+asserts the SD model sees **zero writes**. Emulation-verified only; the real-Trinity run
+is a separate shot (CLAUDE.md §5).
+
+## `read-record.py` — read a record's disk-BODY sectors via `list_records` (i362)
+
+Where `list-records.py` reads the central record-**LIST** (a record's name / free
+status), this reads a record's own 800K disk-**body** image, sector by sector — the
+confirmation channel a store that writes a record's BODY while **omitting** the
+record-LIST claim needs (that store leaves the record reading FREE in the list, so
+`list-records.py` cannot see it, yet its bytes are on the card). It pushes the **same**
+read-only `build/list_records.bin` (i362 added the `'S'` command to it) and queries
+`'S' + record(LE16) + relSector(LE16)` → `'s' + record + relSector + the raw 512-byte
+DATA sector` (CMD17 at absolute LBA `csd_base + 1600*(record-1) + relSector`). It reads
+the first directory track (`--sectors`, default 10), hexdumps relSector 0, checks its
+offset 232 for the `"BDOS"` catalog stamp, and scans the directory sectors for an
+expected filename substring — reporting each PRESENT/ABSENT.
+
+```sh
+make netboot-list-records
+tools/trinload-push/read-record.py 192.168.2.75 199 --expect LICENCE
+```
+
+Args: `<sam-ip> <record> [--expect NAME] [--sectors N] [--bin build/list_records.bin] [--page 1]`.
+B-DOS caps directory names at ~10 chars, so pass a **substring** (`LICENCE`, not
+`LICENCE.broadcom`). READ-ONLY — the `'S'` command is a CMD17 read (a read cannot corrupt
+the shared card), asserted zero-writes by `tools/netboot-oracle/z80/list_records_body_test.go`.
 
 TrinLoad must already be running on the SAM (it listens on `0xEDB0`). The full
 hardware procedure lives in
