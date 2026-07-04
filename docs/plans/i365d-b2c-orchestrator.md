@@ -169,4 +169,43 @@ RELEASEIMG) that would then need solving — likely harder than the SD resync.
 Current state: `TestDemoOrchestratorFaithful` is RED (fails fast at ~200M steps /
 ~20s, not a hang) on branch `i365d-b2c`. Not merged — the Phase A gate is the
 merge bar (CLAUDE.md rule 5).
+
+## ROOT CAUSE — DEFINITIVE (supersedes the SD trail above)
+
+**The SD-coexistence framing above was a RED HERRING.** The hang was traced by
+disassembling the ROM loop it spins in (`CP (HL);INC HL;JP NZ` — a runaway ROM
+*text-scan*, not an SD/FDC poll) and dumping the registers + LMPR at the hang:
+- `A=&22` ('"'), `HL=&5955`, `@HL` = render output text `" to temp bits…"` — the
+  scan is reading render data, not B-DOS workspace.
+- `LMPR=&1C` at the hang ⇒ section B = page **29**. The rst-8 hook sets
+  `LMPR ← DOSFLG-1` to page the DOS into section B; `DOSFLG` (`&5BC2`) = **`&1D`**,
+  so **B-DOS 1.5t is resident at page 29** (confirmed:
+  `bdos_save_writes_record_test.go:221` asserts DOSFLG=&1D).
+- render's IN reblock (`rdb_load_tbn`) streams the 371 KB `IN` .tbn FLAT into
+  pages **8..30** — which **includes page 29**. So render **overwrites the B-DOS
+  DOS code page**. The chain's first `rst 8` then pages that clobbered page in and
+  the ROM hook dispatch runs away in a text-scan.
+- Come-up's `HGTHD(disasm)` works because it runs BEFORE the reblock; every chain
+  B-DOS op (HGTHD, HRECORD) fails because it runs AFTER. `rdb_bdos_lmpr=&1F` is
+  correct (sysvars page 0 intact) — the DOS *code* page is the casualty, not the
+  sysvars. Nothing to do with the raw SD ops, the &38 disturbance, or the card.
+
+**THE FIX (next session, well-defined):** preserve the B-DOS DOS page across the
+reblock. Two options:
+1. **Save/restore the DOSFLG page.** Read `DOSFLG` (`&5BC2`) for the DOS page (`&1D`
+   here, but read it, don't hardcode); copy that physical page to a free page
+   (render's free off-axis pages are 4/5/6) BEFORE `rdb_load_tbn`; copy it back
+   (restore the DOS) at the top of `rdb_chain_next`, BEFORE the first `rst 8`. The
+   reblock still fills page 29 for the render (render reads it), then the DOS is
+   restored for the assemble chain. Reuse `rdb_load_tbn`'s LMPR-toggled flat-copy
+   discipline (DI, SP in section D, restore boot LMPR). Gate under `DEMO_CHAIN`.
+2. **Reblock IN avoiding the DOS page.** Retarget the 23 IN pages to a contiguous
+   run that excludes page 29 (needs the reader's page walk to tolerate the shifted
+   base and a spare page — check `reader.asm`/`in_map_current` contiguity first).
+
+Option 1 is the least invasive and does not touch the render reader. Once the DOS
+survives, the chain's HGTHD/HLOAD/HSAVE should just work (the mechanism is proven)
+and Phase A's gate should pass. Then do Phase B (serve + long names + messages).
+Also fix the latent shared-card dir-clobber (`render_disk_write_dirent` zeroes
+linearSec 0) when convenient — orthogonal to this, but real.
 </content>

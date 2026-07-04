@@ -384,13 +384,15 @@ rdb_chain_next:
                 out     (250), a               ; (the pristine boot LMPR, from rdb_main)
 
                 ; --- arm HGTHD for asmdemo -> BD_DIFA (pages, length) -----------
-                ; KNOWN BLOCKER (i365d-b2c Phase A): the FIRST B-DOS SD op here
-                ; HANGS after the render's raw CMD17/CMD24 ops — HRECORD-select and
-                ; HGTHD both wedge (rdb_phase stays before their marker), in a ~72-byte
-                ; ROM loop ~&1Dxx (a B-DOS SD busy-poll / FDC poll). The SD card MODEL
-                ; is clean (de-sync + woken reset by our &04 deselect); B-DOS's own SD
-                ; access is what wedges. Not the dir clobber / LMPR-B / physical card /
-                ; buffers / HRECORD-dispatch (all ruled out). See docs/plans/i365d-b2c-*.
+                ; ROOT CAUSE (i365d-b2c Phase A): this HGTHD wedges because the IN
+                ; reblock (rdb_load_tbn, pages 8..30) OVERWRITES the B-DOS DOS code
+                ; page — B-DOS 1.5t is resident at DOSFLG (&5BC2) = page 29, INSIDE
+                ; the reblock range. The rst 8 then pages garbage (LMPR<-DOSFLG-1) and
+                ; the ROM hook dispatch runs away in a text-scan (@&1Dxx). Come-up's
+                ; HGTHD(disasm) works only because it PRECEDES the reblock. FIX (next
+                ; session): save the DOSFLG page before the reblock + restore it here
+                ; (free pages 4/5/6), OR reblock IN avoiding the DOS page. NOT an SD
+                ; issue (the earlier SD-coexistence trail was a red herring). See plan.
                 ld      hl, rdb_name_asmdemo
                 ld      (BD_NAME_PTR), hl
                 call    bdos_name_to_uifa
