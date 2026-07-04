@@ -573,12 +573,12 @@ sp_data_write:
 sp_data_lba:
                 ; write the (possibly mutated) sector to record n's body sector i by its
                 ; ABSOLUTE card LBA, via our own CMD24 (init-once) — NO B-DOS rst 8.
-                ; bd_record_write_hw (sd_csd.asm:606) contract: In BD_REC_WRITE_REC = n,
-                ; BD_REC_WRITE_LINEAR = i, HL = 512-byte source -> CMD24 to
+                ; bd_record_write_hw (sd_csd.asm:606) contract: In BD_REC_REC = n,
+                ; BD_REC_LINEAR = i, HL = 512-byte source -> CMD24 to
                 ; csd_base+1600*(n-1)+i (LBA math sd_csd.asm:578; data-safe band :588).
                 ; Clobbers AF,BC,DE,HL; card deselected + EI on every path.
                 ld      hl, (BD_FREE_RECORD)   ; n = the claimed record
-                ld      (BD_REC_WRITE_REC), hl
+                ld      (BD_REC_REC), hl
                 ; THE .mgt -> record REORDER (i315/i294): the host streams a .mgt
                 ; container TRACK-major (samfile: m = cyl*20 + side*10 + (sector-1)); a
                 ; Trinity SD record stores the disk SIDE-major (B-DOS 1.5t conv.de &A151:
@@ -590,7 +590,7 @@ sp_data_lba:
                 ; mutation above — keyed off the raw m — stays correct.
                 ld      hl, (BD_WRITE_START)   ; m = this block's .mgt linear sector
                 call    mgt_to_record_linear   ; HL = side-major record linear
-                ld      (BD_REC_WRITE_LINEAR), hl
+                ld      (BD_REC_LINEAR), hl
                 ld      hl, (sp_src)           ; the selected 512-byte source sector (i338)
                 call    bd_record_write_hw     ; own CMD24, absolute LBA
                 jr      c, sp_data_ack         ; write failed (after the core's in-core

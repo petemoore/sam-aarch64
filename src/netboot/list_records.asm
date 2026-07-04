@@ -20,15 +20,26 @@
 ;                              docs/specs/trinity-record-detection-design.md §4).
 ;                              Out-of-range listSec or a CMD17 read failure ->
 ;                              reply "E" + listSec (LE16), nothing read.
+;   'S'  record-body sector -> [record LE16, 1-based][relSector LE16, 0-based]; reply
+;        query (i362)          "s" + record + relSector + the RAW 512-byte DATA sector
+;                              of the record's 800K disk-body image (CMD17 at absolute
+;                              LBA csd_base+1600*(record-1)+relSector, bd_record_read_hw).
+;                              This reads back what was WRITTEN INTO a record — e.g. an
+;                              http store that wrote the body but skipped the record-LIST
+;                              claim, which 'L' reports FREE and is blind to. Out-of-range
+;                              (record>BD_RECORDS / relSector>=1600) or a CMD17 read
+;                              failure -> reply "E" + record + relSector.
 ;   'Q'  quit               -> reply "q", then RET to trinload (clean,
 ;                              re-pushable — the host can chain the next tool).
 ;   plus ARP-request and ICMP-echo replies (netglue.asm) so the host can reach us.
 ;
 ; DATA-SAFETY (trinity_storage_shared_resource): this program is structurally
 ; READ-ONLY — it is built WITHOUT NETBOOT_WANT_CLAIM, so the list-WRITE primitives
-; (bdos_write_list_sector / claim / free) are not even assembled into the binary.
-; The only SD commands it can issue are the CSD read (CMD9 + init ladder) and the
-; CMD17 single-block list read.
+; (bdos_write_list_sector / claim / free) and the CMD24 record-DATA write path are
+; not even assembled into the binary. NETBOOT_WANT_RECORD_READ adds only the CMD17
+; record-body READ (bd_record_read_hw) — a read cannot corrupt the shared card. The
+; only SD commands it can issue are the CSD read (CMD9 + init ladder) and CMD17
+; single-block reads (the list sectors and record-body sectors).
 ;
 ; VERIFICATION (emulation-first, CLAUDE.md rule 7): list_records_test.go boots this
 ; binary under the flat harness with the ENC + SD-SPI models attached, seeds the
@@ -52,13 +63,15 @@ HMPR:       equ &fb                     ; High Memory Page Register
 ; read seam, and the shared reply plumbing. They come FIRST (right after the
 ; boot jp) so every symbol they define is resolved for the code below (pyz80 is
 ; single-symbol-table, no forward `equ`-of-a-later-label). NETBOOT_REAL_LISTREAD
-; selects the real CMD17 list read (sd_csd.asm bd_list_read_hw); NETBOOT_WANT_CLAIM
-; is deliberately ABSENT (read-only build, see the data-safety note above).
+; selects the real CMD17 list read (sd_csd.asm bd_list_read_hw); NETBOOT_WANT_RECORD_READ
+; adds the CMD17 record-body read (bd_record_read_hw, the 'S' command); NETBOOT_WANT_CLAIM
+; and the CMD24 write flags are deliberately ABSENT (read-only build, see the data-safety
+; note above).
 ; ===========================================================================
                 include "encdrv.asm"          ; drv_init / drv_read / drv_write
                 include "eeprom.asm"           ; find_index / read_chunk + value/chunk/name/part/total
                 include "bdos_seam.asm"        ; bdos_read_list_sector / BD_LIST_SECTOR / BD_LIST_BUF
-                include "sd_csd.asm"           ; csd_set_bd_records (BD_RECORDS) / bd_list_read_hw
+                include "sd_csd.asm"           ; csd_set_bd_records (BD_RECORDS/csd_base) / bd_list_read_hw / bd_record_read_hw
 
 ; The SAM MAC/IP live in the EEPROM reader's `chunk` buffer (eeprom.asm): the
 ; "Trinity Network " chunk is read into `chunk`, MAC at +0, IP at +6.
@@ -289,6 +302,10 @@ lr_not_disc:
                 jr      nz, lr_not_list
                 jp      lr_list_query
 lr_not_list:
+                cp      "S"                    ; record-body sector query? (i362)
+                jr      nz, lr_not_sect
+                jp      lr_sect_query
+lr_not_sect:
                 cp      "Q"                    ; quit?
                 jp      nz, lr_serve_loop
                 ; ack the quit, then RET to trinload (clean, re-pushable) so the
@@ -335,6 +352,64 @@ lr_list_bad:
                 ld      a, "E"
                 ld      (packet+42), a         ; echo the rejected listSec at +43/+44
                 ld      bc, 3
+                call    ack_len
+                jp      lr_serve_loop
+
+; ---------------------------------------------------------------------------
+; lr_sect_query — an 'S' message (i362): payload = [record LE16, 1-based][relSector
+; LE16, 0-based]. Read one 512-byte DATA sector of the record's 800K disk-body image
+; via the real CMD17 (bd_record_read_hw, absolute LBA csd_base+1600*(record-1)+
+; relSector) and reply "s" + record + relSector + the raw 512 bytes. This reads back
+; what was actually WRITTEN INTO a record (e.g. an http store that wrote the body but
+; skipped the record-LIST claim, so 'L'/list_records reports the record FREE and is
+; blind to the store — this confirms it directly).
+;
+; Range-checked: record 1..BD_RECORDS and relSector 0..1599, so the LBA stays inside
+; the card's record-data region (a CMD17 read cannot corrupt the shared card — the
+; i295 band guard is a WRITE concern — but the range check keeps the read on-card).
+; Out-of-range or a CY read failure replies "E" + record + relSector (5 bytes; the
+; 'S' error mirrors lr_list_bad's, distinguished from 'L''s 3-byte 'E' by length +
+; the command the host sent). READ-ONLY: no list-write, no CMD24 — this build has
+; neither NETBOOT_WANT_CLAIM nor a record-write flag.
+; ---------------------------------------------------------------------------
+lr_sect_query:
+                ; record range check: 1..BD_RECORDS.
+                ld      hl, (packet+43)        ; record (LE16, 1-based), echoed in the reply
+                ld      a, h
+                or      l
+                jr      z, lr_sect_bad         ; record 0: invalid
+                ld      de, (BD_RECORDS)
+                ld      a, e                   ; DE - HL: borrow => HL > DE
+                sub     l
+                ld      a, d
+                sbc     a, h
+                jr      c, lr_sect_bad         ; record > BD_RECORDS: refuse
+                ; relSector range check: 0..1599.
+                ld      hl, (packet+45)        ; relSector (LE16, 0-based)
+                ld      de, 1600
+                or      a
+                sbc     hl, de                 ; relSector - 1600 ; CY set => relSector < 1600
+                jr      nc, lr_sect_bad        ; relSector >= 1600: refuse
+                ; set the record-read inputs (BD_REC_REC/BD_REC_LINEAR live in sd_csd.asm).
+                ld      hl, (packet+43)
+                ld      (BD_REC_REC), hl
+                ld      hl, (packet+45)
+                ld      (BD_REC_LINEAR), hl
+                ; read the record's body sector straight into the reply, after the
+                ; 5-byte header (s + record + relSector). packet+43..46 are untouched
+                ; by the read, so they echo the query.
+                ld      hl, packet+47
+                call    bd_record_read_hw      ; real CMD17 -> (packet+47); CY on fail
+                jr      c, lr_sect_bad
+                ld      a, "s"
+                ld      (packet+42), a         ; record+relSector at +43..46 echo the query
+                ld      bc, 5+512
+                call    ack_len
+                jp      lr_serve_loop
+lr_sect_bad:
+                ld      a, "E"
+                ld      (packet+42), a         ; echo the rejected record+relSector at +43..46
+                ld      bc, 5
                 call    ack_len
                 jp      lr_serve_loop
 

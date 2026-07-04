@@ -163,10 +163,34 @@ tools/trinload-push/list-records.py 192.168.2.75
 Args: `<sam-ip> [--bin build/list_records.bin] [--page 1]`.
 
 **Data-safety**: `list_records` is structurally **read-only** — built without the
-list-write primitives (`NETBOOT_WANT_CLAIM` absent), it can only issue the CSD read and
-CMD17 list reads; `tools/netboot-oracle/z80/list_records_test.go` asserts the SD model
-sees **zero writes**. Emulation-verified only; the real-Trinity run is a separate shot
-(CLAUDE.md §5).
+list-write primitives (`NETBOOT_WANT_CLAIM` absent) and without any CMD24 write path, it
+can only issue the CSD read and CMD17 reads; `tools/netboot-oracle/z80/list_records_test.go`
+asserts the SD model sees **zero writes**. Emulation-verified only; the real-Trinity run
+is a separate shot (CLAUDE.md §5).
+
+## `read-record.py` — read a record's disk-BODY sectors via `list_records` (i362)
+
+Where `list-records.py` reads the central record-**LIST** (a record's name / free
+status), this reads a record's own 800K disk-**body** image, sector by sector — the
+confirmation channel a store that writes a record's BODY while **omitting** the
+record-LIST claim needs (that store leaves the record reading FREE in the list, so
+`list-records.py` cannot see it, yet its bytes are on the card). It pushes the **same**
+read-only `build/list_records.bin` (i362 added the `'S'` command to it) and queries
+`'S' + record(LE16) + relSector(LE16)` → `'s' + record + relSector + the raw 512-byte
+DATA sector` (CMD17 at absolute LBA `csd_base + 1600*(record-1) + relSector`). It reads
+the first directory track (`--sectors`, default 10), hexdumps relSector 0, checks its
+offset 232 for the `"BDOS"` catalog stamp, and scans the directory sectors for an
+expected filename substring — reporting each PRESENT/ABSENT.
+
+```sh
+make netboot-list-records
+tools/trinload-push/read-record.py 192.168.2.75 199 --expect LICENCE
+```
+
+Args: `<sam-ip> <record> [--expect NAME] [--sectors N] [--bin build/list_records.bin] [--page 1]`.
+B-DOS caps directory names at ~10 chars, so pass a **substring** (`LICENCE`, not
+`LICENCE.broadcom`). READ-ONLY — the `'S'` command is a CMD17 read (a read cannot corrupt
+the shared card), asserted zero-writes by `tools/netboot-oracle/z80/list_records_body_test.go`.
 
 TrinLoad must already be running on the SAM (it listens on `0xEDB0`). The full
 hardware procedure lives in
