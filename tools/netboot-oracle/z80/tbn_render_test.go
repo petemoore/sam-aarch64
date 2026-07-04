@@ -494,3 +494,91 @@ func TestTbnRenderFullRelease(t *testing.T) {
 	got := renderTBNOnZ80(t, tbn)
 	assertRenderMatch(t, got, want)
 }
+
+// TestTbnRenderCapOverflowGuards proves the #858-review overflow guards fire.
+// The header label/local tables are fixed-size resident buffers sized for the
+// release corpus (RENDER_MAX_LABELS=320, RENDER_MAX_LOCALS=192 in tbn_render.asm);
+// once an arbitrary user program supplies more rows than the cap, the store
+// routine must fail loud (`jp fail` = di;halt) rather than silently overrun into
+// the adjacent resident tables.  This drives each store routine directly at its
+// cap boundary: one below the cap must still store and return cleanly, at the cap
+// must trap.  These caps are duplicated here deliberately — if the asm cap moves
+// without updating this test, the boundary case fails loud, flagging the drift.
+func TestTbnRenderCapOverflowGuards(t *testing.T) {
+	// A minimal `.tbn` is enough — we call the store routines directly, not
+	// render_run, so the staged content is never walked.
+	var rw format.RecordWriter
+	rw.WriteInsnRun(0, []format.InsnElement{{BaseWord: 0xD503201F}}) // nop
+	var buf bytes.Buffer
+	if err := format.WriteFile(&buf, format.NewSymbolTable(), nil, nil, rw.Bytes(), nil, nil); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	tbn := buf.Bytes()
+
+	cases := []struct {
+		name     string
+		routine  string
+		countSym string
+		cap      int // RENDER_MAX_* in tbn_render.asm
+	}{
+		{"labels", "render_store_label", "render_label_count", 320},
+		{"locals", "render_store_local", "render_local_count", 192},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			for _, sub := range []struct {
+				label    string
+				count    int
+				wantTrap bool
+			}{
+				{"below-cap stores", tc.cap - 1, false},
+				{"at-cap traps", tc.cap, true},
+			} {
+				sub := sub
+				t.Run(sub.label, func(t *testing.T) {
+					mac, _ := stageRenderMachine(t, tbn)
+					if _, err := mac.CallEntry("render_reset_state", z80h.Entry{StepCap: 100_000}); err != nil {
+						t.Fatalf("render_reset_state: %v", err)
+					}
+					countAddr, err := mac.Sym(tc.countSym)
+					if err != nil {
+						t.Fatalf("Sym(%s): %v", tc.countSym, err)
+					}
+					failAddr, err := mac.Sym("fail")
+					if err != nil {
+						t.Fatalf("Sym(fail): %v", err)
+					}
+					mac.WriteU16LE(countAddr, uint16(sub.count))
+
+					res, err := mac.CallEntry(tc.routine, z80h.Entry{StepCap: 100_000})
+					if err != nil {
+						t.Fatalf("%s: %v", tc.routine, err)
+					}
+					// `fail` is `di; halt`; a trapped run stops with PC on the halt.
+					trapped := res.PC == failAddr || res.PC == failAddr+1
+					b := mac.Read(countAddr, 2)
+					gotCount := int(b[0]) | int(b[1])<<8
+
+					if sub.wantTrap {
+						if !trapped {
+							t.Errorf("count=%d (cap %d): did not trap (PC=&%04X, want fail=&%04X)",
+								sub.count, tc.cap, res.PC, failAddr)
+						}
+						if gotCount != sub.count {
+							t.Errorf("count=%d: guard must not store — count changed to %d", sub.count, gotCount)
+						}
+					} else {
+						if trapped {
+							t.Errorf("count=%d (cap %d): trapped at fail but should store", sub.count, tc.cap)
+						}
+						if gotCount != sub.count+1 {
+							t.Errorf("count=%d: store did not increment count (got %d, want %d)",
+								sub.count, gotCount, sub.count+1)
+						}
+					}
+				})
+			}
+		})
+	}
+}
