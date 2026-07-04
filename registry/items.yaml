@@ -5992,7 +5992,7 @@
   title: "Widen the record-list seam BD_LIST_SECTOR to 16-bit (records >8160 unreachable on >6.7GB cards)"
   description: |
     BD_LIST_SECTOR (bdos_seam.asm) is a 1-byte list-sector input, so every record-list consumer (find-free scan, claim, free/delete, list_records) reaches only list sectors 1..255 = records 1..8160; on cards over ~6.7GB the higher records are invisible to the whole SD toolkit. list_records clamps + refuses ('E') past the limit (i322 review finding, PR 799) and its launcher warns -- honest but partial. Widen the seam input to 16-bit (bd_list_read_hw already builds a 32-bit LBA) and lift the clamps. Low urgency: the current card decodes to 4809 records.
-  status: OPEN
+  status: IN_PROGRESS
   kind: leaf
   owner: agent
 
