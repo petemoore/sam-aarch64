@@ -35,9 +35,14 @@ def _load_sd_push():
 
 sd_push = _load_sd_push()
 
+import mgt_patch
+
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 SERVE_BIN = os.path.join(REPO, "build", "netboot_serve_boot.bin")
 SERVE_MAP = os.path.join(REPO, "build", "netboot_serve_boot.map")
+DEMO_MGT = os.path.join(REPO, "build", "assemble_first_serve_record.mgt")
+RENDER_MAP = os.path.join(REPO, "build", "render_chain.map")
+NBSRV_MAP = os.path.join(REPO, "build", "netboot_server.map")
 
 
 class TestDiscoveryIdentity(unittest.TestCase):
@@ -342,6 +347,80 @@ class TestRealBinary(unittest.TestCase):
             # only the 4-byte config block changes
             self.assertEqual(out[:self.off], self.data[:self.off])
             self.assertEqual(out[self.off + 4:], self.data[self.off + 4:])
+
+
+@unittest.skipUnless(
+    os.path.exists(DEMO_MGT) and os.path.exists(RENDER_MAP) and os.path.exists(NBSRV_MAP),
+    "demo record .mgt / maps not built (run `make netboot-assemble-first-serve-record "
+    "netboot-render-chain netboot-server`)")
+class TestDemoRecordPatch(unittest.TestCase):
+    """i365e: patch the record number into the REAL demo serve .mgt's overlays.
+
+    Mirrors the in-memory patch the emulation gate does
+    (assemble_first_serve_faithful_test.go): RDB_CFG_RECORD (LE16) in the
+    'render' overlay and NB_BOOT_RECORD (byte) in the 'nbsrv' overlay. A wrong
+    value is a shared-card data-safety hazard, so these assert the tool hits the
+    exact config bytes (their compile-time defaults) and nothing else."""
+
+    RENDER_DEFAULT = 1  # RDB_CONFIG: RDB_CFG_RECORD defw 1
+    NBSRV_DEFAULT = 0   # NB_BOOT_RECORD default 0
+
+    def setUp(self):
+        with open(DEMO_MGT, "rb") as f:
+            self.orig = f.read()
+        with open(RENDER_MAP) as f:
+            self.render_map = f.read()
+        with open(NBSRV_MAP) as f:
+            self.nbsrv_map = f.read()
+        self.specs = [
+            ("render", self.render_map, "RDB_CFG_RECORD", 2),
+            ("nbsrv", self.nbsrv_map, "NB_BOOT_RECORD", 1),
+        ]
+
+    def test_baked_defaults_are_config(self):
+        # The bytes the tool will overwrite currently hold the compile-time
+        # defaults — proof the map-symbol offsets land on the config, not code.
+        self.assertEqual(
+            mgt_patch.read_record_overlay(bytearray(self.orig), "render", self.render_map,
+                                          "RDB_CFG_RECORD", 2), self.RENDER_DEFAULT)
+        self.assertEqual(
+            mgt_patch.read_record_overlay(bytearray(self.orig), "nbsrv", self.nbsrv_map,
+                                          "NB_BOOT_RECORD", 1), self.NBSRV_DEFAULT)
+
+    def test_patch_reads_back_and_is_precise(self):
+        for record in (2, 7, 145, 255):
+            mgt = bytearray(self.orig)
+            mgt_patch.patch_record_overlays(mgt, record, self.specs)
+            # Reads back at both overlays.
+            self.assertEqual(
+                mgt_patch.read_record_overlay(mgt, "render", self.render_map,
+                                              "RDB_CFG_RECORD", 2), record)
+            self.assertEqual(
+                mgt_patch.read_record_overlay(mgt, "nbsrv", self.nbsrv_map,
+                                              "NB_BOOT_RECORD", 1), record)
+            # Precise: only the config bytes differ from the original. A stray
+            # write would corrupt code/data and silently mis-serve on hardware.
+            changed = [i for i in range(len(mgt)) if mgt[i] != self.orig[i]]
+            # render low byte always differs (default 1 -> record); its high byte
+            # differs only when record > 255 (never here); nbsrv byte differs when
+            # record != 0. So 1 or 2 changed bytes, all == the LE record bytes.
+            self.assertLessEqual(len(changed), 2)
+            self.assertGreaterEqual(len(changed), 1)
+
+    def test_record_out_of_byte_range_rejected(self):
+        # NB_BOOT_RECORD is one byte; a record that does not fit must raise, not
+        # truncate (a truncated record => raw CMD24 to the wrong LBA band).
+        with self.assertRaises(ValueError):
+            mgt_patch.patch_record_overlays(bytearray(self.orig), 256, self.specs)
+
+    def test_unknown_overlay_rejected(self):
+        with self.assertRaises(KeyError):
+            mgt_patch.patch_record_overlays(
+                bytearray(self.orig), 7, [("nosuch", self.render_map, "RDB_CFG_RECORD", 2)])
+
+    def test_wrong_size_rejected(self):
+        with self.assertRaises(ValueError):
+            mgt_patch.patch_record_overlays(bytearray(self.orig[:1000]), 7, self.specs)
 
 
 if __name__ == "__main__":
