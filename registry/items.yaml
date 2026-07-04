@@ -6366,10 +6366,8 @@
 - id: i365c
   title: Serve release.src + release.img over TFTP from the demo (network-verifiable end-to-end proof)
   description: |
-    Serve BOTH produced files over TFTP so a host fetches them and confirms the run really happened + produced the files (Pete's self-confirmation). TFTP serve is hw-proven (i96 first-light; i95b-b1 integrated ARP+DHCP+TFTP server booted from record 187, ~16.8KB/s, option-60 PXEClient gate). Integrate the existing server to serve the two files by name (advertise release.src / release.img). Driver invokes it as the final step. Refs: i95b-b1 server, make netboot-serve.
-    
-    SCOPE (investigated 2026-07-04): the serve capability EXISTS + is hardware-proven (i95b-b1). netboot_server.asm boots a Trinity record, does the B-DOS store walk (nb_fill_store) indexing EVERY file on the record, and serves each by TFTP name (resolve_src) — long names via the NBMANIFEST map (i346; buildManifest in tools/build-disk/main.go:785, -netboot-extra flag). So i365c = compose the demo's NBMANIFEST mapping the short SAM store-names RELEASESRC->release.src + RELEASEIMG->release.img, and gate that the server serves both under the long names from a record holding those two files. This is TIGHTLY COUPLED to i365d (the driver composes the disk with the NBMANIFEST + writes the two files at runtime + invokes the server) — recommend completing i365c AND i365d in ONE demo PR (a PR may complete several cohesive items). The independently-gateable core: a harness test (serve_record_vessel_test.go / netboot_server_faithful_test.go pattern) booting the server over a record with release.src+release.img+NBMANIFEST and asserting both serve under the long names.
-  status: IN_PROGRESS
+    Serve BOTH produced files (release.src ~417KB, release.img ~21KB) over TFTP so a host fetch confirms the run. SCOPE CORRECTION (2026-07-04, i365cd investigation): the server serves ONLY <=1518B files staged in a RAM arena (nb_walk_entry SKIPS files >=16KB, NB_FILE_MAX=1518; send_next_data reads SRC_PTR+offset from RAM, 16-bit). Both demo outputs are oversize -> this needs NEW large-file serve-from-disk: nb_walk_entry records a disk-backed descriptor {name,start,size} for large CODE files; send_next_data follows the MGT sector chain (510 data + 2 link bytes) from a 32-bit XFER_OFFSET, reading each record sector via bd_record_read_hw (CMD17, i362, exists) and re-blocking 510->512 into TFTP DATA blocks. Long TFTP names via NBMANIFEST (buildManifest, exists). Independently gateable: seed a record with a large file via seedRecordFromMGT, boot the server, assert byte-exact serve (netboot_server_faithful_test.go template). Design: docs/specs/i365-demo-architecture.md (Wall 2).
+  status: OPEN
   kind: leaf
   owner: agent
   parent: i365
@@ -6380,18 +6378,46 @@
     A Z80 CODE-auto driver (AUTO* CODE file at org &8000, ALHK-exec'd) that prints 'Generating source...' (RST &10, per mgt_screen_demo_standalone.asm:96-136), renders release.tbn->release.src (b1)+HSAVEs; prints 'Generating image...', assembles->release.img (b2)+HSAVEs; serves both over TFTP (b3). Record boot REQUIRES a CODE-auto vessel — a BASIC-auto record can NEVER boot (i332). Combined-vs-chained: assembler+render+server likely exceed one 16KB &C000 window, so the driver probably HLOADs sibling CODE files in sequence and calls each. Compose demo .mgt via build-disk -code-auto: driver + assembler + disasm(d15) + enctab + sysreg + zx0 + release-unstripped.tbn. Emulation-gate via the assembler_record_vessel_test.go pattern. RENDER INTEGRATION (b1/i365a done, #858): the render's output sink is the single choke point render_out_append (out (RENDER_SINK_PORT),a in tbn_render.asm) — retarget it from the harness capture-port to an on-disk chunked write (417KB output streams to disk; only ~5 free pages, so chunked-flush, per the S8 memory analysis). Standalone driver src/tbn_render_driver.asm shows the multi-page IN staging + LMPR/paging discipline to reuse. §858-review YELLOWs to fix HERE: (1) the render's resident caps (RENDER_MAX_NAMES/LABELS/LOCALS + name/body buffers) are hardcoded for the RELEASE corpus with NO runtime overflow guard — add a guard before this driver feeds arbitrary user programs on real hardware; (2) trivial: the Makefile ~line 1478 comment says disasm.bin loads at 'page 15' but the driver/harness use DISASM_PAGE=31 — fix the stray comment when touching the render build.
     
     DEMO ASSEMBLE STEP (i365b DONE #859): use build/assembler-demo.bin (pyz80 -D DEMO_ASM=1) — a callable ret-exit assembler that HSAVEs as 'RELEASEIMG'; the driver CALLs it (it returns). ONE release-unstripped.tbn (DOS file 'IN') feeds BOTH render + assembler (assembler loads only the prefix). Render should save 'RELEASESRC'. §859-review YELLOWs to honour HERE: (a) the driver must keep its own stack + the assembler's return frame OUTSIDE the assembler's &C100-down boot stack AND its &8000 code image (else the ret target corrupts) — the harness parked the caller SP at &FFFE (section D); (b) hardware-confirm a record boot leaves its record selected for HSAVE (no HRECORD was added to save_out_file) — if not, add a one-time driver-level HRECORD of the boot record before the steps.
-  status: IN_PROGRESS
+  status: OPEN
   depends_on: [i365a, i365b, i365c]
-  kind: leaf
+  kind: umbrella
   owner: agent
   parent: i365
+
+- id: i365d-b1
+  title: "Render sink -> chunked raw-sector write + MGT dir-entry writer (release.src to disk)"
+  description: |
+    The hard capability (Wall 1, docs/specs/i365-demo-architecture.md). release.src is 417KB; free RAM ~80KB -> whole-file buffering impossible, HSAVE caps at 64KB/call with no append, B-DOS streaming trio (HOFLE/SBYT/CFSM) is broken for external callers even in 1.5t. Retarget render_out_append (tbn_render.asm:901, out(&E8),a) to reuse raw_record_sink.asm's accumulator (re-block to 512B sectors, flush each immediately, 32-bit RRS_TOTAL), flush via bd_record_write_hw (raw CMD24 + i295 band guard) into the boot record contiguously from track 4 after release.img. NEW piece: an MGT directory-entry writer for a named CODE file (type 19, name, page-count, lengthMod16K, 195B sector-address bitmap, 9B CODE header, 510+2 forward links) modelled on store_format_record + B-DOS ofsm/svhd/cfsm (authority, rule 8). Gate on the FAITHFUL rig (real 1.5t + SPI SD, NOT the mock -- i356 BDOS@232 trap): assert HGTHD('RELEASESRC')/HLOAD read the bytes back.
+  status: OPEN
+  kind: leaf
+  owner: agent
+  parent: i365d
+
+- id: i365d-b2
+  title: "CODE-auto demo driver + compose demo .mgt (render->save->assemble->save->serve, on-screen msgs)"
+  description: |
+    Wall/driver (docs/specs/i365-demo-architecture.md, slice i365d-b2). A Z80 CODE-auto driver (org &8000, ALHK-exec'd; a record boot REQUIRES CODE-auto -- i332) that: prints 'Generating source...' (RST &10, pattern src/netboot/mgt_screen_demo_standalone.asm), renders release.tbn->release.src via the b1 sink; prints 'Generating image...', CALLs the DEMO_ASM assembler (build/assembler-demo.bin: start: saves caller SP, HSAVEs RELEASEIMG, ret -- keep the caller stack + return frame OUTSIDE the assembler's &C100-down boot stack AND its &8000 image, #859 review); serves both via the i365c large-file server. ONE release-unstripped.tbn (DOS 'IN') feeds render (whole) + assembler (prefix only, main_loop.asm:1560). Compose via build-disk -code-auto/-netboot-code-auto (netboot-server-record is the template) + NBMANIFEST (RELEASESRC->release.src, RELEASEIMG->release.img). Hardware-confirm a record boot leaves its record selected for HSAVE; else add a one-time driver HRECORD. Gate via assembler_record_vessel_test.go pattern.
+  status: OPEN
+  depends_on: [i365d-b1, i365c]
+  kind: leaf
+  owner: agent
+  parent: i365d
 
 - id: i365e
   title: Store demo .mgt on a Trinity record + boot on real SAM + fetch release.src/.img over TFTP (end-to-end hardware proof)
   description: |
     Deploy the b4 demo .mgt to a Trinity SD record via sd-push.py (first-free, data-safe) then boot via boot-record.py / push-and-boot.py (launchers refuse non-bootable BASIC-auto/stack-overlap shapes). On real SAM: TAPO power-cycle (i266), record boots the driver -> generates+saves+serves; host fetches release.src+release.img over TFTP and verifies (release.img byte-matches GNU/Go release.img; release.src = the rendered listing). Self-serve hw (i266 TAPO + i272 capture).
   status: OPEN
-  depends_on: [i365d]
+  depends_on: [q77, i365d]
+  kind: leaf
+  owner: agent
+  parent: i365
+
+- id: i365f
+  title: "Render-cap overflow guards + Makefile DISASM_PAGE comment (#858/#859 review YELLOWs)"
+  description: |
+    The two review YELLOWs from #858/#859, cleared ahead of the driver work. (1) render_store_label/render_store_local/name-table ingest now bound-check against RENDER_MAX_LABELS/LOCALS/NAMES and jp fail (di;halt) on overflow rather than silently overrunning adjacent resident tables -- needed before the render feeds arbitrary user programs (the release corpus fits the caps). Guard-fires test TestTbnRenderCapOverflowGuards (below-cap stores / at-cap traps, labels+locals). (2) Makefile ~1478 comment corrected: disasm.bin loads at DISASM_PAGE=31, not 'page 15'.
+  status: IN_PROGRESS
   kind: leaf
   owner: agent
   parent: i365

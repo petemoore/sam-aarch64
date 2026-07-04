@@ -4,8 +4,10 @@
 #               registry move --id iN --before iM
 #               registry move --id iN --after iM
 - i365c
-- i365d
+- i365d-b1
+- i365d-b2
 - i365e
+- i365f
 - i359b
 - i41e
 - i43
