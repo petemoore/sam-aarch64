@@ -6129,3 +6129,27 @@
   status: OPEN
   kind: leaf
   owner: agent
+
+- id: i359
+  title: "Disk-image catalogue + store all built .mgt images as Trinity records (with in-repo record->disk mapping)"
+  description: |
+    Pete (2026-07-04), TOP PRIORITY. Three parts: (1) A single high-level catalogue README (docs/disk-catalogue.md) of EVERY .mgt disk image the build produces (~27). Per disk: what it IS, its PURPOSE, which source .asm dirs/files it is composed of, the Makefile target that builds it, HOW it is run/booted (AUTO BASIC / CODE-auto / record-boot / SimCoupe), HOW to test/verify it (expected result + any CI/harness test), and its Trinity record number/name. Pete has lost the overview of where the asm code is and what the disks are - this is the map. (2) Store ALL built disk images as records on the real SAM via the hardware-proven sd_push CMD24 path (NOT q71-blocked; q71 only gates the HTTP-fetch-to-free-record leg). (3) Maintain the record->disk mapping in-repo (in the catalogue). So Pete can test/inspect all ~27.
+  status: OPEN
+  kind: umbrella
+  owner: agent
+
+- id: i359a
+  title: "Disk-image catalogue README (docs/disk-catalogue.md) + in-repo record->disk mapping"
+  description: ""
+  status: IN_PROGRESS
+  kind: leaf
+  owner: agent
+  parent: i359
+
+- id: i359b
+  title: "Store (sd_push) + boot-verify every built .mgt disk to a Trinity record; fill the record->disk mapping"
+  description: ""
+  status: OPEN
+  kind: leaf
+  owner: agent
+  parent: i359
