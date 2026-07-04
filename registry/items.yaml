@@ -6166,7 +6166,7 @@
   title: "http store leaf: fit the record-write cluster + record-list claim into the debug/full 6-file http builds, and claim the record so multi-file fetch doesn't re-pick"
   description: |
     i357/#847 landed store_format_record (free-record pre-format before HRECORD/HSAVE) but ONLY in the smoke build (32741/32768). Two residuals: (1) BUDGET — the ~512 B raw-CMD24 record-write cluster (NETBOOT_WANT_RECORD_WRITE) does not fit the debug (marker) build or the full 6-file netboot_http_boot in the 32 KB boot window, so the marker-instrumented free-record re-shoot (i70b diagnosis path) and the full firmware fetch's store leaf still lack the fix (they wedge on a free record). Needs a byte-budget lift: leaner cluster, smaller/paged manifest, or a section-D overlay for the write code. (2) CLAIM — http_main omits bdos_claim_record (the record-LIST name write, +~200 B), so a second file's store_begin (bdos_find_free_record) RE-PICKS the same record (selection mismatch: find_free tests the list-entry blank, our format sets only the +232 dir stamp), overwriting the first file. Single-file smoke is unaffected; multi-file fetch (the full build) needs the claim OR a bdos_find_free_record that also rejects a dir-stamped record. Both are only reachable once the budget is lifted (the full build is the multi-file one). Not blocking i70b (its re-shoot uses the plain smoke build's border-colour outcome).
-  status: OPEN
+  status: IN_PROGRESS
   kind: leaf
   owner: agent
 
