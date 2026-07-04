@@ -556,7 +556,7 @@ HT_SERVER_IP_D ?= 1
 HT_SERVER_PORT ?= 80
 $(BUILD)/netboot_http_smoke_boot.bin $(BUILD)/netboot_http_smoke_boot.map: src/netboot/http_main.asm $(asm_deps/src/netboot/http_main.asm)
 	@mkdir -p $(BUILD)
-	pyz80 -D NETBOOT_STREAM=1 -D NETBOOT_HTTP_SMOKE=1 -D NETBOOT_REAL_LISTREAD=1 \
+	pyz80 -D NETBOOT_STREAM=1 -D NETBOOT_HTTP_SMOKE=1 -D NETBOOT_REAL_LISTREAD=1 -D NETBOOT_WANT_RECORD_WRITE=1 \
 	    -D HT_SERVER_IP_A=$(HT_SERVER_IP_A) -D HT_SERVER_IP_B=$(HT_SERVER_IP_B) \
 	    -D HT_SERVER_IP_C=$(HT_SERVER_IP_C) -D HT_SERVER_IP_D=$(HT_SERVER_IP_D) \
 	    -D HT_SERVER_PORT=$(HT_SERVER_PORT) \
@@ -589,6 +589,11 @@ $(BUILD)/netboot_http_boot_debug.bin $(BUILD)/netboot_http_boot_debug.map: src/n
 	    --obj=$(BUILD)/netboot_http_boot_debug.bin \
 	    --mapfile=$(BUILD)/netboot_http_boot_debug.map \
 	    src/netboot/http_main.asm
+	@# NETBOOT_WANT_RECORD_WRITE (the i357 free-record pre-format) is deliberately
+	@# NOT set here: the ~512 B raw-CMD24 record-write cluster does not fit alongside
+	@# this variant's UDP debug-marker channel in the 32 KB boot window. The plain
+	@# netboot-http-smoke-boot carries the fix (border-colour outcome); the marker-
+	@# instrumented free-record re-shoot awaits a byte-budget lift (tracked follow-up).
 	@tools/netboot-boot-fit-check.sh $(BUILD)/netboot_http_boot_debug.bin 32768 netboot_http_boot_debug.bin
 
 netboot-http-boot-debug: $(BUILD)/netboot_http_boot_debug.bin $(BUILD)/netboot_http_boot_debug.map

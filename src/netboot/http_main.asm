@@ -592,6 +592,28 @@ endif
 ; (ptr&0x3FFF | &8000). Deriving the page from the section index (ptr>>14) instead
 ; was the i355 store-leg wedge. Clobbers A, BC, DE, HL, IX.
 storage_sink_leaf:
+if defined(NETBOOT_WANT_RECORD_WRITE)
+                ; --- (0) pre-format the free record's directory (i357) ---
+                ; A genuinely FREE Trinity record has no "BDOS" +232 stamp, so real
+                ; B-DOS 1.5t HRECORD rejects it ("Invalid record", longjmp) and the
+                ; store leaf wild-jumps — the i70b store-leg wedge (i356 root cause).
+                ; Reproduce B-DOS FORMAT's record-level EFFECT ourselves before the
+                ; HRECORD/HSAVE hooks run: blank the directory region (tracks 0-3) and
+                ; stamp "BDOS" into its first sector, via the hardware-proven raw-CMD24
+                ; record write (bd_record_write_hw). Done ONCE, on the first window
+                ; (FW_REC_IDX == 0 -> FW_BASE_RECORD, the record bdos_find_free_record
+                ; confirmed free); later windows of a multi-record file target records
+                ; not proven free, so they are left to the i99/q16 record-spanning work
+                ; rather than formatted here (which would risk a used record).
+                push    hl                      ; save window ptr across the format
+                push    bc                      ; save window length across the format
+                ld      hl, (FW_REC_IDX)
+                ld      a, h
+                or      l
+                call    z, store_format_record  ; only the first window formats FW_BASE_RECORD
+                pop     bc
+                pop     hl
+endif
                 ; --- (1) hash this window into the running SHA-256 verify ---
                 push    hl                      ; save window ptr across the hash
                 push    bc                      ; save window length across the hash
@@ -652,18 +674,91 @@ endif
                 ld      (FW_REC_IDX), hl
                 ret
 
+if defined(NETBOOT_WANT_RECORD_WRITE)
+; ===========================================================================
+; store_format_record — reproduce B-DOS FORMAT's directory-level effect for the
+; free record FW_BASE_RECORD, so the subsequent HRECORD/HSAVE hooks accept it.
+;
+; AUTHORITY (B-DOS 1.5t, Trinity-HW; see the i357 row + docs/notes provenance):
+;   - HRECORD accepts a record IFF its first directory sector (linearSec 0) has
+;     "BDOS" at +232 (bdos15t annotated.dis:1982-2007, &8DE0 — the SOLE test).
+;   - HSAVE keeps NO on-disk free-sector bitmap: B-DOS rebuilds the RAM BAM by
+;     SCANNING the directory (hd.lds &AA3D) and allocation is hard-coded to start
+;     at track 4 (find.free &0401), so HSAVE can never overwrite the directory
+;     (tracks 0-3). BUT every one of the 80 directory entries' type byte (offset 0
+;     of each 256-byte entry) must be ZERO, else a stale non-zero entry is scanned
+;     as a live file and poisons the BAM (a phantom file marks real data sectors
+;     used). A record freed by bdos_free_record keeps its dir data (only its LIST
+;     entry is cleared), so a "free" record can hold stale directory bytes.
+; Hence blank the DIRECTORY region — tracks 0-3 = linearSec 0..39 (40 sectors) —
+; and stamp "BDOS" into sector 0. This is FORMAT's record-level effect WITHOUT its
+; full 1600-sector zero-fill (i357 direction, q71 = Pete option A). new.lab also
+; writes a disk label at +210/+250; the label is cosmetic (HRECORD ignores it,
+; get.label reads it only after acceptance) and the claim path that would name the
+; record is out of budget here, so it is omitted — the record is a valid unnamed
+; formatted disk.
+;
+; In:  FW_BASE_RECORD  the 1-based free record to format (>= 1).
+; Uses BD_WRITE_BUF (512 B, unused by http_main's HSAVE store) as the sector image.
+; Clobbers AF, BC, DE, HL. bd_record_write_hw's i295 band guard keeps every CMD24
+; strictly inside FW_BASE_RECORD's own body sectors (data safety on the shared card).
+; ===========================================================================
+SFR_DIR_SECTORS:  equ 40                        ; tracks 0-3 (10 sectors/track) = the directory region
+store_format_record:
+if defined(NETBOOT_DEBUG)
+                ld      a, DBG_HTTP_FILE_START
+                call    dbg_marker
+endif
+                ; select the record all writes target.
+                ld      hl, (FW_BASE_RECORD)
+                ld      (BD_REC_WRITE_REC), hl
+                ; zero the 512-byte sector image once (reused for every blanked sector).
+                ld      hl, BD_WRITE_BUF
+                ld      de, BD_WRITE_BUF + 1
+                ld      bc, 511
+                ld      (hl), 0
+                ldir
+                ; blank the rest of the directory region: linearSec 1..39 = all-zero
+                ; (neutralises every directory entry's type byte). Sector 0 is written
+                ; last, carrying the stamp.
+                ld      b, SFR_DIR_SECTORS - 1  ; sectors 1..39
+                ld      hl, 1
+sfr_blank:
+                ld      (BD_REC_WRITE_LINEAR), hl
+                push    bc
+                push    hl
+                ld      hl, BD_WRITE_BUF
+                call    bd_record_write_hw      ; own CMD24 to FW_BASE_RECORD linearSec i
+                pop     hl
+                pop     bc
+                inc     hl
+                djnz    sfr_blank
+                ; stamp "BDOS" at +232 and write the directory's first sector (0).
+                ld      hl, bdos_id_str         ; "BDOS" (bdos_seam.asm)
+                ld      de, BD_WRITE_BUF + 232
+                ld      bc, 4
+                ldir
+                ld      hl, 0
+                ld      (BD_REC_WRITE_LINEAR), hl
+                ld      hl, BD_WRITE_BUF
+                call    bd_record_write_hw      ; the validity sector (BDOS@232)
+                ret
+endif
+
 ; ===========================================================================
 ; sd_csd.asm — CSD read and BD_RECORDS derivation. Included here (after all the
 ; code) so every symbol it defines — csd_set_bd_records, csd_base, BD_RECORDS
 ; (via bdos_seam.asm already included transitively) — is available above.
 ; NETBOOT_REAL_LISTREAD (set by the Makefile recipes, i70e): the free-record
 ; scan reads the record list via the raw CMD17 path (bd_list_read_hw, below) —
-; the sd_push/i319a hardware-proven mechanism. The record SELECT and the HSAVE
-; still go via real B-DOS RST 8 hooks (hardware-proven by i93b). No
-; NETBOOT_WANT_CLAIM: http_main never issues raw CMD24 SPI writes (B-DOS HSAVE
-; owns the record contents), so the ~540-byte write cluster (bd_list_write_hw /
-; bd_cmd24_write_core / bd_record_write_hw) is omitted, keeping the binary
-; inside the 32 KB budget.
+; the sd_push/i319a hardware-proven mechanism. NETBOOT_WANT_RECORD_WRITE (i357):
+; pulls the raw-CMD24 record-DATA write path (bd_cmd24_write_core /
+; bd_record_write_hw + its i295 band guard) so store_format_record can pre-format
+; a free record's directory before HRECORD/HSAVE. It does NOT pull bd_list_write_hw
+; or the bdos_seam claim machinery (NETBOOT_WANT_CLAIM, a further ~200 B) — the
+; record SELECT and the file body still go via real B-DOS RST 8 hooks (HRECORD /
+; HSAVE, hardware-proven by i93b), and omitting the claim keeps the binary inside
+; the 32 KB boot budget.
 ; ===========================================================================
                 include "sd_csd.asm"
 

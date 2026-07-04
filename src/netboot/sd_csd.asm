@@ -426,13 +426,22 @@ bllr_rd2:
 endif                                          ; NETBOOT_REAL_LISTREAD
 
 ; ===========================================================================
-; NETBOOT_WANT_CLAIM selects the CMD24 write cluster: bd_list_write_hw,
-; bd_lba_apply_v1_shift, bd_cmd24_write_core, bd_record_write_hw,
-; bd_record_lba_in_band, and bd_cmp32, plus their data area. Binaries that
-; write to the SD card (sd_push, delete_record, boot_record, the serve) set
-; this flag; the production serve defines it internally. http_main uses B-DOS
-; HSAVE/HRECORD hooks for storage and never issues raw CMD24 writes, so the
-; ~540-byte write cluster is omitted, keeping http_main inside the 32 KB budget.
+; The CMD24 write cluster. Two flags pull it, at two granularities (i357):
+;   * NETBOOT_WANT_CLAIM      — the WHOLE cluster: bd_list_write_hw (the record-
+;     LIST write, for the record-claim) AND the record-DATA write path below.
+;     Binaries that both claim and write record data (sd_push, delete_record,
+;     boot_record, the serve) set it; the production serve defines it internally.
+;   * NETBOOT_WANT_RECORD_WRITE — ONLY the record-DATA write path (bd_lba_apply_
+;     v1_shift, bd_cmd24_write_core, bd_record_write_hw + its i295 band guard).
+;     bd_list_write_hw and the bdos_seam claim machinery are NOT pulled. http_main
+;     (i357) sets this: its store leaf pre-formats a free record's directory
+;     sector via raw CMD24 (bd_record_write_hw) before the B-DOS HRECORD/HSAVE
+;     hooks — the record-LIST claim (a further ~200 B) does not fit its 32 KB boot
+;     budget, so it is deliberately omitted (single-file smoke path; the multi-
+;     record claim is a tracked follow-up).
+; NETBOOT_WANT_CLAIM implies NETBOOT_WANT_RECORD_WRITE (the record-data path is a
+; strict subset), so the OR below keeps every NETBOOT_WANT_CLAIM build byte-identical.
+if defined(NETBOOT_WANT_CLAIM) | defined(NETBOOT_WANT_RECORD_WRITE)
 if defined(NETBOOT_WANT_CLAIM)
 ; ===========================================================================
 ; bd_list_write_hw — the REAL card-absolute list-sector write (i198): the
@@ -484,6 +493,8 @@ bd_list_write_hw:
                 ; Source is the 512-byte list buffer; reuse the shared CMD24 core.
                 ld      hl, BD_LIST_BUF
                 jp      bd_cmd24_write_core
+
+endif                                          ; NETBOOT_WANT_CLAIM (bd_list_write_hw — the record-LIST write)
 
 ; ===========================================================================
 ; bd_lba_apply_v1_shift — for an SDv1 (byte-addressed) card, shift bd_list_lba
@@ -928,16 +939,16 @@ bc32_a_less:
                 scf                             ; CY set (A < B)
                 ret
 
-endif                                          ; NETBOOT_WANT_CLAIM (write cluster code)
+endif                                          ; NETBOOT_WANT_CLAIM | NETBOOT_WANT_RECORD_WRITE (record-data write path)
 
-; bd_list_lba is used by both bd_list_read_hw (NETBOOT_REAL_LISTREAD path) and the
-; CMD24 write cluster (NETBOOT_WANT_CLAIM path). It is allocated whenever EITHER flag
-; is set; the 4 bytes are dead in builds where neither applies (e.g. boot_record,
-; which never touches the record list).
-if defined(NETBOOT_REAL_LISTREAD) | defined(NETBOOT_WANT_CLAIM)
+; bd_list_lba is used by bd_list_read_hw (NETBOOT_REAL_LISTREAD), bd_list_write_hw
+; (NETBOOT_WANT_CLAIM), and bd_record_write_hw (both write flags). It is allocated
+; whenever ANY of those flags is set; the 4 bytes are dead in builds where none
+; applies (e.g. boot_record, which never touches the record list).
+if defined(NETBOOT_REAL_LISTREAD) | defined(NETBOOT_WANT_CLAIM) | defined(NETBOOT_WANT_RECORD_WRITE)
 bd_list_lba:      defs 4                        ; 32-bit LE CMD17/CMD24 block/byte address
 endif
-if defined(NETBOOT_WANT_CLAIM)
+if defined(NETBOOT_WANT_CLAIM) | defined(NETBOOT_WANT_RECORD_WRITE)
 bd_cmd24_src:     defs 2                        ; bd_cmd24_write_core: 512-byte source pointer
 bd_rec_lba:       defs 4                        ; bd_record_write_hw: 32-bit LE record data-block LBA accumulator
 bd_rec_ofs:       defs 4                        ; bd_record_write_hw: 32-bit LE record offset 1600*(n-1) (band start, rel. base)
@@ -946,7 +957,7 @@ bd_cmp_tmp:       defs 4                        ; bd_record_lba_in_band / bd_cmp
 bd_rec_guard_tripped: defb 0                    ; sticky: set when the data-safety guard REFUSED an out-of-band write
 BD_REC_WRITE_REC:    defs 2                     ; bd_record_write_hw: 1-based claimed record number n
 BD_REC_WRITE_LINEAR: defs 2                     ; bd_record_write_hw: 0-based linear sector within the record
-endif                                           ; NETBOOT_WANT_CLAIM (write cluster data)
+endif                                           ; NETBOOT_WANT_CLAIM | NETBOOT_WANT_RECORD_WRITE (record-data write cluster data)
 
 ; ===========================================================================
 ; csd_decode_blocks — decode CSD_STAGE into the 32-bit (LE) csd_blocks.
