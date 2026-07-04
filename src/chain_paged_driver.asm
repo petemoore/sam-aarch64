@@ -460,7 +460,7 @@ prep_chain_paged:
 
                 ; --- handoff copy 1: PREP_OUT (page-10 &0000) -> staging ---
                 ld      hl, PREP_OUT            ; &0000 (section A = page 10)
-                ld      de, PC_STAGING          ; &C100 (section D = page 6)
+                ld      de, PC_STAGING          ; &D000 (section D = page 6)
                 ldir                            ; BC still = expanded len
 
                 ; --- handoff copy 2: staging -> LEX_SRC (page-8 &0800) ---
