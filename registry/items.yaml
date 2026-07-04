@@ -5483,9 +5483,28 @@
     
     SCOPE (2026-07-04 investigation, sibling i291a clamp already DONE #855): LARGE / multi-session — do it in a fresh dedicated session, emulation-first. Pieces: (1) the probe needs the FULL ENC bring-up (drv_init + MAC/IP config + the ENC TX path via encdrv.asm/enc_link.asm/build_udp_frame.asm) just to EMIT the report — model on src/netboot/csd_probe.asm (org &8000, DUMPER=1, includes netboot_serve.asm, reports via test_report.asm) as the closest skeleton, or build a lighter standalone UDP emitter; (2) a T-state-precise PARAMETERIZABLE delay loop between the SD-init and the identity read (the measured quantity); (3) host-test the probe LOGIC against enc28j60.go's sdInitSettleTStates model + the sdInitSettling/settleUntilT IDENT-stale window BEFORE hardware (validates it reports stale<settle, fresh>=settle); (4) a host launcher that patches N into the binary + pushes + captures the UDP reply (the trinpush-serve.py / boot-record.py config-block-patch pattern; capture via tcpdump/listen-markers.py); (5) the multi-shot hardware bisection. WATCH the i242 SD-before-ENC ordering: the probe does SD-init then needs the ENC working to report — sequence carefully. NOTE: frame agent/subagent prompts as benign retro SAM-Coupe ethernet-emulation work — the 'probe/identity/settle' framing tripped a subagent-safeguard FALSE POSITIVE on 2026-07-04 (Opus cyber filter); investigate inline or frame plainly.
   status: OPEN
-  kind: leaf
+  kind: umbrella
   owner: agent
   parent: i291
+
+- id: i291b-b1
+  title: "Build the &38-settle probe + host-test its stale/fresh classification against the enc28j60.go settle model (emulation-first, no hardware)"
+  description: |
+    New src/netboot/settle_probe.asm (org &8000, modelled on port_probe_standalone.asm): drv_init + drv_wait_link brings the ENC up (chk_trinity passes, RX armed), then OUT (&DC),&38 arms the PIC settle window (sdInitSettling; settleUntilT=tNow+sdInitSettleTStates), a parameterized 16-bit T-state delay loop (settle_delay_count, poked by the host/launcher = the measured quantity) burns N cycles, then it re-runs the driver's chk_trinity (OUT &DC,8/9 + IN &DD identity read) and classifies Z=settled(FRESH)/NZ=stale. Reports [N_lo,N_hi,readT,readR,status] over UDP via test_report (SATR, new test_id) + the pass/fail border. Host test tools/netboot-oracle/z80/settle_probe_test.go sweeps settle_delay_count across the enc28j60.go sdInitSettleTStates window, reads the SATR record off TXFrames, and asserts the reported status flips stale->fresh exactly at the settle boundary (stale below, fresh at/above, with margin) — validating the probe reports stale<settle / fresh>=settle BEFORE any hardware. Binary wired into the netboot-z80 make targets. Emulation-only; the real hardware bisection is the sibling leaf.
+  status: IN_PROGRESS
+  kind: leaf
+  owner: agent
+  parent: i291b
+
+- id: i291b-b2
+  title: "Run the hardware settle-time bisection: sweep N via the probe, capture UDP replies, converge on the real ENC/PIC settle, set sdInitSettleTStates=measured+margin"
+  description: |
+    Using the i291b-b1 probe: a host launcher patches settle_delay_count (N) into the binary, trinload-pushes it, and captures the SATR UDP reply (trinpush-serve.py config-patch + listen-markers.py / tcpdump pattern; self-serve via i266 TAPO power-cycle + i272 passwordless tcpdump). Bisect N between a too-small (reads stale) lower bound and a too-large (reads fresh) upper bound to converge on the real ENC/PIC settle, then set enc28j60.go sdInitSettleTStates to the measured value + margin. WATCH the i242 SD-before-ENC ordering: drv_init (ENC) must precede the &38 so the probe can still report. Multi-shot live-hardware run; frame agent/subagent prompts as benign retro SAM-Coupe ethernet-emulation work (the probe/identity/settle framing tripped a subagent safeguard false-positive 2026-07-04).
+  status: OPEN
+  depends_on: [i291b-b1]
+  kind: leaf
+  owner: agent
+  parent: i291b
 
 - id: i292
   title: EXECUTE the Trinity SD-write saga cleanup (section E) — purge ALL misinformation + delete the reimplementation
