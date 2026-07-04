@@ -5796,9 +5796,11 @@
   title: "netboot-oracle z80: relocate rrsScratch staging buffer to low RAM (root cause of 'high-address mis-execution' = test scratch/relocated-code collision, NOT a koron bug)"
   description: |
     ROOT-CAUSED (investigation, this session): the i313 premise — a koron-go/z80 high-address execution defect — is DISPROVEN. koron is address-independent (fetch/JP/CALL/RET are pure uint16; verified). The real failure is a TEST-FIXTURE scratch-buffer collision (same class as i231b-b4g, memory feedback_carveout_elim_shifts_hosttest_fixtures): the raw_record_sink tests staged chunk bytes into a HARDCODED upper window rrsScratch=&D000..&EFFF, and when STAGING was enlarged in-place (pre-#872 layout) the sink's own flush/finish/csd routines relocated UP into that window; raw_record_sink_leaf's 'call rrs_flush_sector' then jumped into bytes the test had overwritten with staged data -> CPU ran data as code -> the wild jump (PC=&4E0D) and the garbage decode ('no T-state timing for opcode DD FC'; PC=&E16A is literally inside the data window). The 'DD FC' symptom is data-run-as-code, and the current tree's tstates.go fallback (i319b) already decodes untabled DD xx, so it no longer even errors. #872 already dodged it (STAGING moved to image end -> code stays below &C000), so i313 blocks nothing. FIX (this PR): relocate rrsScratch to LOW RAM &1000..&2FFF, BELOW the org-&8000 binary, so it is structurally immune to up-growing code (clear of RST hooks, stack &6FFE, HALT trap &7000). Full z80 suite green. Broader audit of the other high test scratch consts tracked as a follow-up.
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 874, role: completing}
 
 - id: i314
   title: "Reconcile the firmware-fetch record naming: Z80 storage_sink_leaf names records by hex(name[0:3]) but the Go authority bdos.SpanRecordName is content-addressed hex(hash[0:3])"
