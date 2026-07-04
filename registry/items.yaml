@@ -5491,9 +5491,11 @@
   title: "Build the &38-settle probe + host-test its stale/fresh classification against the enc28j60.go settle model (emulation-first, no hardware)"
   description: |
     New src/netboot/settle_probe.asm (org &8000, modelled on port_probe_standalone.asm): drv_init + drv_wait_link brings the ENC up (chk_trinity passes, RX armed), then OUT (&DC),&38 arms the PIC settle window (sdInitSettling; settleUntilT=tNow+sdInitSettleTStates), a parameterized 16-bit T-state delay loop (settle_delay_count, poked by the host/launcher = the measured quantity) burns N cycles, then it re-runs the driver's chk_trinity (OUT &DC,8/9 + IN &DD identity read) and classifies Z=settled(FRESH)/NZ=stale. Reports [N_lo,N_hi,readT,readR,status] over UDP via test_report (SATR, new test_id) + the pass/fail border. Host test tools/netboot-oracle/z80/settle_probe_test.go sweeps settle_delay_count across the enc28j60.go sdInitSettleTStates window, reads the SATR record off TXFrames, and asserts the reported status flips stale->fresh exactly at the settle boundary (stale below, fresh at/above, with margin) — validating the probe reports stale<settle / fresh>=settle BEFORE any hardware. Binary wired into the netboot-z80 make targets. Emulation-only; the real hardware bisection is the sibling leaf.
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 856, role: completing}
   parent: i291b
 
 - id: i291b-b2
