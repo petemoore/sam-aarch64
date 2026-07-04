@@ -5,8 +5,11 @@
 //
 // It boots the netboot_server_largefile_record vessel (`make
 // netboot-server-largefile-record`) on the captured real ROM + B-DOS 1.5t: the
-// record carries the AUTOnbsrv server binary + a distinctive 40000-byte ramp
-// (multi-page, > 16 KB) as a plain CODE file + a small config.txt. The boot-time
+// record carries the AUTOnbsrv server binary + a distinctive 70000-byte ramp
+// (multi-page, > 64 KB) as a plain CODE file + a small config.txt. The > 64 KB
+// size also exercises the 32-bit OACK tsize (i365c-b3) and the 32-bit disk
+// offset/remaining path: the OACK byte-comparison vs the Go authority below
+// would fail if tsize wrapped mod 65536. The boot-time
 // store walk indexes the ramp as disk-backed (NB_DISK_TABLE) and config.txt into
 // the RAM arena; the boot infrastructure (bdos, AUTOnbsrv) stays out of both
 // tables (the "plain" filter). A TFTP RRQ for the ramp at blksize 512 AND 1024
