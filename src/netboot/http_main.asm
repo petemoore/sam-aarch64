@@ -82,10 +82,11 @@ PROV_WINDOW:    defw 0
 ;   6. call conn_verify_init (reset SHA-256)
 ;   7. fw_plan_path(BC=i) -> ld hl,FW_PATH / ld (HTTP_PATH_PTR),hl
 ;   8. fw_manifest_entry(BC=i) -> BC=rec ptr; copy rec+4 (32 B) -> CONN_PINNED_HASH
+;      (the pinned digest storage_sink_leaf content-addresses record names from)
 ;   9. arm sink: CONN_SINK_FILTER_MODE=1, CONN_SINK_FILTER=body_sink_write,
 ;      BODY_DST_PTR=storage_sink_leaf
-;  10. call store_begin (open this file in the store: remember its name for
-;       record naming, reset the record index)
+;  10. call store_begin (open this file in the store: reset the record index, pick
+;       the first free Trinity SD record)
 ; ===========================================================================
 prov_start:
                 ; --- step 1: CONN_CLIENT_PORT = BASE_PORT + i (BE) ---
@@ -157,19 +158,13 @@ ps_mac_zero:    ld      (hl), a
                 ld      (HTTP_HOST_PTR), hl
                 pop     bc                      ; restore BC=i
 
-                ; --- step 8: fw_manifest_entry(BC=i) -> copy rec+4 -> CONN_PINNED_HASH;
-                ;             also stash the record's name ptr (rec+0) for store_begin ---
-                call    fw_manifest_entry       ; BC=i -> BC = record ptr (preserved
-                                                ; until the ldir below clobbers it)
+                ; --- step 8: fw_manifest_entry(BC=i) -> copy rec+4 (the pinned
+                ;             SHA-256) -> CONN_PINNED_HASH. storage_sink_leaf then
+                ;             content-addresses each record name from this digest. ---
+                call    fw_manifest_entry       ; BC=i -> BC = record ptr
                 ; record layout: name ptr@0, path ptr@2, SHA-256@4 (32 bytes), size@36.
                 ld      h, b
-                ld      l, c                    ; HL = record ptr (rec+0)
-                ld      e, (hl)
-                inc     hl
-                ld      d, (hl)                 ; DE = name ptr (from rec+0)
-                push    de                      ; save name ptr for step 10 (store_begin)
-                ld      h, b
-                ld      l, c                    ; HL = record ptr again
+                ld      l, c                    ; HL = record ptr
                 ld      de, 4
                 add     hl, de                  ; HL = rec+4 = SHA-256 field
                 ld      de, CONN_PINNED_HASH
@@ -184,11 +179,11 @@ ps_mac_zero:    ld      (hl), a
                 ld      hl, storage_sink_leaf
                 ld      (BODY_DST_PTR), hl
 
-                ; --- step 10: store_begin(HL = manifest name ptr) ---
-                ; Opens this file in the store: remembers its name (for record
-                ; naming) and resets the record index; storage_sink_leaf writes the
-                ; body window-by-window as it streams.
-                pop     hl                      ; HL = name ptr (saved in step 8)
+                ; --- step 10: store_begin ---
+                ; Opens this file in the store: resets the record index and picks the
+                ; first free Trinity SD record; storage_sink_leaf writes the body
+                ; window-by-window as it streams, content-addressing each record name
+                ; from CONN_PINNED_HASH (set in step 8).
                 call    store_begin
                 ret
 
@@ -533,10 +528,6 @@ ht_iss:           defb 0, 0, 4, 0              ; per-file base initial send sequ
 ; FW_REC_IDX — the record index within the current file (0-based); store_begin
 ; resets it, storage_sink_leaf increments it per flushed window.
 FW_REC_IDX:        defs 2
-; FW_STORE_NAME_PTR — the current file's logical name pointer (the manifest name
-; ptr prov_start passes to store_begin); fw_span_record_name builds each record
-; name from it.
-FW_STORE_NAME_PTR: defs 2
 ; FW_BASE_RECORD — the first free Trinity SD record for the current file, set by
 ; store_begin (via bdos_find_free_record). storage_sink_leaf uses FW_BASE_RECORD +
 ; FW_REC_IDX as the per-window Trinity record number. Stays 0 when BD_RECORDS=0
@@ -544,22 +535,19 @@ FW_STORE_NAME_PTR: defs 2
 ; a graceful-decline path — the pre-SD-card-read default.
 FW_BASE_RECORD:    defs 2
 
-; store_begin(HL = the file's logical name ptr) — open a file in the store: remember
-; its name for record naming, reset the record index, and pick the first free Trinity
-; SD record for the whole file. bdos_find_free_record scans 1..BD_RECORDS (set at
-; boot by csd_set_bd_records) and stores the first free record in BD_FREE_RECORD;
-; we latch that into FW_BASE_RECORD so every storage_sink_leaf window for THIS file
-; uses a contiguous band starting at the free record. When BD_RECORDS=0 (no card or
-; CSD read failed), BD_FREE_RECORD stays 0 and storage_sink_leaf uses record 0.
-; Clobbers AF, BC, DE, HL.
+; store_begin — open a file in the store: reset the record index and pick the first
+; free Trinity SD record for the whole file. Each record's NAME is content-addressed
+; from CONN_PINNED_HASH by storage_sink_leaf, so store_begin takes no name input.
+; bdos_find_free_record scans 1..BD_RECORDS (set at boot by csd_set_bd_records) and
+; stores the first free record in BD_FREE_RECORD; we latch that into FW_BASE_RECORD so
+; every storage_sink_leaf window for THIS file uses a contiguous band starting at the
+; free record. When BD_RECORDS=0 (no card or CSD read failed), BD_FREE_RECORD stays 0
+; and storage_sink_leaf uses record 0. Clobbers AF, BC, DE, HL.
 store_begin:
 if defined(NETBOOT_DEBUG)
-                push    hl
                 ld      a, DBG_HTTP_FILE_START
                 call    dbg_marker
-                pop     hl
 endif
-                ld      (FW_STORE_NAME_PTR), hl
                 ld      hl, 0
                 ld      (FW_REC_IDX), hl
                 call    bdos_find_free_record   ; BD_FREE_RECORD = first free 1..BD_RECORDS (0 if none)
@@ -624,10 +612,16 @@ endif
                 ; --- (2) HSAVE this window as the next record ---
                 push    hl                      ; save window ptr (HSAVE source addr)
                 push    bc                      ; save window length (HSAVE size)
-                ; build the record name <prefix><NNN> from the logical name + index.
-                ld      hl, (FW_STORE_NAME_PTR) ; HL = logical name ptr
+                ; build the content-addressed record name <hash6><NNN> from the
+                ; current file's pinned SHA-256 digest (CONN_PINNED_HASH) + index.
+                ; fw_span_record_name hex-encodes digest[0..2]; CONN_PINNED_HASH is the
+                ; blob hash the streamed-body verify enforces (bdos.SpanRecordName
+                ; content-addresses by exactly this hash — CLAUDE.md rule 6). It is the
+                ; PINNED hash (known up-front), not the running hash, because HSAVE
+                ; happens per-window before conn_verify_final finalises the stream.
+                ld      hl, CONN_PINNED_HASH    ; HL = the file's 32-byte pinned digest
                 ld      bc, (FW_REC_IDX)        ; BC = record index
-                call    fw_span_record_name     ; FW_SPAN_NAME = <prefix><NNN>
+                call    fw_span_record_name     ; FW_SPAN_NAME = <hash6><NNN>
                 ld      hl, FW_SPAN_NAME
                 ld      (BD_NAME_PTR), hl
                 pop     bc                      ; BC = window length (HSAVE size)
