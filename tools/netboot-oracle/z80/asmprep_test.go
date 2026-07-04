@@ -675,12 +675,34 @@ func TestAsmprepBrick3aInclude(t *testing.T) {
 		},
 		{
 			// A macro defined AND invoked inside the same included file (the
-			// expansion directive names that file). Cross-file macro provenance
-			// is deferred to b4.
+			// expansion directive names that file).
 			name:  "macro-in-include",
 			src:   ".include \"m.s\"\nafter\n",
 			path:  "main.s",
 			files: incFiles{"m.s": ".macro g x\n  use \\x\n.endm\ng 7\n"},
+		},
+		{
+			// Cross-file macro provenance (b4a): a macro DEFINED in an included
+			// file but INVOKED in the outer file. The expansion's `# line`
+			// directive must name the DEFINITION file (m.s), not the call site
+			// (main.s) — Go m.defPos.file. Before b4a the Z80 emitted the
+			// call-site file here (CURRENT_FILE at expansion time).
+			name:  "macro-def-in-include-call-in-main",
+			src:   ".include \"m.s\"\ng 7\nafter\n",
+			path:  "main.s",
+			files: incFiles{"m.s": ".macro g x\n  use \\x\n.endm\n"},
+		},
+		{
+			// Same, one level deeper: macro defined in a nested include (b.s),
+			// invoked in the intermediate include (a.s) and again in main — each
+			// expansion names b.s.
+			name: "macro-def-nested-invoke-outer",
+			src:  ".include \"a.s\"\ng 2\n",
+			path: "main.s",
+			files: incFiles{
+				"a.s": ".include \"b.s\"\ng 1\n",
+				"b.s": ".macro g x\n  v \\x\n.endm\n",
+			},
 		},
 		{
 			// Passthrough + comment directive inside an included file.
