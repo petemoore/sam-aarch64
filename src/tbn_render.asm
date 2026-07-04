@@ -960,6 +960,15 @@ render_reset_state:
 ; -----------------------------------------------------------------------
 render_store_label:
                 ld      (render_tmp_id), hl         ; save name_id
+                ; Overflow guard (i365 #858 YELLOW): render_labels holds
+                ; RENDER_MAX_LABELS rows; fail loud rather than overrun into the
+                ; adjacent resident tables once an arbitrary user program (not
+                ; the release corpus the caps are sized for) supplies more.
+                ld      hl, (render_label_count)
+                ld      de, RENDER_MAX_LABELS
+                or      a
+                sbc     hl, de                      ; count - RENDER_MAX_LABELS
+                jp      nc, fail                    ; count >= cap: table full
                 ld      hl, (render_label_next)
                 ex      de, hl                      ; DE = slot
                 ld      hl, symbol_value_buf
@@ -990,6 +999,13 @@ render_store_label:
 ; -----------------------------------------------------------------------
 render_store_local:
                 ld      (render_tmp_digit), a
+                ; Overflow guard (i365 #858 YELLOW): render_locals holds
+                ; RENDER_MAX_LOCALS rows; fail loud rather than overrun.
+                ld      hl, (render_local_count)
+                ld      de, RENDER_MAX_LOCALS
+                or      a
+                sbc     hl, de                      ; count - RENDER_MAX_LOCALS
+                jp      nc, fail                    ; count >= cap: table full
                 ld      hl, (render_local_next)
                 ex      de, hl                      ; DE = slot
                 ld      hl, local_label_pc_buf

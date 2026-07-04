@@ -1476,8 +1476,8 @@ b8d-chain-paged-driver-z80: $(BUILD)/b8d_chain_paged_driver.bin $(BUILD)/b8d_cha
 # tbn-render-driver-z80 — standalone driver for the `.tbn` → source-text
 # renderer (i365a).  org &8000; includes reader.asm + tbn_render.asm +
 # paged_bodies.asm.  The renderer reuses build/disasm.bin (the harness loads it
-# into physical page 15) for instruction decode, so disasm.bin is a build
-# prerequisite of the driver.
+# into physical page DISASM_PAGE=31) for instruction decode, so disasm.bin is a
+# build prerequisite of the driver.
 $(BUILD)/tbn_render_driver.bin $(BUILD)/tbn_render_driver.map: src/tbn_render_driver.asm $(asm_deps/src/tbn_render_driver.asm) $(BUILD)/disasm.bin
 	@mkdir -p $(BUILD)
 	pyz80 --obj=$(BUILD)/tbn_render_driver.bin \

@@ -81,6 +81,15 @@ render_read_editor:
 ; ----- name table: [count u16][front-coded entry]… --------------------
                 call    render_ed_read_u16          ; HL = name count
                 ld      (render_name_count), hl
+                ; Overflow guard (i365 #858 YELLOW): render_name_ptrs holds
+                ; RENDER_MAX_NAMES entries indexed by name_id (0..count-1); fail
+                ; loud rather than overrun when a program supplies more names than
+                ; the release-sized cap.  (The loop below reloads render_name_count,
+                ; so clobbering HL here is safe.)
+                ld      de, RENDER_MAX_NAMES + 1
+                or      a
+                sbc     hl, de                      ; count - (cap+1)
+                jp      nc, fail                    ; count > RENDER_MAX_NAMES
 
                 ld      de, 0                       ; DE = current name_id
 render_name_loop:
