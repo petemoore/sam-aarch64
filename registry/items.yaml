@@ -543,9 +543,11 @@
   title: "Brick 3a: .include text logic + pluggable reader vector + memory provider + oracle"
   description: |
     Port preprocess.go handleInclude + tryParseInclude + the processFile recursion and mid-stream '# line' emission. Add a pluggable reader vector (READER_VEC function pointer set at prep_run init, no conditional assembly) with a memory-backed provider used by the oracle: the harness registers named in-memory files; the vector resolves includePath along the search path (dir of including file first, then -I dirs) and returns the bytes. Recursion: an .include re-enters processFile (leading '# 1 "resolved"' directive, process, then the caller restores '# <srcLine+1> "path"'), including nested includes, includes-with-macros, and .include skipped inside a false .if (not even opened). Oracle extends asmprep_test.go with include-relative / search-path / missing / skipped-in-false-if / nested / include-with-macro cases, byte-compared vs frontend.Preprocess. Harness-verified only (consistent with b1/b2a/b2b); the real SAM reader is b3b.
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 879, role: completing}
   parent: i31b-b3
 
 - id: i31b-b3b
