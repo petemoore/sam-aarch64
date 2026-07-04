@@ -324,6 +324,37 @@ func TestTbnRenderDirectiveExprForms(t *testing.T) {
 	}
 }
 
+// TestTbnRenderOverlayTargets is slice 6a's parity proof: a source whose
+// branch/adr/adrp targets are symbolic produces INSN_RUN mode-1 (overlay)
+// records, one patch per element across the target-text FoldSlot families —
+// FoldBranch26 (b/bl), FoldBranch19 (b.cond/cbz), FoldBranch14 (tbz),
+// FoldAdr and FoldAdrp. Each element decodes its base word via disasm.bin and
+// splices the patch's symbol name back into the folded (last) operand. It must
+// render byte-identically to render.Emit.
+func TestTbnRenderOverlayTargets(t *testing.T) {
+	src := []byte(".global _start\n" +
+		"_start:\n" +
+		"  b forward\n" +
+		"  bl _start\n" +
+		"back:\n" +
+		"  b.ne back\n" +
+		"  cbz x0, forward\n" +
+		"  tbz x1, #3, back\n" +
+		"forward:\n" +
+		"  adr x2, _start\n" +
+		"  adrp x3, forward\n" +
+		"  ret\n")
+	tbn := buildCompactTBN(t, src, "s6a.s")
+
+	want, err := render.Emit(tbn)
+	if err != nil {
+		t.Fatalf("render.Emit: %v", err)
+	}
+
+	got := renderTBNOnZ80(t, tbn)
+	assertRenderMatch(t, got, want)
+}
+
 // buildCompactTBN builds a compact `.tbn` from source via the frontend +
 // assembler (the same pipeline compact_ir_b8d_test.go uses), so the fixture
 // carries a realistic editor region + header tables.

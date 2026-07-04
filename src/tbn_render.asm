@@ -97,15 +97,19 @@ render_walk_directive:
 ; render_insn_run — render a KindInsnRun record.  Mirrors emitInsnRun
 ; (overlay.go:36): one statement per 4-byte element.
 ;
-; Payload: [mode u8][elements].  SLICE 1 handles mode 0 only (bare 4-byte
-; little-endian assembled words, no patches); each element decodes as a
-; literal.  mode 1 (base word + patch overlay) is a later slice.
+; Payload: [mode u8][elements].  Mode 0 is bare 4-byte little-endian assembled
+; words (no patches), each decoding as a literal.  Mode 1 is the overlay
+; encoding: variable-length elements, each a base word + patch_count + packed
+; patches (render_insn_run_mode1, SLICE 6a).
 ;
 ; Input:  HL = payload ptr (STAGING_BUF), BC = payload length.
 ; -----------------------------------------------------------------------
 render_insn_run:
+                ld      a, (hl)                 ; mode byte
                 inc     hl                      ; skip the mode byte
                 dec     bc                      ; BC = remaining element bytes
+                or      a
+                jp      nz, render_insn_run_mode1
 
 render_insn_run_next:
                 ld      a, b
@@ -198,6 +202,290 @@ render_decode_literal:
                 call    render_out_append
                 ld      hl, DISASM_COMM_OPS
                 jp      render_copy_cstr        ; tail-call: append the operands
+
+
+; =======================================================================
+; SLICE 6a — INSN_RUN mode-1 (overlay) rendering: the overlay framework +
+; the target-text slot families (branch26/19/14, adr, adrp).
+;
+; Ports the mode-1 path of the Go authority tools/sam-aarch64/render/overlay.go:
+;   render_insn_run_mode1     <- emitInsnRun mode-1 element walk (overlay.go:36)
+;   render_m1_literal/overlay <- emitInsnElement 0-patch/1-patch (overlay.go:53)
+;   render_ovl_target         <- renderOverlay + spliceOverlay target families
+;                                (overlay.go:80-97, 113-122)
+;   render_ovl_emit_ops_prefix<- replaceOperand(mnem,ops,lastIndex(ops),sym)
+;                                leading-parts join (overlay.go:170-187)
+;   render_emit_target_text   <- renderPatchOperand → renderTargetText
+;                                (overlay.go:231-274)
+;   render_ovl_patch_header   <- insn_patch_header (insn_run.asm:225-265)
+;
+; The deferred immediate/mem families (S6b: MemImm12/9, AddSubImm12, Litpool19,
+; MovzAuto, MovkImm16, PairImm7, Logical) fall through to fail.
+; =======================================================================
+
+; FoldSlot ids — wire contract with tools/aarch64enc/overlay.go (mirrors the
+; FSID_* ids in insn_run.asm:31-44).  Defined here because the standalone
+; render driver does not include insn_run.asm; only the S6a target-text
+; families are named (S6b adds ids 6-13).
+FSID_BRANCH26:          equ     1
+FSID_BRANCH19:          equ     2
+FSID_BRANCH14:          equ     3
+FSID_ADR:               equ     4
+FSID_ADRP:              equ     5
+
+
+; -----------------------------------------------------------------------
+; render_insn_run_mode1 — render a mode-1 (overlay) INSN_RUN record.  Each
+; element is [base_word u32][patch_count u8][patch_count × packed header +
+; expr bytes]; a 0-patch element is a fully-literal word, a 1-patch element
+; carries one FoldSlot overlay whose expression replaces the folded operand.
+; Mirrors emitInsnRun (overlay.go:36-48) + emitInsnElement (overlay.go:53-67)
+; over the reader's mode-1 element layout (reader.go:128-162).
+;
+; The variable-length element walk (base_word, patch_count, then per-patch
+; packed headers) mirrors insn_run.asm's pass-2 element loop
+; (insn_run.asm:84-152) and its header parser (insn_run.asm:225-265).
+;
+; Input:  HL = first element ptr (STAGING_BUF), BC = element bytes.
+; -----------------------------------------------------------------------
+render_insn_run_mode1:
+                ld      (render_ovl_cursor), hl
+                ld      (render_ovl_remaining), bc
+
+render_m1_elem_loop:
+                ld      bc, (render_ovl_remaining)
+                ld      a, b
+                or      c
+                ret     z                       ; all elements rendered
+
+; flush header-table defs whose offset == PC, then open the statement line
+; (emitInsnRun overlay.go:38-42).
+                call    render_flush
+                call    render_open_stmt
+
+; read base_word (4 bytes) into render_ovl_base; HL → patch_count byte.
+                ld      hl, (render_ovl_cursor)
+                ld      de, render_ovl_base
+                ld      bc, 4
+                ldir
+                ld      a, (hl)
+                ld      (render_ovl_patch_count), a
+                inc     hl
+                ld      (render_ovl_cursor), hl
+; remaining -= 5 (base_word + patch_count).
+                ld      hl, (render_ovl_remaining)
+                ld      de, 5
+                or      a
+                sbc     hl, de
+                ld      (render_ovl_remaining), hl
+
+; dispatch on patch count: 0 → literal, 1 → overlay, >1 → unsupported (the Go
+; authority errors, overlay.go:58-60).
+                ld      a, (render_ovl_patch_count)
+                or      a
+                jr      z, render_m1_literal
+                cp      1
+                jr      z, render_m1_overlay
+                jp      fail
+
+render_m1_after:
+                ld      a, 1
+                ld      (render_prev_stmt), a   ; prevWasStatement = true
+                call    render_pc_advance4      ; pc += 4 (overlay.go:47)
+                jr      render_m1_elem_loop
+
+; -- 0-patch element: decode the literal base word (overlay.go:54-56) --------
+render_m1_literal:
+                ld      hl, render_ovl_base
+                call    render_load_word_regs   ; BC = high16, IX = low16
+                call    render_decode_literal
+                jr      render_m1_after
+
+; -- 1-patch element: decode + splice the patch operand (renderOverlay) -------
+render_m1_overlay:
+                ld      hl, render_ovl_base
+                call    render_load_word_regs   ; BC = high16, IX = low16
+                call    paged_call
+                defw    DISASM_ENTRY
+                defb    DISASM_PAGE
+                ; DISASM_COMM_MNEM / DISASM_COMM_OPS populated (section B).
+
+                call    render_ovl_patch_header ; slot + expr_len; HL = expr ptr
+                ld      (render_ovl_expr_ptr), hl
+
+; spliceOverlay dispatch (overlay.go:103-159).  SLICE 6a wires the target-text
+; families only (branch26/19/14, adr, adrp): each replaces the LAST operand
+; with the rendered target text (overlay.go:113-122 —
+; replaceOperand(mnem, ops, lastIndex(ops), sym)).  The immediate/mem families
+; (S6b) fall through to fail.
+                ld      a, (render_ovl_slot)
+                cp      FSID_BRANCH26
+                jr      z, render_ovl_target
+                cp      FSID_BRANCH19
+                jr      z, render_ovl_target
+                cp      FSID_BRANCH14
+                jr      z, render_ovl_target
+                cp      FSID_ADR
+                jr      z, render_ovl_target
+                cp      FSID_ADRP
+                jr      z, render_ovl_target
+                jp      fail                    ; S6b immediate/mem slots
+
+render_ovl_target:
+; joinLine (overlay.go:170-175): mnem + TAB ...
+                ld      hl, DISASM_COMM_MNEM
+                call    render_copy_cstr
+                ld      a, 9                    ; TAB
+                call    render_out_append
+; ... + the operand prefix (leading parts up to & incl. the last ", ") ...
+                call    render_ovl_emit_ops_prefix
+; ... + the target text as the replaced last operand (renderTargetText).
+                ld      hl, (render_ovl_expr_ptr)
+                ld      bc, (render_ovl_expr_len)
+                call    render_emit_target_text
+                jr      render_m1_after
+
+
+; -----------------------------------------------------------------------
+; render_load_word_regs — load the 4-byte little-endian word at (HL) into the
+; disasm ABI registers: BC = high 16 bits (bytes 2,3), IX = low 16 bits
+; (bytes 0,1).  Mirrors the inline load in the mode-0 element loop.
+; -----------------------------------------------------------------------
+render_load_word_regs:
+                ld      c, (hl)                 ; byte 0
+                inc     hl
+                ld      b, (hl)                 ; byte 1; BC = low16
+                inc     hl
+                push    bc
+                ld      c, (hl)                 ; byte 2
+                inc     hl
+                ld      b, (hl)                 ; byte 3; BC = high16
+                pop     ix                      ; IX = low16
+                ret
+
+
+; -----------------------------------------------------------------------
+; render_ovl_patch_header — decode the packed patch header at
+; (render_ovl_cursor): [slot:4|expr_len:4]; an expr_len nibble of 15 escapes to
+; a real u8 length that follows.  Sets render_ovl_slot + render_ovl_expr_len and
+; advances render_ovl_cursor / render_ovl_remaining past header+expr.  Output:
+; HL = expr bytes ptr.  Faithful port of insn_patch_header (insn_run.asm:232-265)
+; with render-local state (the render driver does not include insn_run.asm).
+; -----------------------------------------------------------------------
+render_ovl_patch_header:
+                ld      hl, (render_ovl_cursor)
+                ld      a, (hl)
+                inc     hl
+                ld      c, a                    ; C = packed header byte
+                rrca
+                rrca
+                rrca
+                rrca
+                and     &0F
+                ld      (render_ovl_slot), a    ; slot = high nibble
+                ld      de, 1                   ; header size
+                ld      a, c
+                and     &0F                     ; expr_len nibble
+                cp      &0F
+                jr      nz, roph_len_done
+                ld      a, (hl)                 ; escape: real u8 length
+                inc     hl
+                inc     e                       ; header size 2
+roph_len_done:
+                ld      c, a
+                ld      b, 0
+                ld      (render_ovl_expr_len), bc
+                push    hl                      ; expr ptr
+                add     hl, bc                  ; HL = past expr
+                ld      (render_ovl_cursor), hl
+                ld      hl, (render_ovl_remaining)
+                or      a
+                sbc     hl, bc                  ; remaining -= expr_len
+                or      a
+                sbc     hl, de                  ; remaining -= header size
+                ld      (render_ovl_remaining), hl
+                pop     hl                      ; HL = expr ptr
+                ret
+
+
+; -----------------------------------------------------------------------
+; render_ovl_emit_ops_prefix — append the operand-list prefix that precedes the
+; folded (last) operand: everything in DISASM_COMM_OPS up to and including the
+; last ", " separator.  A single-operand ops string (no ", ") contributes
+; nothing.  This is joinLine over replaceOperand's untouched leading parts
+; (overlay.go:180-187): only the last operand is replaced, so the leading text
+; is copied verbatim.  The target families' operands carry no bracket group, so
+; the last ", " is the true operand boundary (matching Go's splitOps).
+; -----------------------------------------------------------------------
+render_ovl_emit_ops_prefix:
+                ld      hl, DISASM_COMM_OPS
+                ld      de, 0                   ; DE = ptr past the last ", " (0 = none)
+rovp_scan:
+                ld      a, (hl)
+                or      a
+                jr      z, rovp_done
+                cp      ","
+                jr      nz, rovp_next
+                inc     hl                      ; inspect the char after ','
+                ld      a, (hl)
+                cp      " "
+                jr      nz, rovp_scan           ; ',' not followed by ' '
+                inc     hl                      ; HL → char after ", "
+                ld      d, h
+                ld      e, l                    ; DE = start of the operand after ", "
+                jr      rovp_scan
+rovp_next:
+                inc     hl
+                jr      rovp_scan
+rovp_done:
+                ld      a, d
+                or      e
+                ret     z                       ; no ", " → empty prefix
+                ex      de, hl                  ; HL = end (past last ", ")
+                ld      de, DISASM_COMM_OPS
+                or      a
+                sbc     hl, de                  ; HL = prefix length
+                ld      b, h
+                ld      c, l                    ; BC = length
+                ld      hl, DISASM_COMM_OPS
+                jp      render_out_put_bytes
+
+
+; -----------------------------------------------------------------------
+; render_emit_target_text — renderTargetText (overlay.go:257-274): render a
+; branch/adr/adrp target expression to render_out.  A constant renders as a
+; bare address (0x%x for v>=0, %d for v<0, no leading '#'); a simple symbol
+; reference renders as the symbol/local name (reusing S5's render_simple_symref);
+; anything else as a parenthesised infix expression.  renderPatchOperand
+; (overlay.go:231-242) routes the branch/adr/adrp slots here (target style).
+;
+; Input:  HL = expr ptr, BC = expr len.
+; -----------------------------------------------------------------------
+render_emit_target_text:
+                ld      (render_ovl_expr_ptr), hl
+                ld      (render_ovl_expr_len), bc
+                call    render_eval_const       ; Z=1 → const, render_num32 = v
+                jr      nz, rett_notconst
+; constant target: v<0 → signed decimal (%d); v>=0 → "0x" + hex (0x%x).
+                ld      hl, render_out_append
+                ld      (render_sink_addr), hl
+                ld      a, (render_num32 + 3)
+                bit     7, a
+                jp      nz, render_emit_dec_s32
+                jp      render_emit_hashx_s32
+rett_notconst:
+                ld      hl, (render_ovl_expr_ptr)
+                ld      bc, (render_ovl_expr_len)
+                call    render_simple_symref    ; Z=1 → matched (name/Nf/Nb emitted)
+                ret     z
+; compound target: "(" printExpr ")".
+                ld      a, "("
+                call    render_out_append
+                ld      hl, (render_ovl_expr_ptr)
+                ld      bc, (render_ovl_expr_len)
+                call    render_print_expr
+                ld      a, ")"
+                jp      render_out_append
 
 
 ; -----------------------------------------------------------------------
@@ -2680,8 +2968,17 @@ render_labels:          defs    RENDER_MAX_LABELS * 6   ; [offset u32][name_id u
 render_locals:          defs    RENDER_MAX_LOCALS * 5   ; [offset u32][digit u8]
 
 render_prev_stmt:       defb    0       ; prevWasStatement flag (emit.go)
-render_rir_src:         defw    0       ; INSN_RUN element source cursor
-render_rir_rem:         defw    0       ; INSN_RUN remaining element bytes
+render_rir_src:         defw    0       ; INSN_RUN mode-0 element source cursor
+render_rir_rem:         defw    0       ; INSN_RUN mode-0 remaining element bytes
+
+; SLICE 6a — INSN_RUN mode-1 (overlay) element-walk state.
+render_ovl_cursor:      defw    0       ; mode-1 element walk cursor (STAGING_BUF)
+render_ovl_remaining:   defw    0       ; mode-1 element bytes remaining
+render_ovl_base:        defb    0, 0, 0, 0      ; current element base word (LE)
+render_ovl_patch_count: defb    0       ; current element patch count
+render_ovl_slot:        defb    0       ; current patch FoldSlot id
+render_ovl_expr_ptr:    defw    0       ; current patch expr ptr (STAGING_BUF)
+render_ovl_expr_len:    defw    0       ; current patch expr length
 
 render_ld_src:          defw    0       ; LIT_DATA payload ptr ([dir_id][data])
 render_ld_len:          defw    0       ; LIT_DATA payload length (1 + nbytes)
