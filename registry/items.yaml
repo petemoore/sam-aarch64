@@ -5682,7 +5682,7 @@
   description: |
     Second brick for i304 (q79 resolved: option b -- the byte-exact 1.5t SOURCE stays PRIVATE, per the publication policy 'trinity.mgt contents stay out of the repo'; it reproduces Colin's proprietary binary so it is not committed to the public repo). Base = reference/bdos/bdos15a.asm (i304a byte-exact, l_XXXX address-labels == the ANALYSIS region-diff a&XXXX). In a PRIVATE working copy under ~/sam-archive, apply the documented 1.5t (Trinity fork) changes region-by-region (~/sam-archive/bdos/analysis: region-diffs.txt + bdos15t-beta6.annotated.dis): Atom device layer -> SD/SPI driver, CHS->32-bit linear seek, SD init ladder, CSD/records math, record-base poke, hot-swap RESTORE, banner/DIR/message text, DEVICE command removed. Iterate assemble->diff until byte-identical to extracted/bdos15t-beta6.bin. Graft Edwin's routine names from bdos15a.src.txt onto touched routines (human-verified). IN-REPO DELIVERABLE (public): a SKIP_PRIVATE_TESTS-gated byte-match test that resolves both the source and the bin from ~/sam-archive (like csd_decode_colin_test.go) and asserts pyz80(source)==bin -- proves correctness without committing Colin's bytes. The private annotated source lives in ~/sam-archive (agents on Pete's host read it as the authority).
   status: OPEN
-  depends_on: [i304a]
+  depends_on: [i304a, q80]
   kind: leaf
   owner: agent
   parent: i304
