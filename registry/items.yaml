@@ -6417,7 +6417,9 @@
   title: "Render-cap overflow guards + Makefile DISASM_PAGE comment (#858/#859 review YELLOWs)"
   description: |
     The two review YELLOWs from #858/#859, cleared ahead of the driver work. (1) render_store_label/render_store_local/name-table ingest now bound-check against RENDER_MAX_LABELS/LOCALS/NAMES and jp fail (di;halt) on overflow rather than silently overrunning adjacent resident tables -- needed before the render feeds arbitrary user programs (the release corpus fits the caps). Guard-fires test TestTbnRenderCapOverflowGuards (below-cap stores / at-cap traps, labels+locals). (2) Makefile ~1478 comment corrected: disasm.bin loads at DISASM_PAGE=31, not 'page 15'.
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 860, role: completing}
   parent: i365
