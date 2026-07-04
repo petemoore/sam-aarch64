@@ -6367,10 +6367,28 @@
   title: Serve release.src + release.img over TFTP from the demo (network-verifiable end-to-end proof)
   description: |
     Serve BOTH produced files (release.src ~417KB, release.img ~21KB) over TFTP so a host fetch confirms the run. SCOPE CORRECTION (2026-07-04, i365cd investigation): the server serves ONLY <=1518B files staged in a RAM arena (nb_walk_entry SKIPS files >=16KB, NB_FILE_MAX=1518; send_next_data reads SRC_PTR+offset from RAM, 16-bit). Both demo outputs are oversize -> this needs NEW large-file serve-from-disk: nb_walk_entry records a disk-backed descriptor {name,start,size} for large CODE files; send_next_data follows the MGT sector chain (510 data + 2 link bytes) from a 32-bit XFER_OFFSET, reading each record sector via bd_record_read_hw (CMD17, i362, exists) and re-blocking 510->512 into TFTP DATA blocks. Long TFTP names via NBMANIFEST (buildManifest, exists). Independently gateable: seed a record with a large file via seedRecordFromMGT, boot the server, assert byte-exact serve (netboot_server_faithful_test.go template). Design: docs/specs/i365-demo-architecture.md (Wall 2).
+  status: OPEN
+  kind: umbrella
+  owner: agent
+  parent: i365
+
+- id: i365c-b1
+  title: "Large-file streaming serve-from-disk core (chain-follow + 510->512 re-block)"
+  description: |
+    DONE. The netboot server streams files larger than the 1518B RAM arena directly from the boot record's SD sectors: nb_walk_entry indexes large PLAIN CODE files (excludes the auto-exec server binary + system DOS) as disk-backed NB_DISK_TABLE descriptors {name, chain-head track/sector, 32-bit size}; send_next_data_disk follows the MGT sector chain (mgt_ts_to_record_linear converts side-major (track,sector)->record-linear, bd_record_read_hw CMD17), skips the 9-byte body header, and re-blocks 510-byte MGT data units into DISK_BLK_BUF via an O(n) incremental body-base cursor. csd_set_bd_records + a patchable NB_BOOT_RECORD wire the record number at boot. Gated byte-exact on the faithful rig (TestNetbootServerLargeFile, blksize 512 AND 1024; arena path regression-clean; zero SD writes). Serves under SHORT (<=10-char) names; long names are i365c-b2.
   status: IN_PROGRESS
   kind: leaf
   owner: agent
-  parent: i365
+  parent: i365c
+
+- id: i365c-b2
+  title: NBMANIFEST long-name mapping for disk-table (large-file) entries
+  description: |
+    nb_apply_manifest rebuilds STORE + NB_SRC_TABLE from the manifest but does NOT remap NB_DISK_TABLE (the large-file disk-backed entries), so large files only serve under their <=10-char store name when an NBMANIFEST is present. The demo's outputs release.src/release.img are 11-char names, so i365d-b2/i365e need the disk table remapped through the manifest too. Extend nb_apply_manifest (netboot_server.asm:1703+) to also rewrite NB_DISK_TABLE names via nb_manifest_map, and gate with a large-file serve test under a long name (NBMANIFEST present). Flagged in nb_fill_store + the i365c-b1 commit.
+  status: OPEN
+  kind: leaf
+  owner: agent
+  parent: i365c
 
 - id: i365d
   title: "Autoboot CODE-auto driver: render->save->assemble->save->tftp-serve with on-screen messages; compose the demo .mgt"
@@ -6379,7 +6397,7 @@
     
     DEMO ASSEMBLE STEP (i365b DONE #859): use build/assembler-demo.bin (pyz80 -D DEMO_ASM=1) — a callable ret-exit assembler that HSAVEs as 'RELEASEIMG'; the driver CALLs it (it returns). ONE release-unstripped.tbn (DOS file 'IN') feeds BOTH render + assembler (assembler loads only the prefix). Render should save 'RELEASESRC'. §859-review YELLOWs to honour HERE: (a) the driver must keep its own stack + the assembler's return frame OUTSIDE the assembler's &C100-down boot stack AND its &8000 code image (else the ret target corrupts) — the harness parked the caller SP at &FFFE (section D); (b) hardware-confirm a record boot leaves its record selected for HSAVE (no HRECORD was added to save_out_file) — if not, add a one-time driver-level HRECORD of the boot record before the steps.
   status: OPEN
-  depends_on: [i365a, i365b, i365c]
+  depends_on: [i365a, i365b, i365c-b1]
   kind: umbrella
   owner: agent
   parent: i365
