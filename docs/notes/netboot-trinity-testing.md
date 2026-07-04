@@ -563,6 +563,69 @@ the **i188** redesign re-enables a safe ROM capture.
 
 ---
 
+## The demo capstone (i365) — assemble + render + serve, from one record
+
+**What it is.** The assembler-core end-to-end proof: a single Trinity-record disk
+(`build/assemble_first_serve_record.mgt`) that boots and, in one run, **assembles**
+`release.tbn` → `release.img` (the aarch64 binary), **renders** `release.tbn` →
+`release.src` (the human-readable source listing), then **serves both over TFTP**
+so a host fetch confirms the whole thing on real silicon. Design:
+[`../specs/i365-demo-architecture.md`](../specs/i365-demo-architecture.md).
+
+**The one non-obvious step — patch the record number in first.** Two of the
+vessel's overlays use raw absolute-LBA SD paths that must know the record they
+booted from: `render`'s `RDB_CFG_RECORD` (LE16 — the raw CMD17 read of `IN` and
+the raw CMD24 write of `release.src`) and `nbsrv`'s `NB_BOOT_RECORD` (byte — the
+large-file disk serve). There is no runtime self-discovery, and `sd_push` picks
+the first FREE record dynamically, so the number is resolved first and patched in
+**before** the push with `tools/trinload-push/patch-demo-record.py`. A wrong value
+is a shared-card **data-safety hazard** (`release.src` would be written into
+another record's LBA band), so the shot asserts the record `sd_push` claims equals
+the record patched.
+
+**Build the disk:**
+
+```sh
+make netboot-assemble-first-serve-record        # -> build/assemble_first_serve_record.mgt
+```
+
+**Run it (self-serve, hands-off):**
+
+```sh
+# 1. power on + find the first free record
+~/bin/tapo.sh on                                        # SAM auto-boots trinload (~10-15 s)
+DEPLOY_CHECKED=1 tools/trinload-push/list-records.py 192.168.2.75   # -> "first free: REC N"
+
+# 2. patch the record number into the overlays, then push to that free record
+cp build/assemble_first_serve_record.mgt /tmp/demo.mgt
+tools/trinload-push/patch-demo-record.py /tmp/demo.mgt N
+DEPLOY_CHECKED=1 tools/trinload-push/sd-push.py 192.168.2.75 /tmp/demo.mgt build/sd_push.bin
+#    ^ ~90 s for 1600 sectors; assert it reports "wrote it to record N"
+
+# 3. boot the record (fires ALHK -> assemble -> render -> serve)
+DEPLOY_CHECKED=1 tools/trinload-push/boot-record.py 192.168.2.75 N
+
+# 4. the demo takes ~3 min to assemble + render + come up as a server; then fetch both
+curl -m 60  --tftp-blksize 1024 -o release.img tftp://192.168.2.75/release.img
+curl -m 300 --tftp-blksize 1024 -o release.src tftp://192.168.2.75/release.src
+~/bin/tapo.sh off
+```
+
+**What a pass looks like.** `release.img` byte-matches `build/release-unstripped.img`
+(the GNU/Go-identical binary), and `release.src` byte-matches the Go `render.Emit`
+listing (417,374 bytes). A request for a missing name returns an error and the
+server keeps serving.
+
+**Proven on hardware (i365e, 2026-07-05).** Stored to record 199 (first-free,
+data-safe), booted on the real SAM, and both files fetched **byte-exact** —
+`release.img` (21,752 B) and `release.src` (417,374 B) — plus the missing-name
+negative control (still serving after). Serve throughput was ~3 KB/s per file
+(RAM-arena / round-trip bound). The emulation gate for the exact `.mgt` is
+`TestAssembleFirstServeFaithful` (`tools/netboot-oracle/z80`). On-screen RST &10
+progress messages are the remaining piece (i368, needs a real screen).
+
+---
+
 ## Later increments (placeholders — filled in as they land)
 
 - **HTTPS provisioning (i88, stretch).** Fetch the Pi firmware blobs over TLS (e.g.
