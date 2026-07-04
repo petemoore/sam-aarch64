@@ -48,28 +48,67 @@ RECORD_SECTORS = 1600  # a Trinity record is exactly 1600 sectors (819200 bytes)
 WINDOW = 4             # outstanding @-block acks (mirrors trinload's windowed push)
 
 
-def stream_mgt(sock, dst, data):
-    """Stream `data` as '@' blocks (one 512-byte sector each, linearSec ascending),
-    windowed at WINDOW outstanding acks. Returns the number of sectors sent."""
+def stream_mgt(sock, dst, data, max_rounds=10):
+    """Stream `data` as '@' blocks (one 512-byte sector each), windowed at WINDOW
+    outstanding acks, RETRANSMITTING un-acked sectors across up to `max_rounds`
+    rounds until every sector is acknowledged (i348). Returns (nsec, acked_count).
+
+    sd_push acks each block with '.' + linearSec(LE16) (+ one data byte), so an ack
+    identifies WHICH sector it confirms; a sector stays in the un-acked set until its
+    ack is seen and is resent otherwise. This recovers BOTH failure modes of a lossy
+    ~1600-sector stream: a lost '@' frame (the sector never landed) and a lost ack
+    (the sector landed but looked un-acked). Because writes are absolute-LBA and
+    idempotent, and sd_push counts UNIQUE sectors (src/netboot/sd_push.asm), a
+    resent-but-already-written sector is free — it never over-counts past 1600.
+
+    The old one-pass stream just WARNed on an ack timeout and moved on, so a single
+    lost frame anywhere in the stream left sd_push short of 1600 and finalize replied
+    'E' — the whole ~87 s push had to be deleted and retried from scratch."""
     nsec = (len(data) + SECTOR - 1) // SECTOR
-    outstanding = 0
-    for s in range(nsec):
-        chunk = data[s * SECTOR:(s + 1) * SECTOR]
-        sock.sendto(b"@" + struct.pack("<H", s) + chunk, (dst, PORT))
-        outstanding += 1
-        if outstanding >= WINDOW:
-            try:
-                sock.recvfrom(8)
-            except socket.timeout:
-                print(f"  WARN: ack timeout at sector {s}")
-            outstanding -= 1
-    while outstanding:
+    acked = set()
+
+    def block(s):
+        return b"@" + struct.pack("<H", s) + data[s * SECTOR:(s + 1) * SECTOR]
+
+    def take_ack():
+        """Read one ack; mark the sector it echoes acked. False on timeout."""
         try:
-            sock.recvfrom(8)
+            reply, _ = sock.recvfrom(16)
         except socket.timeout:
+            return False
+        if reply[:1] == b"." and len(reply) >= 3:
+            acked.add(struct.unpack("<H", reply[1:3])[0])
+        return True
+
+    stalled = 0
+    for rnd in range(max_rounds):
+        todo = [s for s in range(nsec) if s not in acked]
+        if not todo:
             break
-        outstanding -= 1
-    return nsec
+        if rnd:
+            print(f"  round {rnd}: retransmitting {len(todo)} un-acked sector(s)")
+        before = len(acked)
+        outstanding = 0
+        for s in todo:
+            sock.sendto(block(s), (dst, PORT))
+            outstanding += 1
+            if outstanding >= WINDOW:
+                # keep <= WINDOW blocks in flight; a timeout ends this burst's drain.
+                outstanding = outstanding - 1 if take_ack() else 0
+        while outstanding and take_ack():
+            outstanding -= 1
+        if len(acked) == before:
+            stalled += 1
+            if stalled >= 2:
+                break  # two rounds with zero progress: the SAM is not answering
+        else:
+            stalled = 0
+
+    missing = [s for s in range(nsec) if s not in acked]
+    if missing:
+        print(f"  WARN: {len(missing)} sector(s) still un-acked after {rnd + 1} round(s) "
+              f"(first: {missing[0]}); finalize will report the shortfall")
+    return nsec, len(acked)
 
 
 def finalize(sock, dst, attempts=5):
@@ -172,8 +211,8 @@ def push_mgt(sam, mgt_path, sd_push_bin):
 
     print(f"stage 2: streaming {mgt_path} ({len(data)} B) as @-blocks")
     t0 = time.time()
-    sent = stream_mgt(sock, dst, data)
-    print(f"  streamed {sent} sectors in {time.time() - t0:.1f}s; finalizing")
+    sent, acked = stream_mgt(sock, dst, data)
+    print(f"  streamed {sent} sectors ({acked} acked) in {time.time() - t0:.1f}s; finalizing")
     reply, record = finalize(sock, dst)
     where = f"record {record}" if record else "the free record (number unreported)"
     if reply == b"D":

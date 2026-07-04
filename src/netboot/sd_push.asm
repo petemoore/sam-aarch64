@@ -269,10 +269,16 @@ sd_push_main:
                 ; encdrv/sd_csd/bdos already do) keeps individual port switches safe; with
                 ; RX undisturbed there is nothing further to restore.
 
-                ; reset the received-sector counter (finalize checks it == 1600) and
-                ; the next progress-dot threshold (i318: a dot per 100 sectors).
+                ; reset the DISTINCT-sector counter + the unique-sector seen-bitmap
+                ; (i348) — finalize checks this count == 1600 — and the next
+                ; progress-dot threshold (i318: a dot per 100 sectors).
                 ld      hl, 0
                 ld      (sp_recv_count), hl
+                ld      hl, sp_seen_bitmap
+                ld      de, sp_seen_bitmap+1
+                ld      bc, 199
+                ld      (hl), 0
+                ldir                           ; zero the 200-byte seen-bitmap
                 ld      hl, 100
                 ld      (sp_next_dot), hl
 
@@ -599,7 +605,43 @@ sp_data_lba:
                                                ; finalize then answers 'E', never a false
                                                ; 'D' over a hole in the record
 
-                ; count the successfully WRITTEN sector (finalize checks the total == 1600).
+                ; Count this sector only if it is a NEW (distinct) one. The host
+                ; retransmits un-acked sectors (i348 / sd-push.py), so a sector whose
+                ; data already landed but whose ack was lost can arrive again; the
+                ; write is idempotent (absolute LBA), but the count must not grow past
+                ; 1600 or finalize would falsely answer 'E'. sp_seen_bitmap is a
+                ; 1600-bit map (200 B, zeroed per record) indexed by m (the raw .mgt
+                ; linear sector 0..1599); finalize's ==1600 test then means "1600
+                ; DISTINCT sectors written". A resent-but-already-written sector is free.
+                ld      hl, (BD_WRITE_START)   ; m (0..1599)
+                ld      de, 1600
+                and     a
+                sbc     hl, de                 ; m - 1600
+                jr      nc, sp_data_ack        ; m >= 1600 (protocol violation): don't count/index
+                add     hl, de                 ; HL = m again
+                ld      a, l
+                and     7                      ; A = m & 7 (bit index within the byte)
+                ld      e, a
+                ld      d, 0
+                push    hl                     ; save m
+                ld      hl, sp_bit_masks
+                add     hl, de
+                ld      c, (hl)                ; C = 1 << (m & 7)
+                pop     hl                     ; m
+                srl     h
+                rr      l
+                srl     h
+                rr      l
+                srl     h
+                rr      l                      ; HL = m >> 3 (byte offset 0..199)
+                ld      de, sp_seen_bitmap
+                add     hl, de                 ; HL -> the seen-bitmap byte for m
+                ld      a, (hl)
+                and     c
+                jr      nz, sp_data_ack        ; already seen: idempotent re-write, do NOT re-count
+                ld      a, (hl)
+                or      c
+                ld      (hl), a                ; mark m seen
                 ld      hl, (sp_recv_count)
                 inc     hl
                 ld      (sp_recv_count), hl
@@ -880,7 +922,7 @@ sp_claimed:     defb 0                          ; 0 until sp_claim_once register
 sp_src:         defw 0                          ; this block's 512-byte write source: packet+45
                                                 ; for a full block, BD_WRITE_BUF for a staged
                                                 ; short/empty final block (i338)
-sp_recv_count:  defw 0                         ; sectors received AND written this session (i339)
+sp_recv_count:  defw 0                         ; DISTINCT sectors written this session (i339/i348)
 sp_next_dot:    defw 100                       ; next progress-dot threshold (i318)
 
 ; Screen-status strings (i318) — NUL-terminated for sp_print_str; 13 = CR (the
@@ -919,3 +961,9 @@ sp_str_fail_nofree:
 packet:         defs 1518                      ; RX/TX frame buffer (drv_read fills it)
 
 length:         equ $ - sd_push_main           ; code length (diagnostic)
+
+; i348 unique-sector accounting (placed after `length` so no earlier symbol
+; shifts). sp_seen_bitmap is a 1600-bit map (one bit per .mgt linear sector
+; 0..1599) zeroed at record start; sp_bit_masks is the 1 << (m & 7) lookup.
+sp_bit_masks:   defb 1,2,4,8,16,32,64,128
+sp_seen_bitmap: defs 200

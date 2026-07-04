@@ -474,6 +474,57 @@ func TestSDPushFinalizeComplete(t *testing.T) {
 	}
 }
 
+// TestSDPushCountsDistinctSectors is the i348 emulation gate for unique-sector
+// counting. The host now retransmits un-acked sectors (a lost '@' frame OR a lost
+// ack; tools/trinload-push/sd-push.py), so an already-written sector can arrive
+// again. sd_push must count DISTINCT sectors — via the sp_seen_bitmap test-and-set
+// — not every '@' block, or a retransmitted push would over-count past 1600 and
+// finalize would falsely reply 'E'. It streams 3 distinct sectors chosen to span the
+// bitmap's low/mid/high bytes (0 -> byte0/bit0, 800 -> byte100/bit0, 1599 ->
+// byte199/bit7) as 5 blocks (0 and 1599 each arrive twice, a retransmit) and asserts
+// sp_recv_count lands on 3 (distinct), not 5 (blocks). Writes are idempotent
+// (absolute-LBA), so the duplicate re-writes are harmless.
+func TestSDPushCountsDistinctSectors(t *testing.T) {
+	mac, enc, sd, _ := setupSDPushMain(t, z80h.CSDForV2(0x001D59))
+	_ = sd
+
+	sec := make([]byte, 512)
+	for i := range sec {
+		sec[i] = byte((i * 7) & 0xFF)
+	}
+	order := []uint16{0, 1599, 800, 1599, 0} // 3 distinct across 5 blocks
+	distinct := map[uint16]bool{}
+	enc.InjectRX(sdPushFrame([]byte{'?'}))
+	for _, m := range order {
+		enc.InjectRX(sdPushBlock(m, sec))
+		distinct[m] = true
+	}
+	enc.InjectRX(sdPushFrame([]byte{'F'}))
+
+	res, err := mac.RunBoot("sd_push_main", z80h.Entry{StepCap: 60_000_000})
+	if err != nil {
+		t.Fatalf("RunBoot sd_push_main faulted: %v", err)
+	}
+	sym := func(name string) uint16 {
+		a, err := mac.Sym(name)
+		if err != nil {
+			t.Fatalf("sd_push symbol %q absent from %s", name, sdPushMap)
+		}
+		return a
+	}
+	count := int(leU16(mac.Read(sym("sp_recv_count"), 2)))
+	t.Logf("sd_push distinct-count: %d blocks (%d distinct) -> sp_recv_count=%d finalPC=&%04X",
+		len(order), len(distinct), count, res.PC)
+	if count != len(distinct) {
+		t.Fatalf("sp_recv_count = %d after %d blocks (%d distinct sectors) — retransmitted duplicates must NOT over-count (i348 unique-sector bitmap)", count, len(order), len(distinct))
+	}
+	// The count is 3 (!= 1600), so finalize replied 'E' — the point of this test is
+	// the COUNT, not completion (TestSDPushFinalizeComplete covers the 1600->'D' path).
+	if got := countPayloadPrefix(enc.TXFrames(), []byte{'E'}); got < 1 {
+		t.Errorf("finalize after %d distinct sectors did not reply 'E'; tx payloads=%v", len(distinct), txPayloads(enc.TXFrames()))
+	}
+}
+
 // sideMajorRecordLinear mirrors sd_push's mgt_to_record_linear (i315/i294): a .mgt
 // container is TRACK-major (m = cyl*20 + side*10 + (sector-1), samfile) while a Trinity
 // SD record stores the disk SIDE-major (rec = side*800 + cyl*10 + (sector-1), B-DOS 1.5t

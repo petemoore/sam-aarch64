@@ -130,6 +130,88 @@ class TestFinalizeRetry(unittest.TestCase):
         self.assertEqual((status, record), (None, None))
 
 
+class TestStreamRetransmit(unittest.TestCase):
+    """i348: a lost '@' frame OR a lost ack must not fail the whole push.
+
+    stream_mgt() runs against a loopback responder that emulates sd_push's ack
+    behaviour (ack each block with '.' + linearSec, recording the UNIQUE sectors
+    'written') and can drop the first arrival of chosen sectors (lost frame) or the
+    first ack of chosen sectors (lost ack). The host must retransmit until every
+    sector is acked, and the responder must end up with every distinct sector."""
+
+    def setUp(self):
+        self.responder = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.responder.bind(("127.0.0.1", 0))
+        self.responder.settimeout(2.0)
+        self.port = self.responder.getsockname()[1]
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.sock.settimeout(0.2)
+        self._orig_port = sd_push.PORT
+        sd_push.PORT = self.port
+
+    def tearDown(self):
+        sd_push.PORT = self._orig_port
+        self.sock.close()
+        self.responder.close()
+
+    def _serve(self, nsec, lose_block=frozenset(), lose_ack=frozenset()):
+        """Start the sd_push-emulating responder thread. Returns (thread, written)
+        where `written` is the set of DISTINCT sectors it has received+'written'."""
+        written = set()
+        acked_once = set()
+        block_seen = {}
+        ack_sent = {}
+
+        def run():
+            while len(acked_once) < nsec:
+                try:
+                    dgram, addr = self.responder.recvfrom(600)
+                except socket.timeout:
+                    break  # the host gave up sending
+                if dgram[:1] != b"@":
+                    continue
+                s = struct.unpack("<H", dgram[1:3])[0]
+                block_seen[s] = block_seen.get(s, 0) + 1
+                if s in lose_block and block_seen[s] == 1:
+                    continue  # lost frame: no write, no ack
+                written.add(s)  # idempotent absolute-LBA write
+                ack_sent[s] = ack_sent.get(s, 0) + 1
+                if s in lose_ack and ack_sent[s] == 1:
+                    continue  # lost ack: sector landed but the host sees nothing
+                self.responder.sendto(b"." + struct.pack("<H", s) + b"x", addr)
+                acked_once.add(s)
+
+        t = threading.Thread(target=run)
+        t.start()
+        return t, written
+
+    def _run(self, nsec, **loss):
+        t, written = self._serve(nsec, **loss)
+        n, acked = sd_push.stream_mgt(self.sock, "127.0.0.1", bytes(nsec * sd_push.SECTOR))
+        t.join(timeout=5)
+        return n, acked, written
+
+    def test_clean_stream_all_acked(self):
+        n, acked, written = self._run(20)
+        self.assertEqual((n, acked), (20, 20))
+        self.assertEqual(written, set(range(20)))
+
+    def test_lost_frames_retransmitted(self):
+        n, acked, written = self._run(20, lose_block={3, 7, 15})
+        self.assertEqual(acked, 20)
+        self.assertEqual(written, set(range(20)))
+
+    def test_lost_acks_recovered_without_double_write(self):
+        n, acked, written = self._run(20, lose_ack={2, 9})
+        self.assertEqual(acked, 20)
+        self.assertEqual(written, set(range(20)))
+
+    def test_lost_frames_and_acks_together(self):
+        n, acked, written = self._run(24, lose_block={1, 20}, lose_ack={5, 12, 23})
+        self.assertEqual(acked, 24)
+        self.assertEqual(written, set(range(24)))
+
+
 class TestLostReplyVerdict(unittest.TestCase):
     """i335: the post-finalize '?' probe decides verify-vs-failure."""
 
