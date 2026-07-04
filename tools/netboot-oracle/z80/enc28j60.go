@@ -591,8 +591,19 @@ func (e *ENC28J60) autoNullFor(p peripheral) bool {
 func (e *ENC28J60) SetTState(t uint64) {
 	if t < e.tNow {
 		e.busyUntilT = 0
-		if e.sdInitSettling && e.tNow >= e.settleUntilT {
-			e.sdInitSettling = false
+		if e.sdInitSettling {
+			if e.tNow >= e.settleUntilT {
+				e.sdInitSettling = false // already elapsed in the old timeline: spent
+			} else {
+				// Still open at the boundary: re-base the absolute deadline onto
+				// the new (smaller) timeline, preserving ONLY the remaining budget
+				// (settleUntilT - tNow). Carrying the old absolute deadline would
+				// re-arm the window for the whole next run — pinning the next
+				// run's probes stale (the i327 artifact in a narrower shape, PR
+				// 820 §3 residual). t + remaining keeps the microseconds-apart
+				// i242 back-to-back catch without the whole-run overhang.
+				e.settleUntilT = t + (e.settleUntilT - e.tNow)
+			}
 		}
 	}
 	e.tNow = t
