@@ -5756,8 +5756,27 @@
   description: |
     i274 P2 (retire the mock-substitutes-for-real anti-pattern). The AttachBDOS Go mock (bdos_store.go BDOSStore / Machine.AttachBDOS) and the armed-dispatch double stand in for real B-DOS and HID the serve/WRQ write-path failure across the SD-write saga (i274 axis A, 'mock-substitutes-for-real'). The faithful rig now exists (sd_push_faithful_test.go: real Colin ROM + B-DOS 1.5t via LoadROMImage), so B-DOS behaviour can be exercised authentically. TASK: migrate every AttachBDOS-based test to the faithful rig, and put any remaining AttachBDOS usages behind a shrink-to-zero ledger (name->reason, modelled on tools/hosttest-carveout-allowlist.txt) that only ratchets DOWN, so no NEW mock-based B-DOS test can be added and the mock is provably retired when the ledger hits zero. The over-aggressive-settle negative-control gate (the other half of P2) is already i289 (DONE). Authority: CLAUDE.md rule 8; memory feedback_trinity_sd_write_settled_truths ('never use the AttachBDOS mock to test B-DOS behaviour — always real Z80 B-DOS in emulation'). May be partially gated on the faithful rig covering each AttachBDOS use case (assess coverage when worked).
   status: OPEN
+  kind: umbrella
+  owner: agent
+
+- id: i311a
+  title: "AttachBDOS mock: shrink-to-zero ledger + CI guard (no new mock-B-DOS tests)"
+  description: |
+    First half of i311 (workable now; the migration half is i311b, gated on i254). Put every current AttachBDOS/NewBDOSStore mock-B-DOS test use behind a shrink-to-zero ledger (per-file name->count, modelled on tools/hosttest-carveout-allowlist.txt / i231) + a make check + CI guard: a NEW or unlisted AttachBDOS call site FAILS the build; the ledger only ratchets DOWN (a stale/over-count entry also fails). This freezes the mock (no new mock-based B-DOS tests, CLAUDE.md rule 8) and establishes the retirement mechanism + baseline count, provably retired when the ledger hits zero. Does NOT require the private captures / faithful rig to run -- pure static check, runs unconditionally in CI. Authority: feedback_trinity_sd_write_settled_truths ('never use the AttachBDOS mock to test B-DOS behaviour').
+  status: OPEN
   kind: leaf
   owner: agent
+  parent: i311
+
+- id: i311b
+  title: Migrate AttachBDOS mock tests to the faithful B-DOS rig; ratchet the ledger to zero
+  description: |
+    Second half of i311, gated on i254. Migrate every AttachBDOS-based test (per the i311a ledger) to the faithful rig (LoadROMImage + real Colin ROM + B-DOS 1.5t, as sd_push_faithful_test.go), ratcheting the i311a ledger DOWN toward zero; delete the AttachBDOS mock (bdos_store.go BDOSStore / Machine.AttachBDOS + the armed-dispatch double) when the ledger hits zero. GATED ON i254: the faithful rig is SKIP_PRIVATE_TESTS-gated and does NOT run in CI until i254 makes the repo's CI materialise the private captures (rom.bin/eeprom.bin/B-DOS 1.5t) and run SKIP_PRIVATE_TESTS=false -- migrating a mock test (runs in CI) to the faithful rig (skips in CI) before i254 would DELETE CI coverage. Assess per-use-case faithful coverage as ledger entries are eliminated. Authority: i274 P2, CLAUDE.md rule 8.
+  status: OPEN
+  depends_on: [i254]
+  kind: leaf
+  owner: agent
+  parent: i311
 
 - id: i312
   title: Single named source-of-truth for the B-DOS record-HEADER vs disk-BODY (byte-232) distinction + code-comment pointers
