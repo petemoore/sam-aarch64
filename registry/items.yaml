@@ -6685,9 +6685,11 @@
   title: "SAM-runnable paged prep image + driver harness (asmprep in a paged window, PP_PREP i2-pool buffers, b8d two-image) — shared by i31b-b3b's exercise and i31b-b4"
   description: |
     SAM-runnable paged prep image + driver, the shared foundation i31b-b3b's exercise (i371) and i31b-b4 both build on. asmprep in a TWO-PAGE LMPR window (new -D ASMPREP_PAGED_BUFS, mirroring ASMPARSE_PAGED_BUFS): code org &4000 (section B = page 9); the big buffers PREP_OUT/PREP_SRC/PREP_FILES equ'd into section A (page 8, &0000/&2000/&3000 = exactly 16 KB); small buffers stay defs in section B. prep_paged_driver.asm (org &8000, mirror parse_paged_driver): save boot LMPR/SP, relocate stack to section D (HMPR-stable), LMPR=&28, call prep_run (memory-reader default), snapshot PREP_ERR + output length, restore. Tested in the koron-go/z80 paged harness (tools/netboot-oracle/z80, models LMPR/HMPR paging like the b8d drivers): plant source in page 8 at PREP_SRC + PREP_FILES for the memory reader, run the driver, read PREP_OUT from page 8, byte-compare vs host frontend.Preprocess on the asmprep oracle fixtures. Proves prep runs paged, leaving section C/D free for i371's real-reader trampoline-HLOAD. NOT SimCoupe/real-DOS here (memory reader, no disk) — that is i371. The i2-pool PP_PREP scaling for the FULL spectrum4 corpus is deferred to b4: the oracle-fixture buffers fit the two-page window (measured: code ~4 KB + small bufs ~8 KB in section B; big three = 16 KB in section A), the corpus does not. Depends only on the asmprep module being feature-complete (b1/b2a/b2b/b3a, all DONE).
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 881, role: completing}
 
 - id: i371
   title: End-to-end real-HLOAD .include exercise under SimCoupé — bind READER_VEC=prep_sam_reader in the paged prep build + disk include-file wiring
