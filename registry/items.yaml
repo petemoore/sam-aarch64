@@ -6356,7 +6356,7 @@
   title: "On-SAM assemble release.tbn -> release.img + HSAVE to disk ('Generating image...')"
   description: |
     Agent 2 research: the prod assembler ALREADY HLOADs the .tbn (disk file 'IN') -> two-pass main_assemble -> emit_byte into the OUT page-pool buffer -> save_out_file HSAVEs it via REAL rst8 HOOK_HSAVE(132); the release gate proves the saved 'OUT' file is GNU-byte-identical. So assemble+save EXISTS. Demo gaps: (1) rename SAM output 'OUT' -> a <=10-char name (SAM names max 10 chars; 'release.img' is 11 — the on-wire TFTP name can still be release.img); (2) for an SD-record boot target prepend BD_HOOK_HRECORD select before HSAVE (i93b hook_roundtrip pattern, hw-proven on B-DOS 1.5t). Refs: src/assembler.asm:674-691, src/main_loop.asm:1835-1868, src/netboot/hook_roundtrip.asm:143-181.
-  status: OPEN
+  status: IN_PROGRESS
   kind: leaf
   owner: agent
   parent: i365
