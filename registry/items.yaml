@@ -5387,7 +5387,7 @@
   title: Push the CJ's Elephant playable disk (cjs-sam-remake boot_m2b.mgt) to the SAM over Trinity TFTP — the real-world end-to-end demo of the now-working SD write
   description: |
     Real-world validation/demo (Pete): push the CJ's Elephant Antics playable disk (cj.mgt = ~/git/cjs-sam-remake boot_m2b.mgt, a SEPARATE Pete project, 819200 B) to a free Trinity SD record via the hardware-proven sd_push path (sd-push.py + src/netboot/sd_push.asm, incl. the i315 side-major reorder), then BOOT it on the SAM. Validation is SIZE-ONLY (i285): cj.mgt is accepted (no BDOS stamp; +232 is not a boot/select requirement - memory feedback_trinity_sd_write_settled_truths). Deps i289/i293/i295 all DONE. NOTE: a hardware-confirmed sd_push run already wrote record cjfixed and BOOTED CJ's Elephant on the real SAM (i295/i302, #784) - the mechanism is proven; this item is now the clean repeatable one-command push+boot demo/wrapper (drive boot via SAMBOOT autoboot i264b or a pushed boot-record). The .mgt-to-record ordering (D3, track-major vs side-major) is SOLVED (i294/i315) - do NOT re-list as open. Possibly-remaining: D1 (in-context HRECORD rst-8 crash) only if it recurs on the sd_push path.
-  status: OPEN
+  status: IN_PROGRESS
   depends_on: [i289, i293, i295]
   kind: leaf
   owner: agent
