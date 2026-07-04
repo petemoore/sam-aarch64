@@ -95,7 +95,7 @@ func TestListReadRealCMD17V1ByteAddr(t *testing.T) {
 // it landed in BD_LIST_BUF.
 func readListSector(t *testing.T, mac *z80h.Machine, n uint8) []byte {
 	t.Helper()
-	mac.Write(symAddr(t, mac, "BD_LIST_SECTOR"), []byte{n})
+	mac.Write(symAddr(t, mac, "BD_LIST_SECTOR"), []byte{n, 0}) // 16-bit LE seam (i326)
 	if _, err := mac.Call("bdos_read_list_sector"); err != nil {
 		t.Fatalf("call bdos_read_list_sector(%d): %v", n, err)
 	}
