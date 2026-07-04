@@ -489,9 +489,11 @@
   title: "Brick 1: .set table + .if/.else/.endif frame stack"
   description: |
     Port preprocess.go evalIfCondition, tryParseSet, parseIntLiteral, isBareIdent, stripTrailingComment, and the processLines conditional-assembly frame stack, plus plain pass-through and the leading '# <line> "<file>"' directive (processFile). Standalone src/asmprep.asm (PREP_STANDALONE org &8000), make asmprep-z80 target wired into netboot-z80-artifacts. Oracle: tools/netboot-oracle/z80/asmprep_test.go drives prep_run under the koron-go/z80 harness and byte-compares output against frontend.Preprocess on .set/.if-only fixtures (the preprocess_test.go .if/.set cases + hand cases). No macros/includes yet.
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 876, role: completing}
   parent: i31b
 
 - id: i31b-b2
