@@ -125,7 +125,14 @@ http_add16_to_sndnxt:
 ;   HTTP_BODY_OFF the body offset within CONN_DATA (past the \r\n\r\n)
 ;   HTTP_COMPLETE 1 if the \r\n\r\n header terminator was found, else 0
 ; Mirrors http.ParseResponse step for step.  Clobbers A, BC, DE, HL.
+;
+; Legacy (non-streaming) parser: it reads the whole-body CONN_DATA buffer, so it
+; is built only where that buffer is — the host-test/default builds. The
+; NETBOOT_STREAM bootable skips headers inline via body_sink_write and never
+; accumulates CONN_DATA, so this parser and its private http_mul10_add helper are
+; excluded there (i360, together with the CONN_DATA buffer they depend on).
 ; ---------------------------------------------------------------------------
+                if defined(NETBOOT_STREAM)==0
 http_parse_response:
                 xor     a
                 ld      (HTTP_OK), a
@@ -241,6 +248,7 @@ hma_nocarry:
                 pop     bc
                 pop     hl
                 ret
+                endif                           ; NETBOOT_STREAM==0 (legacy parser)
 
 ; ===========================================================================
 ; Request literals + the configured target.  The harness reads HTTP_PATH /
