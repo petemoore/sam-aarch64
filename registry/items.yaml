@@ -4500,9 +4500,11 @@
   title: Eliminate the remaining carve-outs in netboot_serve.asm (11 sites / 1 file — the hard core)
   description: |
     The last carve-out file after smoke_test.asm (b4a), csd_probe.asm (b4c), netboot_server.asm (b4d), netboot_dumper.asm (b4e), bdos_seam.asm (b4g), http_main.asm (b4i), with netboot_client.asm split out as [[i231b-b4h]] (blocked on a STAGING/high-address resolution). Live ledger 11 sites / 1 file: netboot_serve.asm — the (HOSTTEST==0)*(DUMPER==0) COMBINED gates (the serve loop's real-hardware body: EEPROM read, ENC init, the B-DOS record-serve + WRQ-store path via bdos_seam RST 8 hooks). This is the hard core: the gates are ANDed with NETBOOT_DUMPER==0 (the dumper shares the source), so collapsing needs untangling the serve-vs-dumper build split, and the serve WRQ-store path touches the B-DOS record hooks + the SD write path (watch [[i313]] high-address + the sensitive SD-write area, memory feedback_trinity_sd_write_settled_truths). Investigate the serve/dumper build variants + the combined-gate structure before collapsing. Nesting maxed at i231b-b4X: track completion as a NEW sibling leaf under i231b-b4.
-  status: OPEN
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 854, role: completing}
   parent: i231b-b4
 
 - id: i231b-b4c
