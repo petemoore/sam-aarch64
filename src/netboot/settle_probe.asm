@@ -100,7 +100,13 @@ sp_have_status:
                 ld      hl, (settle_delay_count)
                 ld      (sp_detail), hl
 
-                ; Report over the network (SATR) + border, then terminate.
+                ; Report over the network (SATR) + border, then terminate. test_report
+                ; transmits the SATR over the ENC, which shares the &DC bus the &38
+                ; above left the SD-init holding BUSY. drv_write's &DC busy-polls are
+                ; now BOUNDED (encdrv.asm, i291b), so if the SD-init busy outlasts the
+                ; poll budget the transmit yields (a bounded timeout) rather than
+                ; spinning forever — the probe always RETURNS to trinload (the hardware
+                ; hang was the unbounded spin: no SATR egressed, trinload never resumed).
                 ld      de, TEST_ID_SETTLE
                 ld      a, (sp_status)
                 ld      b, SP_DETAIL_LEN

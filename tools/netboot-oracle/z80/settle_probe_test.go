@@ -149,3 +149,40 @@ func TestSettleProbeReportsSettleBoundary(t *testing.T) {
 		}
 	}
 }
+
+// TestSDInitHoldsDCBusyAfterInit pins the fidelity behaviour behind the i291b hang:
+// OUT (&DC),&38 (SD-init) holds the &DC bit-3 BUSY flag SET for the SD-init duration,
+// and — unlike the one-SPI-byte BUSY window — a status IN does NOT clear it (only the
+// passage of time does, as the SD-init completes). Authority: B-DOS 1.5t busy-polls
+// &67CC immediately after its &38 until bit 3 clears (never releasing it with a status
+// read). The emulator previously cleared bit 3 in one byte-time, hiding the shared-bus
+// contention that hangs an un-bounded ENC transmit issued after a &38 (the settle_probe
+// hang). Drives the model directly (no Z80).
+func TestSDInitHoldsDCBusyAfterInit(t *testing.T) {
+	enc := z80h.NewENC28J60()
+	enc.AttachSD(z80h.CSDForV2(0x001D59))
+	const t0 = 1000
+	enc.SetTState(t0)
+	enc.Out(0xDC, 0x38) // SD init: arms the &DC bit-3 BUSY hold
+	// Past the one-SPI-byte window (16 T) but within the SD-init hold: bit 3 stays SET
+	// across repeated status reads — a status IN must NOT release the SD-init busy.
+	for _, dt := range []uint64{100, 1000, 5000, 11000} {
+		enc.SetTState(t0 + dt)
+		if s := enc.In(0xDC); s&0x08 == 0 {
+			t.Fatalf("IN &DC at +%d T after &38: bit 3 (BUSY) clear, want SET — the SD-init hold is not modelled, or a status IN cleared it (the fidelity gap the settle_probe hang exploited)", dt)
+		}
+	}
+	// Past the hold, bit 3 clears: the SD-init completed; real silicon settles in real
+	// time and never latches BUSY forever (a full boot's &38 precedes its next &DC poll
+	// by ~192k instructions, i288).
+	enc.SetTState(t0 + 20000)
+	if s := enc.In(0xDC); s&0x08 != 0 {
+		t.Fatalf("IN &DC well past the SD-init hold still reads BUSY — the hold never clears (it would latch forever, the i289-class artifact)")
+	}
+}
+
+// The load-bearing gates for the i291b hang fix — that drv_write's &DC busy-polls
+// (wr_buf_lp, rd_buf_lp) and its TX-complete poll (wait_sent) can no longer spin
+// forever — live next to their i280b sibling (TestWaitReadyBoundedOnStuckBusy) in
+// enc28j60_test.go, driving each routine directly. This file keeps the whole-probe
+// settle-boundary + fidelity checks.

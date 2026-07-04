@@ -49,6 +49,7 @@ tx_flags:      DEFB &00            ; use &03 to append CRC
 ; RETURNS instead of spinning forever, so a stuck bus can no longer wedge the SAM — the
 ; ENC analogue of the i241 sdc_wait_ready bound (sd_csd.asm).
 enc_timed_out: DEFB &00
+ws_budget:     DEFW &0000          ; wait_sent (TX-complete) poll budget, in RAM so HL keeps the retry count (i291b)
 ENC_BUSY_LIMIT: EQU &FFFF          ; busy-poll budget (~65535, well over any healthy &DC busy period)
 
 
@@ -246,13 +247,36 @@ tx_retry:
                LD   A,2
                OUT  (&FE),A        ; red border during tx
 
+               ; Wait for transmit-complete (TXIF/TXERIF), now BOUNDED (i291b) like
+               ; wait_ready (i280b): on a wedged controller or a link that never comes
+               ; up, TXIF never sets and an unbounded spin here hangs forever. Budget in
+               ; ws_budget (RAM), so HL keeps the retry count. On exhaustion: flag it and
+               ; proceed (the TX did not confirm; the caller/retry logic carries on)
+               ; rather than hang — trinload always regains control.
+               ; wait_sent labels the whole unit (budget init + poll) so it is a
+               ; self-contained entry: HL is preserved (the retry count on the
+               ; drv_write fall-through; harmless when called directly).
+wait_sent:     PUSH HL             ; preserve the retry count
+               LD   HL,ENC_BUSY_LIMIT
+               LD   (ws_budget),HL
+               POP  HL
                LD   D,&1C          ; EIR
-wait_sent:     CALL rd_ctl_reg     ; read interrupt status
+ws_poll:       CALL rd_ctl_reg     ; read interrupt status
                LD   A,E
                AND  &0A            ; TXIF+TXERIF
-               JR   Z,wait_sent    ; loop if still sending
+               JR   NZ,ws_sent     ; sent (or TX error) -> proceed
+               PUSH HL
+               LD   HL,(ws_budget)
+               DEC  HL
+               LD   (ws_budget),HL
+               LD   A,H
+               OR   L
+               POP  HL
+               JR   NZ,ws_poll     ; keep waiting within budget
+               LD   A,1
+               LD   (enc_timed_out),A ; TX never confirmed (link down / wedge) -> bail
 
-               XOR  A
+ws_sent:       XOR  A
                OUT  (&FE),A        ; black border after tx
 
                LD   DE,&1F08       ; ECON1, TXRTS bit
@@ -399,11 +423,23 @@ rd_buf_mem:    CALL eon
                LD   A,4
                OUT  (&FE),A        ; green border during rx
 
-rd_buf_lp:     IN   A,(&DC)
+               ; Per-byte &DC busy-poll, now BOUNDED (i291b) like wr_buf_lp/wait_ready:
+               ; E is the dead "dummy 0" here, so it carries a per-byte poll budget. A
+               ; wedged controller (bit 3 stuck) no longer spins this forever — the probe
+               ; reads TX status through here after a transmit, so an unbounded spin here
+               ; was part of the settle_probe hang. On exhaustion: flag it and stop the
+               ; read (trinload regains control) rather than hang.
+rd_buf_lp:     LD   E,255          ; per-byte busy-poll budget
+rd_buf_poll:   IN   A,(&DC)
                AND  %00001000      ; busy?
-               JR   NZ,rd_buf_lp   ; if so, wait
+               JR   Z,rd_buf_go    ; clear -> read the byte
+               DEC  E
+               JR   NZ,rd_buf_poll ; keep polling within budget
+               LD   A,1
+               LD   (enc_timed_out),A ; wedged/over-long BUSY -> stop the read (no hang)
+               JR   eoff
 
-               OUT  (&FE),A        ; black border after rx
+rd_buf_go:     OUT  (&FE),A        ; black border after rx
 
                INI                 ; read buffer byte
                JR   NZ,rd_buf_lp
@@ -423,11 +459,26 @@ wr_buf_mem:    CALL eon
                LD   B,E            ; Count LSB
                INC  D              ; Count MSB+1
 
-wr_buf_lp:     IN   A,(&DC)
+               ; Per-byte &DC busy-poll, now BOUNDED (i291b) like wait_ready (i280b): E
+               ; is free here (dead after LD B,E above), so it carries a per-byte poll
+               ; budget. A healthy bus clears bit 3 in a poll or two; the bound only
+               ; bites when the shared controller is wedged or an SD-init the caller
+               ; armed (OUT &DC,&38) still holds BUSY past drv_write's leading wait_ready
+               ; — the settle_probe hang, where an unbounded spin here meant no frame
+               ; egressed and trinload never resumed. On exhaustion: flag it and abort
+               ; the transmit cleanly (a truncated frame beats a hard hang; trinload
+               ; regains control) rather than spin forever.
+wr_buf_lp:     LD   E,255          ; per-byte busy-poll budget
+wr_buf_poll:   IN   A,(&DC)
                AND  %00001000      ; busy?
-               JR   NZ,wr_buf_lp   ; if so, loop
+               JR   Z,wr_buf_wr    ; clear -> write the byte
+               DEC  E
+               JR   NZ,wr_buf_poll ; keep polling within budget
+               LD   A,1
+               LD   (enc_timed_out),A ; wedged/over-long BUSY -> abort the TX (no hang)
+               JR   eoff
 
-               OUTI                ; write buffer byte
+wr_buf_wr:     OUTI                ; write buffer byte
                JR   NZ,wr_buf_lp
                DEC  D              ; next block of 256
                JR   NZ,wr_buf_lp
