@@ -6185,7 +6185,7 @@
   title: "http store: claim each stored record so multi-file fetch advances (no re-pick)"
   description: |
     Residual 2 of i360. http_main omits bdos_claim_record (NETBOOT_WANT_CLAIM, the record-LIST name write), so a second file's store_begin/bdos_find_free_record RE-PICKS the same record (find_free tests the list-entry blank; store_format_record sets only the +232 dir stamp), overwriting file 1. Call bdos_claim_record after each file's store so find_free advances. Base single-record-file claim is standalone (host-verifiable); a multi-record file must claim EVERY record it spans, reconciled with i70c's record-spanning design. bd_list_write_hw shares bd_cmd24_write_core with the already-pulled write path (~25B) + the bdos_seam claim machinery (~200B); the i360a CONN_DATA trim leaves ~3.7KB headroom. depends_on i70b (needs the store path hardware-proven).
-  status: OPEN
+  status: IN_PROGRESS
   depends_on: [i70b]
   kind: leaf
   owner: agent
