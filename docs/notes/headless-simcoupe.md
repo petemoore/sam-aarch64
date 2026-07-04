@@ -254,6 +254,48 @@ tested (Apple clang on arm64, gcc-13 on Linux amd64+arm64, GHA
 `a65a16e`, his re-implementation of our closed PR
 `simonowen/simcoupe#109`).
 
+## Native Linux (Pi host, no Docker)
+
+On the Raspberry Pi dev host there is no Docker; SimCoupé runs natively
+headless. The local inner-loop **works** — the round-trip oracle
+(`make ci-core` / `tools/run-roundtrip.sh <corpus> <fixture.s>`) boots a
+disk, assembles, extracts `OUT`, and byte-compares against GNU. Two host
+prerequisites:
+
+```bash
+# 1. Launch env (labwc/Xwayland compositor on this host; grim for screenshots).
+export DISPLAY=:0 SDL_VIDEODRIVER=x11 SDL_AUDIODRIVER=dummy
+#    (SDL_VIDEODRIVER=dummy does NOT work — it fails to create a renderer;
+#     x11 rendering into the Xwayland window is what boots.)
+
+# 2. samfile on PATH (the round-trip's OUT-extraction step shells out to it).
+( cd ~/git/samfile && go build -o ~/bin/samfile ./cmd/samfile )   # ~/bin on PATH
+```
+
+Then a full local round-trip passes in a couple of seconds:
+
+```bash
+tools/run-roundtrip.sh core tests/core/sources/inst_nop_ret.s
+# => PASS: inst_nop_ret (8 bytes)
+```
+
+The stock `/usr/local/bin/simcoupe` on this host (a v1.3.x main-branch
+build) is fine — **the SimCoupé version is not load-bearing for disk-boot.**
+Both v1.3.x and the CI-pinned v1.2.16 boot IN-bearing disks identically.
+
+**Gotcha — do NOT boot `make disk`'s `build/test.mgt` directly.** It is
+built with build-disk's three-positional "legacy" form, which deposits
+**no `IN` file** (by design — it mirrors the record vessel, see
+`tools/netboot-oracle/z80/assembler_record_vessel_test.go`). The boot
+ladder's self-tests run, but the assembler then HLOADs `IN`, finds
+nothing, and the SAM screen shows **`107 File not found, 30:1`** — which
+looks like a broken boot but is just a disk with no input. Every
+CI-gated path builds its disk *with* an `IN` .tbn (the fourth
+build-disk positional), so use the round-trip driver, not a bare
+`make disk` + boot. (This was the i352 red herring: the 107 was
+mis-attributed to the local SimCoupé version; the actual cause is the
+missing `IN`, and the round-trip inner-loop works.)
+
 ## Related files
 
 - `tools/Dockerfile.dev` — image recipe (single source of truth for CI
