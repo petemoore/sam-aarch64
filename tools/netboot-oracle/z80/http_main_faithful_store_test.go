@@ -38,10 +38,12 @@
 // Seeding the record's dir sector blank (a real free record) makes storage_sink_leaf
 // reach bdos_select_record (HRECORD) and never return — the exact wild-jump the
 // hardware shots showed. The i355 source-page fix was downstream of this HRECORD
-// wedge, so it could not clear it (necessary-but-insufficient). The FIX — writing
-// into a free record (pre-format the record's MGT dir, or port sd_push's raw CMD24
-// record-write) — is tracked as i357 (its red acceptance test is the free-record
-// store leaf persisting), which i70b now depends on.
+// wedge, so it could not clear it (necessary-but-insufficient). The FIX (i357,
+// IMPLEMENTED) is store_format_record (http_main.asm, NETBOOT_WANT_RECORD_WRITE): it
+// reproduces B-DOS FORMAT's directory-level effect — blank tracks 0-3 + stamp "BDOS"
+// at +232 of the record's first sector, via the hardware-proven raw CMD24 record write
+// — before the HRECORD/HSAVE hooks, so HRECORD accepts the record. Its acceptance gate
+// is TestHTTPMainFaithfulStoreLeafFreeRecord (below), which i70b depends on.
 //
 // GATED on the proprietary captures; skips under SKIP_PRIVATE_TESTS (the one
 // sanctioned skip, i253). Emulation-verified is not hardware-verified (CLAUDE.md §5).
@@ -144,19 +146,17 @@ func TestHTTPMainFaithfulComeUp(t *testing.T) {
 }
 
 // TestHTTPMainFaithfulStoreLeafValidRecord drives the store leaf's real RST-8 store
-// into a VALID (MGT-formatted, "BDOS"-stamped) record — bootToEditorIdleSDENC seeds
-// record 1's dir sector with the stamp — and asserts it completes cleanly and
-// commits CMD24 writes. This proves the store LEAF is correct against real B-DOS
-// 1.5t (the i355 source page from HMPR, the section-C offset, the UIFA, HRECORD,
-// HSAVE) when the target record is valid.
+// into an already-VALID (MGT-formatted, "BDOS"-stamped) record — bootToEditorIdleSDENC
+// seeds record 1's dir sector with the stamp — and asserts it completes cleanly and
+// commits CMD24 writes. This proves the store LEAF is correct against real B-DOS 1.5t
+// (the i355 source page from HMPR, the section-C offset, the UIFA, HRECORD, HSAVE) and
+// that the i357 pre-format (store_format_record) is IDEMPOTENT over an already-stamped
+// record: it re-blanks the directory region + re-stamps, then HSAVE persists the body.
 //
-// IMPORTANT: this is NOT http_main's runtime path. At runtime the leaf targets the
-// first FREE record (store_begin), which has no "BDOS" stamp, so HRECORD longjmps
-// and the leaf wedges — the i70b hardware wedge (see the file header ROOT CAUSE).
-// That free-record path is the red acceptance test for the fix, tracked as i357;
-// it is deliberately NOT asserted here (a red test lives on the fix branch until it
-// passes — CLAUDE.md §5), so `main` keeps an honest, passing gate that isolates
-// "the leaf works given a valid record" from "the leaf's runtime context is wrong".
+// The genuinely-free (unstamped) record — http_main's real runtime scenario, which
+// wedged in the i70b shots — is asserted by TestHTTPMainFaithfulStoreLeafFreeRecord
+// below (the i357 acceptance gate). This test keeps the "valid record" case as a
+// distinct regression: the leaf works whether or not the record was pre-stamped.
 func TestHTTPMainFaithfulStoreLeafValidRecord(t *testing.T) {
 	mac, sym, sd := comeUpHTTPFaithful(t)
 
@@ -190,5 +190,95 @@ func TestHTTPMainFaithfulStoreLeafValidRecord(t *testing.T) {
 	if wrote == 0 {
 		t.Fatalf("store leaf returned but committed no CMD24 write to the SD model — the HSAVE " +
 			"did not persist the record")
+	}
+}
+
+// TestHTTPMainFaithfulStoreLeafFreeRecord is the i357 acceptance gate: it drives the
+// store leaf's real RST-8 store into a genuinely FREE (unformatted, NO "BDOS" stamp)
+// record — http_main's ACTUAL runtime scenario — and asserts the leaf now completes
+// cleanly and persists the file. This is the free-record path that wedged in the i70b
+// hardware shots and in the i356 diagnosis (HRECORD longjmps "Invalid record" on a
+// record lacking the +232 stamp, so the leaf never returns).
+//
+// The fix (store_format_record, http_main.asm, NETBOOT_WANT_RECORD_WRITE): before the
+// HRECORD/HSAVE hooks, reproduce B-DOS FORMAT's directory-level effect via raw CMD24 —
+// blank the directory region (tracks 0-3 = linearSec 0..39) and stamp "BDOS" at +232 of
+// sector 0 — so HRECORD then accepts the record and HSAVE persists the body. Without the
+// fix this test wedges (the leaf never returns); with it, it returns cleanly and the
+// stamp + body land in the record's own band.
+//
+// bootToEditorIdleSDENC seeds record 1's dir sector WITH the stamp (a valid record); this
+// test BLANKS it (SeedSector with a zero sector) so record 1 is genuinely free — exactly
+// what bdos_find_free_record picks at runtime (its list entry is blank) and exactly what
+// real B-DOS HRECORD rejects until we format it.
+func TestHTTPMainFaithfulStoreLeafFreeRecord(t *testing.T) {
+	mac, sym, sd := comeUpHTTPFaithful(t)
+
+	// The come-up's store_begin picked FW_BASE_RECORD (record 1 here). Blank THAT
+	// record's first dir sector so it is a genuinely free/unformatted record (no
+	// "BDOS" +232 stamp) — the runtime scenario the i70b shots wedged on.
+	fw := mac.Read(sym("FW_BASE_RECORD"), 2)
+	freeRec := int(fw[0]) | int(fw[1])<<8
+	if freeRec != 1 {
+		t.Fatalf("FW_BASE_RECORD=%d, expected 1 (record 1 is the first free record on this card model)", freeRec)
+	}
+	const csdBase = 152 // csdV2(0x001D59) base — record 1's first dir sector LBA
+	sd.SeedSector(csdBase, make([]byte, 512))
+	if pre, ok := sd.CapturedSector(csdBase); ok && string(pre[232:236]) == "BDOS" {
+		t.Fatalf("record 1 dir sector still carries the BDOS stamp after blanking — test setup wrong")
+	}
+
+	// Same 1594 B body / one FW_RECORD_CAP window as the valid-record test.
+	body := make([]byte, 1594)
+	for i := range body {
+		body[i] = byte(i*7 + 3)
+	}
+	resp := httpRespFor(body)
+	mac.Write(sym("CONN_FLUSH_BUF"), resp)
+
+	before := len(sd.WrittenSectors())
+	res, err := mac.ContinueFrom(sym("storage_sink_flush"), z80h.Entry{
+		HL: uint16(len(resp)), StepCap: 60_000_000, FrameIntPeriod: 60000,
+	})
+	if err != nil {
+		t.Fatalf("store-leaf drive faulted: %v (PC=&%04X, steps=%d)", err, res.PC, res.Steps)
+	}
+	wrote := len(sd.WrittenSectors()) - before
+	t.Logf("store leaf (FREE record): returned=%v PC=&%04X steps=%d CMD24writes=%d",
+		res.Halted, res.PC, res.Steps, wrote)
+
+	// (1) The leaf must RETURN cleanly. Without the pre-format, HRECORD longjmps on the
+	// unstamped record and the leaf wild-jumps — never halting (the i70b wedge).
+	if !res.Halted {
+		t.Fatalf("store leaf did NOT return on a FREE record (PC=&%04X after %d steps) — the "+
+			"pre-format did not make HRECORD accept the record; this is the i70b store-leg wedge",
+			res.PC, res.Steps)
+	}
+
+	// (2) The pre-format stamped the record's first dir sector: record 1 sector 0
+	// (LBA 152) must now carry "BDOS" at +232 (a CMD24 write, not the blanked seed).
+	dir0, ok := sd.RecordDataSector(csdBase, freeRec, 0)
+	if !ok {
+		t.Fatalf("record %d sector 0 (LBA %d) absent after the flush — store_format_record did not write it", freeRec, csdBase)
+	}
+	if string(dir0[232:236]) != "BDOS" {
+		t.Fatalf("record %d sector 0 lacks the BDOS +232 stamp after the flush (got %q) — the pre-format did not run",
+			freeRec, dir0[232:236])
+	}
+
+	// (3) The body was persisted BEYOND the 40-sector directory region: the HSAVE store
+	// wrote the file into record 1's data area (track 4+), so more than the 40 format
+	// sectors were committed.
+	if wrote <= 40 {
+		t.Fatalf("only %d CMD24 writes — expected the 40-sector directory pre-format PLUS the HSAVE "+
+			"body writes; the file was not persisted after the format", wrote)
+	}
+
+	// (4) DATA SAFETY (the Trinity SD card is a shared user resource): every committed
+	// write fell inside record 1's own band — the pre-format's raw CMD24s never stray to
+	// the record list, sector 0, or a neighbouring record (bd_record_write_hw's i295 guard).
+	if outside := sd.WrittenSectorsOutsideRecord(csdBase, freeRec); len(outside) != 0 {
+		t.Fatalf("DATA-SAFETY VIOLATION: %d CMD24 write(s) landed outside record %d's range: %v",
+			len(outside), freeRec, outside)
 	}
 }
