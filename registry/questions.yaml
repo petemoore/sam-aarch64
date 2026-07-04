@@ -56,11 +56,6 @@
     Branch-protection required-checks list has drifted from ci.yml: netboot-z80, registry-sync, and registry-tests run in CI but are NOT in the required list (found 2026-07-03 while adding the new enc-tests job, which IS now required alongside its core/paged siblings). CLAUDE.md documents the protection as requiring 'the CI status checks defined in ci.yml'. Deliberate (e.g. jobs considered advisory) or drift to fix? If drift: add the three to the required list.
   owner: pete
 
-- id: q70
-  body: |
-    Approve the on-SAM preprocessor design spec (docs/specs/on-sam-preprocessor-design.md) — the i31 spec gate (CLAUDE.md discipline 1). Direction was already approved (q38 GO, 2026-06-21); this approves the concrete design: scope = the closed host-preprocessor subset (.include, .macro/.endm + \param, bare-symbol .if/.else/.endif, .set, # line emission); position = text->text pass in front of the b8d chain writing into the LEX_SRC window (over-cap = explicit error; ceiling lift tracked separately); buffers from the i2 page pool (new PP_PREP tag); own paged image per the b8d two-image pattern (~2-3.5 KB); Go-authority-first bricks porting preprocess.go, oracle-gated byte-equal vs host -E plus end-to-end text->.tbn vs CompactTBNBytes (the existing corpus is already-preprocessed, so new preprocessor-bearing fixtures incl. a spectrum4 slice). Implementation (i31b) is dep-gated on this question.
-  owner: pete
-
 - id: q72
   body: |
     i88c (TLS 6b) hardware-path design — no Go authority settles either half. (a) Paged buffer layout for full-size (up to 16645 B = TLS max) records: measured, the tls_client composite is already &8000-&F7A5 (30629 B) with TC_RX=1056; growing TC_RX to 16645 alone overruns &FFFF, and REASM_BUF (16645) is a further +16645, so both cannot coexist in a flat build — a paged arrangement is required. Which pages hold REASM_BUF vs TC_RX vs the crypto code? (b) Hardware-leg definition: is the i88c RST-8 shot a live-internet TLS-1.3 handshake against a real CDN (needs a post-handshake app-data GET/response/decrypt/store driver that does NOT yet exist beyond i88a's handshake-only 6a scope), or a captured-flight replay proving the wiring on silicon? What does the shot fetch/store (if it stores via HSAVE it additionally depends on i357's free-record fix)?

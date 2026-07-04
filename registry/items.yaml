@@ -479,9 +479,8 @@
 - id: i31b
   title: On-SAM preprocessor — implementation (Z80 port of preprocess.go per the approved spec)
   description: |
-    Implement the on-SAM preprocessor per docs/specs/on-sam-preprocessor-design.md once q70 approves it: Go-authority-first bricks (1: .set table + .if/.else/.endif stack; 2: .macro/.endm + \param substitution + invocation with recursion guard; 3: .include + # line emission via a pluggable reader vector, real reader = UIFA+HGTHD+trampoline-HLOAD; 4: prep_run wired in front of b8d_chain_paged + corpus gate). Oracle gates: byte-equal vs host sam-aarch64 -E on ported preprocess_test.go fixtures + new preprocessor-bearing corpus fixtures (spectrum4 slice), then end-to-end text->.tbn vs CompactTBNBytes. Buffers from the i2 pool (new PP_PREP tag); own paged image (b8d two-image pattern). The expanded-text LEX_SRC ceiling lift is explicitly NOT this item (spec par.3).
+    Implement the on-SAM preprocessor per docs/specs/on-sam-preprocessor-design.md (spec APPROVED by Pete 2026-07-04, q70 closed): Go-authority-first bricks (1: .set table + .if/.else/.endif stack; 2: .macro/.endm + \param substitution + invocation with recursion guard; 3: .include + # line emission via a pluggable reader vector, real reader = UIFA+HGTHD+trampoline-HLOAD; 4: prep_run wired in front of b8d_chain_paged + corpus gate). Oracle gates: byte-equal vs host sam-aarch64 -E on ported preprocess_test.go fixtures + new preprocessor-bearing corpus fixtures (spectrum4 slice), then end-to-end text->.tbn vs CompactTBNBytes. Buffers from the i2 pool (new PP_PREP tag); own paged image (b8d two-image pattern). The expanded-text LEX_SRC ceiling lift is explicitly NOT this item (spec par.3).
   status: OPEN
-  depends_on: [q70]
   kind: leaf
   owner: agent
   parent: i31
