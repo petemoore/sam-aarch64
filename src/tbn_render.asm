@@ -10,11 +10,11 @@
 ; on-disk overlay `.tbn` the only record kinds are INSN_RUN (0x09), LIT_DATA
 ; (0x08) and DIRECTIVE (0x04); INST/COMMENT/LABEL_DEF never appear on disk.
 ;
-; The INSN_RUN mode-0 (bare literal words) arm is wired, together with the
-; editor-region name table + `.global` flags (tbn_render_editor.asm) and the
-; header-table label/local flush placed by PC.  DIRECTIVE / LIT_DATA / the
-; comment sidecar / mode-1 patch overlays are later slices — an unexpected
-; record kind falls through to `fail`.
+; The INSN_RUN mode-0 (bare literal words) and LIT_DATA (constant data
+; directive) arms are wired, together with the editor-region name table +
+; `.global` flags (tbn_render_editor.asm) and the header-table label/local
+; flush placed by PC.  DIRECTIVE / the comment sidecar / mode-1 patch overlays
+; are later slices — an unexpected record kind falls through to `fail`.
 ;
 ; Output: canonical GNU-as text is appended byte-by-byte to render_out; its
 ; length lands in render_out_len (both section-C, HMPR-stable — the driver's
@@ -74,10 +74,16 @@ render_walk:
                 call    reader_next_kind        ; A = kind, HL = payload, BC = len
                 cp      REC_KIND_INSN_RUN
                 jr      z, render_walk_insn_run
-                jp      fail                     ; slice 1: only INSN_RUN is wired
+                cp      REC_KIND_LIT_DATA
+                jr      z, render_walk_lit_data
+                jp      fail                     ; DIRECTIVE / other kinds: later slices
 
 render_walk_insn_run:
                 call    render_insn_run
+                jr      render_walk
+
+render_walk_lit_data:
+                call    render_lit_data
                 jr      render_walk
 
 
@@ -482,6 +488,268 @@ render_elo_no_nl:
 
 
 ; -----------------------------------------------------------------------
+; render_lit_data — render a KindLitData record (a run of constant data
+; bytes) as source data directives.  Mirrors the KindLitData case of EmitFile
+; (emit.go:212-217): flush header defs, emit the directive line(s), then
+; advance the PC by the raw data length.
+;
+; Payload: [dir_id u8][raw little-endian data bytes].
+;
+; Input:  HL = payload ptr (STAGING_BUF), BC = payload length (= 1 + nbytes).
+; -----------------------------------------------------------------------
+render_lit_data:
+                ld      (render_ld_src), hl
+                ld      (render_ld_len), bc
+
+; flush any header-table label/local whose offset == the current PC before the
+; data (emit.go:213, flush()).
+                call    render_flush
+
+                call    render_emit_lit_data
+
+; advance the PC by the raw data length: nbytes = payload_len - 1 (emit.go:217).
+                ld      bc, (render_ld_len)
+                dec     bc
+                jp      render_pc_add_bc        ; tail-call
+
+
+; -----------------------------------------------------------------------
+; render_emit_lit_data — port of emitLitData (overlay.go:304).  Resolves the
+; directive name + element width from the record's directive id, then emits
+; the little-endian values as `%#x`, litDataPerLine (16) values per line,
+; wrapping onto fresh "  <name> " continuation lines (overlay.go:317-334).
+;
+; Input:  render_ld_src / render_ld_len (the staged payload).
+; Clobbers: A, BC, DE, HL (loop state is held in memory, not registers).
+; -----------------------------------------------------------------------
+render_emit_lit_data:
+; directive id → name pointer + element width (dataWidth, overlay.go:338).
+                ld      hl, (render_ld_src)
+                ld      a, (hl)                 ; dir_id
+                call    render_ld_dir_lookup    ; HL = name ptr, render_ld_width set
+                jp      z, fail                 ; width 0 → not a numeric data dir
+                ld      (render_ld_nameptr), hl
+
+; data cursor = src + 1; remaining bytes = len - 1; element index = 0.
+                ld      hl, (render_ld_src)
+                inc     hl
+                ld      (render_ld_data), hl
+                ld      hl, (render_ld_len)
+                dec     hl
+                ld      (render_ld_rem_bytes), hl
+                xor     a
+                ld      (render_ld_idx), a
+
+render_eld_loop:
+                ld      hl, (render_ld_rem_bytes)
+                ld      a, h
+                or      l
+                ret     z                       ; nElem elements emitted
+
+; i % litDataPerLine == 0 → open a fresh directive line; else ", " separator.
+                ld      a, (render_ld_idx)
+                and     &0F                     ; litDataPerLine = 16
+                jr      nz, render_eld_sep
+
+                ld      a, (render_prev_stmt)
+                or      a
+                jr      z, render_eld_no_nl
+                ld      a, 10                   ; close the previous line
+                call    render_out_append
+render_eld_no_nl:
+                ld      a, " "
+                call    render_out_append
+                ld      a, " "
+                call    render_out_append
+                ld      hl, (render_ld_nameptr)
+                call    render_copy_cstr        ; the directive name
+                ld      a, " "
+                call    render_out_append
+                ld      a, 1
+                ld      (render_prev_stmt), a   ; prevWasStatement = true
+                jr      render_eld_value
+render_eld_sep:
+                ld      a, ","
+                call    render_out_append
+                ld      a, " "
+                call    render_out_append
+render_eld_value:
+                call    render_emit_hex_value
+
+; advance: data += width, rem -= width, i += 1.
+                ld      a, (render_ld_width)
+                ld      c, a
+                ld      b, 0
+                ld      hl, (render_ld_data)
+                add     hl, bc
+                ld      (render_ld_data), hl
+                ld      hl, (render_ld_rem_bytes)
+                or      a
+                sbc     hl, bc
+                ld      (render_ld_rem_bytes), hl
+                ld      a, (render_ld_idx)
+                inc     a
+                ld      (render_ld_idx), a
+                jr      render_eld_loop
+
+
+; -----------------------------------------------------------------------
+; render_ld_dir_lookup — map a data-directive id to its name string + element
+; width (dataWidth, overlay.go:338).  Only the numeric data directives
+; (.byte/.short/.word/.quad/.hword) appear in a LIT_DATA record.
+;
+; Input:  A = directive id.
+; Output: HL = null-terminated name ptr; render_ld_width = width.
+;         Z=1 (and width 0) if the id is not a numeric data directive.
+; Clobbers: A, BC, DE, HL.
+; -----------------------------------------------------------------------
+render_ld_dir_lookup:
+                ld      b, 5                    ; five numeric data directives
+                ld      hl, render_ld_dir_table
+render_lddl_loop:
+                cp      (hl)
+                jr      z, render_lddl_found
+                inc     hl
+                inc     hl
+                inc     hl
+                inc     hl                      ; next 4-byte {id,width,nameptr}
+                djnz    render_lddl_loop
+                xor     a                       ; Z=1 → unknown directive id
+                ret
+render_lddl_found:
+                inc     hl
+                ld      a, (hl)                 ; width
+                ld      (render_ld_width), a
+                inc     hl
+                ld      e, (hl)
+                inc     hl
+                ld      d, (hl)                 ; DE = name ptr
+                ex      de, hl                  ; HL = name ptr
+                ld      a, (render_ld_width)
+                or      a                       ; width nonzero → Z=0 (found)
+                ret
+
+
+; -----------------------------------------------------------------------
+; render_emit_hex_value — append "0x" then the width-byte little-endian value
+; at render_ld_data as leading-zero-suppressed lower-case hex, mirroring Go's
+; `fmt.Fprintf(out, "%#x", v)` (overlay.go:333).  A zero value renders "0x0".
+;
+; Input:  render_ld_data = data ptr; render_ld_width = element width (1/2/4/8).
+; Clobbers: A, BC, DE, HL.
+; -----------------------------------------------------------------------
+render_emit_hex_value:
+                ld      a, "0"
+                call    render_out_append
+                ld      a, "x"
+                call    render_out_append
+                xor     a
+                ld      (render_ld_seen), a     ; no significant digit emitted yet
+
+; HL = &MSB = data + width - 1; walk down to the LSB.
+                ld      a, (render_ld_width)
+                ld      b, a                    ; B = byte count
+                ld      e, a
+                ld      d, 0
+                ld      hl, (render_ld_data)
+                add     hl, de
+                dec     hl
+render_ehv_loop:
+                ld      c, (hl)                 ; C = current byte (kept over emits)
+                push    hl
+                ld      a, c
+                rrca
+                rrca
+                rrca
+                rrca
+                and     &0F
+                call    render_emit_nibble      ; high nibble (preserves BC)
+                ld      a, c
+                and     &0F
+                call    render_emit_nibble      ; low nibble
+                pop     hl
+                dec     hl
+                djnz    render_ehv_loop
+
+; A value of exactly zero suppressed every nibble; emit a single "0".
+                ld      a, (render_ld_seen)
+                or      a
+                ret     nz
+                ld      a, "0"
+                jp      render_out_append
+
+
+; -----------------------------------------------------------------------
+; render_emit_nibble — append one hex nibble with leading-zero suppression.
+; A leading zero (render_ld_seen still 0) is skipped; a zero after a
+; significant digit renders "0".  Preserves BC (the caller's byte/counter).
+;
+; Input:  A = nibble (0..15).  Clobbers: A, DE, HL, F.
+; -----------------------------------------------------------------------
+render_emit_nibble:
+                or      a
+                jr      nz, render_ren_emit
+                ld      a, (render_ld_seen)
+                or      a
+                ret     z                       ; leading zero → skip
+                xor     a                       ; zero after a digit → emit "0"
+render_ren_emit:
+                push    af
+                ld      a, 1
+                ld      (render_ld_seen), a
+                pop     af
+                cp      10
+                jr      c, render_ren_digit
+                add     a, "a" - 10
+                jp      render_out_append
+render_ren_digit:
+                add     a, "0"
+                jp      render_out_append
+
+
+; -----------------------------------------------------------------------
+; render_pc_add_bc — render_pc += BC (32-bit LE PC, 16-bit addend).  Used to
+; advance the PC over a LIT_DATA record's raw bytes (emit.go:217).
+; Clobbers: A?, BC, HL.
+; -----------------------------------------------------------------------
+render_pc_add_bc:
+                ld      hl, (render_pc)
+                add     hl, bc
+                ld      (render_pc), hl
+                ret     nc
+                ld      hl, (render_pc + 2)
+                inc     hl
+                ld      (render_pc + 2), hl
+                ret
+
+
+; render_ld_dir_table — {id u8, width u8, name ptr u16} for each numeric data
+; directive (overlay.go:338 dataWidth; ids from tbn_constants.inc / DIR_*).
+render_ld_dir_table:
+                defb    DIR_BYTE, 1
+                defw    render_str_byte
+                defb    DIR_SHORT, 2
+                defw    render_str_short
+                defb    DIR_WORD, 4
+                defw    render_str_word
+                defb    DIR_QUAD, 8
+                defw    render_str_quad
+                defb    DIR_HWORD, 2
+                defw    render_str_hword
+
+render_str_byte:        defm    ".byte"
+                        defb    0
+render_str_short:       defm    ".short"
+                        defb    0
+render_str_word:        defm    ".word"
+                        defb    0
+render_str_quad:        defm    ".quad"
+                        defb    0
+render_str_hword:       defm    ".hword"
+                        defb    0
+
+
+; -----------------------------------------------------------------------
 ; Render state + output buffer (section C — read by the driver's harness
 ; after render_run returns).
 ; -----------------------------------------------------------------------
@@ -504,6 +772,15 @@ render_locals:          defs    RENDER_MAX_LOCALS * 5   ; [offset u32][digit u8]
 render_prev_stmt:       defb    0       ; prevWasStatement flag (emit.go)
 render_rir_src:         defw    0       ; INSN_RUN element source cursor
 render_rir_rem:         defw    0       ; INSN_RUN remaining element bytes
+
+render_ld_src:          defw    0       ; LIT_DATA payload ptr ([dir_id][data])
+render_ld_len:          defw    0       ; LIT_DATA payload length (1 + nbytes)
+render_ld_data:         defw    0       ; LIT_DATA data cursor
+render_ld_rem_bytes:    defw    0       ; LIT_DATA data bytes remaining
+render_ld_nameptr:      defw    0       ; directive name string ptr
+render_ld_idx:          defb    0       ; element index (litDataPerLine wrap)
+render_ld_width:        defb    0       ; element width in bytes (1/2/4/8)
+render_ld_seen:         defb    0       ; hex leading-zero suppression flag
 
 render_out_len:         defw    0       ; bytes written to render_out
 render_out:             defs    256     ; rendered source text

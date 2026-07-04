@@ -261,3 +261,62 @@ func TestTbnRenderGlobalLabelRet(t *testing.T) {
 	got := renderTBNOnZ80(t, tbn)
 	assertRenderMatch(t, got, want)
 }
+
+// buildCompactTBN builds a compact `.tbn` from source via the frontend +
+// assembler (the same pipeline compact_ir_b8d_test.go uses), so the fixture
+// carries a realistic editor region + header tables.
+func buildCompactTBN(t *testing.T, src []byte, name string) []byte {
+	t.Helper()
+	f, err := frontend.Translate(src, name)
+	if err != nil {
+		t.Fatalf("frontend.Translate: %v", err)
+	}
+	p1, err := assemble.Pass1(f)
+	if err != nil {
+		t.Fatalf("assemble.Pass1: %v", err)
+	}
+	tbn, err := assemble.CompactTBNBytes(f, p1)
+	if err != nil {
+		t.Fatalf("assemble.CompactTBNBytes: %v", err)
+	}
+	return tbn
+}
+
+// TestTbnRenderMultiInsnLabel is slice 3's parity proof: a multi-instruction
+// mode-0 INSN_RUN carrying operands (mov/add/sub/ret) plus an interior label
+// (`loop:` at PC 8, a header-table label flushed mid-run). It must render
+// byte-identically to render.Emit, exercising operand capture (TAB + operands
+// via the disasm comm buffer), PC advance, and the mid-run label flush.
+func TestTbnRenderMultiInsnLabel(t *testing.T) {
+	src := []byte(".global _start\n_start:\n  mov x0, #1\n  add x0, x0, #2\nloop:\n  sub x0, x0, #1\n  ret\n")
+	tbn := buildCompactTBN(t, src, "s3.s")
+
+	want, err := render.Emit(tbn)
+	if err != nil {
+		t.Fatalf("render.Emit: %v", err)
+	}
+
+	got := renderTBNOnZ80(t, tbn)
+	assertRenderMatch(t, got, want)
+}
+
+// TestTbnRenderLitData is slice 4's parity proof: a source of constant data
+// directives (.byte/.hword/.word/.quad) produces LIT_DATA (0x08) records,
+// which render as the directive name followed by comma-separated
+// leading-zero-suppressed little-endian hex values. It must render
+// byte-identically to render.Emit.
+func TestTbnRenderLitData(t *testing.T) {
+	// Values chosen to exercise every hex-formatter path: 0 (all-zero →
+	// "0x0"), 0xf (single significant nibble), 0xff (both nibbles), the
+	// wider widths, and high-bit-set values (0xdeadbeef, 0x1122334455667788).
+	src := []byte("  .byte 0, 1, 0xf, 0xff\n  .hword 0x1234, 0x5678\n  .word 0xdeadbeef\n  .quad 0x1122334455667788\n")
+	tbn := buildCompactTBN(t, src, "s4.s")
+
+	want, err := render.Emit(tbn)
+	if err != nil {
+		t.Fatalf("render.Emit: %v", err)
+	}
+
+	got := renderTBNOnZ80(t, tbn)
+	assertRenderMatch(t, got, want)
+}
