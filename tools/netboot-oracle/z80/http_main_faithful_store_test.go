@@ -50,8 +50,10 @@
 package z80_test
 
 import (
+	"strings"
 	"testing"
 
+	"github.com/petemoore/sam-aarch64/tools/netboot-oracle/bdos"
 	z80h "github.com/petemoore/sam-aarch64/tools/netboot-oracle/z80"
 )
 
@@ -280,5 +282,23 @@ func TestHTTPMainFaithfulStoreLeafFreeRecord(t *testing.T) {
 	if outside := sd.WrittenSectorsOutsideRecord(csdBase, freeRec); len(outside) != 0 {
 		t.Fatalf("DATA-SAFETY VIOLATION: %d CMD24 write(s) landed outside record %d's range: %v",
 			len(outside), freeRec, outside)
+	}
+
+	// (5) i363 GATE — the record NAME is content-addressed, not hex(filename). The
+	// HSAVE'd file's directory entry (record 1, sector 0, offset OffName) must carry
+	// bdos.SpanRecordName(pinnedHash, 0). The come-up's prov_start(0) copied
+	// LICENCE.broadcom's pinned SHA-256 (c7 28 3f f5 ...) into CONN_PINNED_HASH, so
+	// the name must be "c7283f000". Before the i363 fix the store leaf fed
+	// fw_span_record_name the FILENAME ptr, storing "4c4943000" (hex of "LIC") — the
+	// exact wrong name the i362 hardware read-back found. This assertion FAILS on the
+	// un-fixed code and PASSES with the CONN_PINNED_HASH content-addressing fix.
+	var pinned [32]byte
+	copy(pinned[:], mac.Read(sym("CONN_PINNED_HASH"), 32))
+	wantName := bdos.SpanRecordName(pinned, 0)
+	gotName := strings.TrimRight(string(dir0[bdos.OffName:bdos.OffName+bdos.NameLen]), " ")
+	if gotName != wantName {
+		t.Fatalf("record %d directory-entry name = %q, want %q (bdos.SpanRecordName of the pinned "+
+			"content hash %02x%02x%02x...); the store leaf must content-address record names, not "+
+			"hex-encode the filename (i363)", freeRec, gotName, wantName, pinned[0], pinned[1], pinned[2])
 	}
 }

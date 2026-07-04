@@ -5,7 +5,8 @@
 // TestProvStoreDemarcation drives two files through the composed streaming +
 // bodySink path into the REAL B-DOS store leaf (a BDOSStore is attached). For each
 // file, prov_start(i) opens it (arming the header-skip seam and, via store_begin,
-// remembering the file's name for record naming + resetting the record index), a
+// resetting the record index; record names are content-addressed from the file's
+// pinned SHA-256 in CONN_PINNED_HASH, not the filename), a
 // flush carries the file's HTTP/1.0 response (the header skipped, the body hashed
 // and HSAVE'd as a bounded record), and store_end closes it (finishing the SHA-256
 // verify and setting CONN_HASH_MATCH). It asserts each file's HSAVE'd record (name
@@ -160,12 +161,16 @@ func TestProvStoreDemarcation(t *testing.T) {
 		record int
 	}
 	wants := []want{
-		{spanRecordName(name0, 0), uint32(len(body0)), 1}, // D2: prov_start(0) finds record 1 free
-		{spanRecordName(name1, 0), uint32(len(body1)), 2}, // D2: prov_start(1) finds record 2 free (1 used by HSAVE above)
+		// Names are content-addressed: fw_span_record_name of the file's pinned SHA-256
+		// (CONN_PINNED_HASH), NOT the filename. File 0 pinned the body's own hash (pin0);
+		// file 1 keeps the manifest pin (pin1). D2: prov_start(0) finds record 1 free,
+		// prov_start(1) finds record 2 free (record 1 used by the first HSAVE).
+		{spanRecordName(pin0[:], 0), uint32(len(body0)), 1},
+		{spanRecordName(pin1[:], 0), uint32(len(body1)), 2},
 	}
 	for i, w := range wants {
 		if saves[i].Name != w.name {
-			t.Errorf("record[%d] name = %q, want %q (fw_span_record_name of the manifest name)", i, saves[i].Name, w.name)
+			t.Errorf("record[%d] name = %q, want %q (fw_span_record_name of the pinned content hash)", i, saves[i].Name, w.name)
 		}
 		if saves[i].Size != w.size {
 			t.Errorf("record[%d] size = %d, want %d (the served body length, header stripped)", i, saves[i].Size, w.size)
