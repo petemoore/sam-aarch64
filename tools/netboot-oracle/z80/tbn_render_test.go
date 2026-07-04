@@ -355,6 +355,42 @@ func TestTbnRenderOverlayTargets(t *testing.T) {
 	assertRenderMatch(t, got, want)
 }
 
+// TestTbnRenderOverlayImmMem is slice 6b's parity proof: a source whose
+// immediate/memory operands are symbolic produces INSN_RUN mode-1 (overlay)
+// records across the immediate/memory FoldSlot families present in the release
+// corpus — FoldMemImm12 (ldr/str `[base, #off]`), FoldAddSubImm12 (add #imm),
+// FoldLitpool19 (ldr =expr), FoldMovkImm16 (explicit movz/movk, mnemonic
+// recovered from the base word), FoldPairImm7 (ldp `[base, #off]`) and
+// FoldMovzAuto (`mov Rd, #value` collapsed to movz). Each element decodes its
+// base word via disasm.bin and splices the patch expression into the folded
+// field (bracket-relative insert, zeroed-immediate replace, litpool `=`,
+// mnemonic recovery, or first-operand `mov`). The movz/movk cases also drive
+// the compound-infix printExpr path (the :abs_g*_nc: folds render as
+// parenthesised expressions). It must render byte-identically to render.Emit.
+func TestTbnRenderOverlayImmMem(t *testing.T) {
+	src := []byte(".global _start\n" +
+		"val: .quad 0\n" +
+		"_start:\n" +
+		"  ldr x0, [x1, #:lo12:val]\n" +
+		"  str x2, [x3, #:lo12:val]\n" +
+		"  add x4, x5, #:lo12:val\n" +
+		"  ldr x6, =val\n" +
+		"  movz x7, #:abs_g0_nc:val\n" +
+		"  movk x7, #:abs_g1_nc:val, lsl #16\n" +
+		"  ldp x8, x9, [x10, #:lo12:val]\n" +
+		"  mov x11, val\n" +
+		"  ret\n")
+	tbn := buildCompactTBN(t, src, "s6b.s")
+
+	want, err := render.Emit(tbn)
+	if err != nil {
+		t.Fatalf("render.Emit: %v", err)
+	}
+
+	got := renderTBNOnZ80(t, tbn)
+	assertRenderMatch(t, got, want)
+}
+
 // buildCompactTBN builds a compact `.tbn` from source via the frontend +
 // assembler (the same pipeline compact_ir_b8d_test.go uses), so the fixture
 // carries a realistic editor region + header tables.

@@ -225,13 +225,20 @@ render_decode_literal:
 
 ; FoldSlot ids — wire contract with tools/aarch64enc/overlay.go (mirrors the
 ; FSID_* ids in insn_run.asm:31-44).  Defined here because the standalone
-; render driver does not include insn_run.asm; only the S6a target-text
-; families are named (S6b adds ids 6-13).
+; render driver does not include insn_run.asm.
 FSID_BRANCH26:          equ     1
 FSID_BRANCH19:          equ     2
 FSID_BRANCH14:          equ     3
 FSID_ADR:               equ     4
 FSID_ADRP:              equ     5
+FSID_ADDSUB_IMM12:      equ     6
+FSID_MEM_IMM12:         equ     7
+FSID_MEM_IMM9:          equ     8       ; deferred (absent from release corpus)
+FSID_MOVK_IMM16:        equ     9
+FSID_LOGICAL:           equ     10      ; deferred (absent from release corpus)
+FSID_PAIR_IMM7:         equ     11
+FSID_LITPOOL19:         equ     12
+FSID_MOVZ_AUTO:         equ     13
 
 
 ; -----------------------------------------------------------------------
@@ -313,11 +320,11 @@ render_m1_overlay:
                 call    render_ovl_patch_header ; slot + expr_len; HL = expr ptr
                 ld      (render_ovl_expr_ptr), hl
 
-; spliceOverlay dispatch (overlay.go:103-159).  SLICE 6a wires the target-text
-; families only (branch26/19/14, adr, adrp): each replaces the LAST operand
-; with the rendered target text (overlay.go:113-122 —
-; replaceOperand(mnem, ops, lastIndex(ops), sym)).  The immediate/mem families
-; (S6b) fall through to fail.
+; spliceOverlay dispatch (overlay.go:103-159).  The target-text families
+; (branch26/19/14, adr, adrp) replace the LAST operand with the rendered target
+; text (overlay.go:113-122 — replaceOperand(mnem, ops, lastIndex(ops), sym));
+; the S6b immediate/memory families splice the patch immediate into the folded
+; field (per-family surgery below).
                 ld      a, (render_ovl_slot)
                 cp      FSID_BRANCH26
                 jr      z, render_ovl_target
@@ -329,7 +336,25 @@ render_m1_overlay:
                 jr      z, render_ovl_target
                 cp      FSID_ADRP
                 jr      z, render_ovl_target
-                jp      fail                    ; S6b immediate/mem slots
+; S6b immediate/memory slot families (overlay.go:105-158).
+                cp      FSID_ADDSUB_IMM12
+                jp      z, render_ovl_addsub
+                cp      FSID_MEM_IMM12
+                jp      z, render_ovl_mem_insert
+                cp      FSID_MOVK_IMM16
+                jp      z, render_ovl_movk
+                cp      FSID_PAIR_IMM7
+                jp      z, render_ovl_mem_insert
+                cp      FSID_LITPOOL19
+                jp      z, render_ovl_litpool
+                cp      FSID_MOVZ_AUTO
+                jp      z, render_ovl_movz
+; Deferred: FoldMemImm9 (slot 8) and FoldLogical (slot 10) are absent from the
+; release corpus, so they are unimplemented.  A full-release render hitting
+; either fails loudly here (correct behaviour): FoldLogical additionally needs
+; the decodeWithSentinel base-decode path (overlay.go:80-91,219-225), not yet
+; ported.
+                jp      fail                    ; unimplemented slots 8, 10
 
 render_ovl_target:
 ; joinLine (overlay.go:170-175): mnem + TAB ...
@@ -344,6 +369,320 @@ render_ovl_target:
                 ld      bc, (render_ovl_expr_len)
                 call    render_emit_target_text
                 jr      render_m1_after
+
+
+; =======================================================================
+; SLICE 6b — the immediate / memory slot families of spliceOverlay
+; (overlay.go:105-158): add/sub imm12, ldr/str/ldp/stp offset, explicit
+; movz/movk imm16, ldr-literal, and mov auto-movz.  Each renders
+; `mnem TAB <ops with the folded operand spliced in>` then tail-jumps to
+; render_m1_after (pc += 4, next element), reusing the helpers renderImmText
+; (render_ovl_emit_imm), replaceImmOperand (render_ovl_imm_replace) and
+; insertMemOffset (render_ovl_mem_insert).
+;
+; Deferred (absent from the release corpus): FoldMemImm9 (slot 8) and
+; FoldLogical (slot 10) — dispatched to `fail` in render_m1_overlay.
+; =======================================================================
+
+; -- FoldAddSubImm12 (slot 6): replaceImmOperand, decoded mnemonic ------------
+; overlay.go:148-152.  The zeroed imm12 disassembles as `#0x0`; swap it for the
+; patch immediate, preserving a sibling `lsl #12` shift operand.
+render_ovl_addsub:
+                ld      hl, DISASM_COMM_MNEM
+                ld      (render_ovl_mnem_ptr), hl
+                jp      render_ovl_imm_replace
+
+; -- FoldMovkImm16 (slot 9): recover movz/movk, then replaceImmOperand --------
+; overlay.go:135-146.  aarch64dec aliases a zeroed-imm movz/movk to `mov`, so
+; recover the real mnemonic from the move-wide opc field — base bits 30:29:
+; 0b11 → movk, else movz ((base>>29)&3 == 3) — then replace the zeroed
+; immediate, keeping any explicit `lsl #N`.
+render_ovl_movk:
+                ld      a, (render_ovl_base + 3) ; base bits 31:24
+                and     &60                     ; bits 6,5 = base bits 30,29
+                cp      &60                     ; both set → (base>>29)&3 == 3
+                ld      hl, render_str_movz
+                jr      nz, romk_have
+                ld      hl, render_str_movk
+romk_have:
+                ld      (render_ovl_mnem_ptr), hl
+                ; fall through into render_ovl_imm_replace
+
+; -- render_ovl_imm_replace — replaceImmOperand (overlay.go:193-202) ----------
+; Emits <mnem> TAB + ops[:i] + <sym> + ops[i:], where [i,i+len) is the sole
+; `#0x0`/`#0` operand token and sym is the patch expr in instruction-immediate
+; context (renderPatchOperand default → renderImmText isDirective=false).  The
+; mnemonic pointer is render_ovl_mnem_ptr (decoded for add/sub, recovered for
+; movz/movk).
+render_ovl_imm_replace:
+                ld      hl, (render_ovl_mnem_ptr)
+                call    render_copy_cstr
+                ld      a, 9                    ; TAB
+                call    render_out_append
+                call    render_find_zero_imm    ; HL = token start, DE = token end
+                ld      (render_ovl_suffix), de ; ops[i:] (from the token end)
+; emit ops[:i] = DISASM_COMM_OPS .. token start.
+                ld      de, DISASM_COMM_OPS
+                or      a
+                sbc     hl, de                  ; HL = prefix length
+                ld      b, h
+                ld      c, l
+                ld      hl, DISASM_COMM_OPS
+                call    render_out_put_bytes
+; emit the spliced immediate (instruction context), then the suffix.
+                xor     a                       ; isDirective = 0
+                call    render_ovl_emit_imm
+                ld      hl, (render_ovl_suffix)
+                call    render_copy_cstr
+                jp      render_m1_after
+
+; -- FoldMemImm12 (7) / FoldPairImm7 (11): insertMemOffset (overlay.go:207-213)
+; The zeroed offset disassembles as `[base]` (offset omitted); insert
+; ", <sym>" before the closing `]`.  This is BRACKET-relative — the memory
+; operand carries its own internal `", "`, so it is not a last-operand replace.
+render_ovl_mem_insert:
+                ld      hl, DISASM_COMM_MNEM
+                call    render_copy_cstr
+                ld      a, 9                    ; TAB
+                call    render_out_append
+; find the last `]` in DISASM_COMM_OPS → DE.
+                ld      hl, DISASM_COMM_OPS
+                ld      de, 0                   ; DE = last `]` ptr (0 = none)
+romi_scan:
+                ld      a, (hl)
+                or      a
+                jr      z, romi_scan_done
+                cp      "]"
+                jr      nz, romi_scan_next
+                ld      d, h
+                ld      e, l
+romi_scan_next:
+                inc     hl
+                jr      romi_scan
+romi_scan_done:
+                ld      a, d
+                or      e
+                jp      z, fail                 ; no `]` → Go errors (overlay.go:209-211)
+                ld      (render_ovl_suffix), de ; ops[i:] (from the `]`)
+; emit ops[:i] = DISASM_COMM_OPS .. `]`.
+                ex      de, hl                  ; HL = `]` ptr
+                ld      de, DISASM_COMM_OPS
+                or      a
+                sbc     hl, de                  ; HL = prefix length
+                ld      b, h
+                ld      c, l
+                ld      hl, DISASM_COMM_OPS
+                call    render_out_put_bytes
+; emit ", " then the spliced offset (instruction context), then the `]` tail.
+                ld      a, ","
+                call    render_out_append
+                ld      a, " "
+                call    render_out_append
+                xor     a                       ; isDirective = 0
+                call    render_ovl_emit_imm
+                ld      hl, (render_ovl_suffix)
+                call    render_copy_cstr
+                jp      render_m1_after
+
+; -- FoldLitpool19 (slot 12): ldr Rt, =expr (overlay.go:105-111) --------------
+; Keep the first operand (Rt), discard the decoded literal target, and render
+; `=<sym>` where sym is the patch expr in directive context (renderPatchOperand
+; → renderImmText isDirective=true → no leading '#').
+render_ovl_litpool:
+                ld      hl, DISASM_COMM_MNEM
+                call    render_copy_cstr
+                ld      a, 9                    ; TAB
+                call    render_out_append
+                call    render_ovl_emit_first_op ; parts[0] = Rt
+                ld      a, ","
+                call    render_out_append
+                ld      a, " "
+                call    render_out_append
+                ld      a, "="
+                call    render_out_append
+                ld      a, 1                    ; isDirective = 1 (=expr, no '#')
+                call    render_ovl_emit_imm
+                jp      render_m1_after
+
+; -- FoldMovzAuto (slot 13): mov Rd, <sym> (overlay.go:124-133) ---------------
+; The base decodes (aliased) as `mov Rd, #0`; render the original 2-operand
+; `mov` form with the full-value expression (instruction context) — re-assembly
+; re-derives the movz hw shift.  The mnemonic is the literal `mov`.
+render_ovl_movz:
+                ld      hl, render_str_mov
+                call    render_copy_cstr
+                ld      a, 9                    ; TAB
+                call    render_out_append
+                call    render_ovl_emit_first_op ; parts[0] = Rd
+                ld      a, ","
+                call    render_out_append
+                ld      a, " "
+                call    render_out_append
+                xor     a                       ; isDirective = 0
+                call    render_ovl_emit_imm
+                jp      render_m1_after
+
+
+; -----------------------------------------------------------------------
+; render_ovl_emit_imm — renderImmText (overlay.go:246-252) →
+; emitExprAsImmediateWithContext (emit.go:491-526): render the current patch
+; expression (render_ovl_expr_ptr / render_ovl_expr_len) as an instruction or
+; directive immediate to render_out.  A constant renders `#dec`/`#%#x`
+; (instruction) or `dec`/`%#x` (directive, no '#'); a simple symbol reference
+; renders its text; anything else as a parenthesised infix expression.
+;
+; Input:  A = isDirective flag (0 = instruction, 1 = directive/`=`).
+; -----------------------------------------------------------------------
+render_ovl_emit_imm:
+                ld      (render_ovl_is_dir), a
+                ld      hl, (render_ovl_expr_ptr)
+                ld      bc, (render_ovl_expr_len)
+                call    render_eval_const       ; Z=1 → const, render_num32 = v
+                jr      nz, roei_notconst
+                ld      hl, render_out_append
+                ld      (render_sink_addr), hl
+                ld      a, (render_ovl_is_dir)
+                or      a
+                jr      nz, roei_const_go       ; directive → no leading '#'
+                ld      a, "#"
+                call    render_out_append
+roei_const_go:
+                jp      render_emit_const_directive
+roei_notconst:
+                ld      hl, (render_ovl_expr_ptr)
+                ld      bc, (render_ovl_expr_len)
+                call    render_simple_symref    ; Z=1 → matched (name/:lo12:/Nf/Nb)
+                ret     z
+                ld      a, "("
+                call    render_out_append
+                ld      hl, (render_ovl_expr_ptr)
+                ld      bc, (render_ovl_expr_len)
+                call    render_print_expr
+                ld      a, ")"
+                jp      render_out_append
+
+
+; -----------------------------------------------------------------------
+; render_ovl_emit_first_op — emit parts[0] of DISASM_COMM_OPS: everything up to
+; (not including) the first ", " separator, or the whole string if single.
+; splitOps(ops)[0] (overlay.go:163-167) for the litpool/movz families, which
+; keep only the leading (register) operand.  An empty ops string is a Go error
+; (len(parts)==0) → fail.
+; -----------------------------------------------------------------------
+render_ovl_emit_first_op:
+                ld      hl, DISASM_COMM_OPS
+                ld      a, (hl)
+                or      a
+                jp      z, fail                 ; len(parts)==0 (overlay.go:108-110,130-132)
+rofo_loop:
+                ld      a, (hl)
+                or      a
+                ret     z
+                cp      ","
+                ret     z
+                push    hl
+                call    render_out_append
+                pop     hl
+                inc     hl
+                jr      rofo_loop
+
+
+; -----------------------------------------------------------------------
+; render_find_zero_imm — locate the sole `#0x0`/`#0` operand token in
+; DISASM_COMM_OPS (replaceImmOperand, overlay.go:193-201).  Exactly one field
+; is zeroed in an overlay base word, so the zeroed immediate is unambiguous; a
+; `lsl #N` shift is a distinct non-zero operand and is skipped.
+;
+; Output: HL = token start ptr, DE = token end ptr (start + 2 or 4).
+;         A token that is never found is a Go error → fail.
+; -----------------------------------------------------------------------
+render_find_zero_imm:
+                ld      hl, DISASM_COMM_OPS
+rfzi_loop:
+                ld      a, (hl)
+                or      a
+                jp      z, fail                 ; no zeroed immediate (overlay.go:201)
+                ld      de, render_str_zerox    ; "#0x0"
+                call    render_try_token
+                jr      z, rfzi_found4
+                ld      de, render_str_zero     ; "#0"
+                call    render_try_token
+                jr      z, rfzi_found2
+                call    render_skip_part
+                jr      rfzi_loop
+rfzi_found4:
+                ld      c, 4
+                jr      rfzi_ret
+rfzi_found2:
+                ld      c, 2
+rfzi_ret:
+                ld      b, 0
+                push    hl
+                add     hl, bc
+                ex      de, hl                  ; DE = token end (start + len)
+                pop     hl                      ; HL = token start
+                ret
+
+; render_try_token — Z=1 iff the operand at HL equals the candidate cstr at DE
+; followed by an operand boundary (',' or nul).  Preserves HL.
+render_try_token:
+                push    hl
+rtt_loop:
+                ld      a, (de)
+                or      a
+                jr      z, rtt_check_delim      ; candidate exhausted → check boundary
+                cp      (hl)
+                jr      nz, rtt_no
+                inc     hl
+                inc     de
+                jr      rtt_loop
+rtt_check_delim:
+                ld      a, (hl)
+                or      a
+                jr      z, rtt_yes              ; end of ops → boundary
+                cp      ","
+                jr      z, rtt_yes              ; ", " separator → boundary
+rtt_no:
+                pop     hl
+                ld      a, 1
+                or      a                       ; Z=0 (no match)
+                ret
+rtt_yes:
+                pop     hl
+                xor     a                       ; Z=1 (match)
+                ret
+
+; render_skip_part — advance HL past the current operand to the next operand
+; start: skip to the next ", " (comma+space) and step over it, or stop at nul.
+render_skip_part:
+rsp_loop:
+                ld      a, (hl)
+                or      a
+                ret     z                       ; nul → leave HL (loop terminates)
+                cp      ","
+                jr      z, rsp_comma
+                inc     hl
+                jr      rsp_loop
+rsp_comma:
+                inc     hl                      ; past ','
+                ld      a, (hl)
+                cp      " "
+                ret     nz                      ; not ", " (defensive) — leave HL
+                inc     hl                      ; past ' '
+                ret
+
+
+; S6b mnemonic / token strings.
+render_str_mov:         defm    "mov"
+                        defb    0
+render_str_movz:        defm    "movz"
+                        defb    0
+render_str_movk:        defm    "movk"
+                        defb    0
+render_str_zerox:       defm    "#0x0"
+                        defb    0
+render_str_zero:        defm    "#0"
+                        defb    0
 
 
 ; -----------------------------------------------------------------------
@@ -2979,6 +3318,11 @@ render_ovl_patch_count: defb    0       ; current element patch count
 render_ovl_slot:        defb    0       ; current patch FoldSlot id
 render_ovl_expr_ptr:    defw    0       ; current patch expr ptr (STAGING_BUF)
 render_ovl_expr_len:    defw    0       ; current patch expr length
+
+; SLICE 6b — immediate/memory splice scratch.
+render_ovl_suffix:      defw    0       ; ops[i:] tail ptr (after the spliced field)
+render_ovl_mnem_ptr:    defw    0       ; mnemonic ptr (decoded, or recovered movz/movk)
+render_ovl_is_dir:      defb    0       ; renderImmText isDirective flag
 
 render_ld_src:          defw    0       ; LIT_DATA payload ptr ([dir_id][data])
 render_ld_len:          defw    0       ; LIT_DATA payload length (1 + nbytes)
