@@ -56,11 +56,20 @@
 DISASM_ENTRY:           equ     &8000
 DISASM_PAGE:            equ     31
 
-IN_PAGE:                equ     8
-IN_FIRST_LMPR:          equ     &20 | IN_PAGE           ; RAM0 | page 8 = &28
-
+    if defined(DEMO_CHAIN)
+; i365d-b2c: the B-DOS 1.5t DOS code is resident at DOSFLG (&5BC2) = page 29. The
+; IN reblock must NOT overwrite it — else the assemble-chain's B-DOS ops (which
+; page the DOS in via LMPR <- DOSFLG-1) dispatch into render garbage and wedge.
+; Shift the 23-page IN run to pages 4..26 and paged_call to 28, leaving page 29
+; (DOS), 30, and 31 (disasm) clear. b2a keeps 8..30 (it DI;HALTs, no B-DOS after).
+IN_PAGE:                equ     4                       ; IN run = pages 4..26
+PAGED_CALL_PAGE:        equ     28                      ; clear of the DOS page (29)
+    else
+IN_PAGE:                equ     8                       ; IN run = pages 8..30
 PAGED_CALL_PAGE:        equ     7
-LMPR_DECODE:            equ     &20 | (PAGED_CALL_PAGE - 1)      ; = &26
+    endif
+IN_FIRST_LMPR:          equ     &20 | IN_PAGE           ; RAM0 | IN_PAGE
+LMPR_DECODE:            equ     &20 | (PAGED_CALL_PAGE - 1)
 
 ; paged_call installation slots (section B; mirror tbn_render_driver.asm).
 TRAMPOLINE_DST:         equ     &7E00
@@ -384,15 +393,15 @@ rdb_chain_next:
                 out     (250), a               ; (the pristine boot LMPR, from rdb_main)
 
                 ; --- arm HGTHD for asmdemo -> BD_DIFA (pages, length) -----------
-                ; ROOT CAUSE (i365d-b2c Phase A): this HGTHD wedges because the IN
-                ; reblock (rdb_load_tbn, pages 8..30) OVERWRITES the B-DOS DOS code
-                ; page — B-DOS 1.5t is resident at DOSFLG (&5BC2) = page 29, INSIDE
-                ; the reblock range. The rst 8 then pages garbage (LMPR<-DOSFLG-1) and
-                ; the ROM hook dispatch runs away in a text-scan (@&1Dxx). Come-up's
-                ; HGTHD(disasm) works only because it PRECEDES the reblock. FIX (next
-                ; session): save the DOSFLG page before the reblock + restore it here
-                ; (free pages 4/5/6), OR reblock IN avoiding the DOS page. NOT an SD
-                ; issue (the earlier SD-coexistence trail was a red herring). See plan.
+                ; The DOS-page clobber (the reblock overwriting B-DOS at DOSFLG=page
+                ; 29) is FIXED above by the DEMO_CHAIN IN=4..26 / paged_call=28 layout
+                ; — this HGTHD now dispatches to REAL B-DOS. REMAINING (next session):
+                ; render_disk_write_dirent zeroes linearSec 0 when it writes
+                ; RELEASESRC, leaving a type-0 entry that halts B-DOS's directory
+                ; scan before asmdemo (linearSec 1) — so this HGTHD fails "not found"
+                ; and B-DOS drops into its error-prompt keyboard wait (ROM KYIP &0502
+                ; / WAITKEY). Fix render_disk_write_dirent to append RELEASESRC into
+                ; the first FREE dir slot, preserving the existing entries. See plan.
                 ld      hl, rdb_name_asmdemo
                 ld      (BD_NAME_PTR), hl
                 call    bdos_name_to_uifa

@@ -190,7 +190,30 @@ disassembling the ROM loop it spins in (`CP (HL);INC HL;JP NZ` — a runaway ROM
   correct (sysvars page 0 intact) — the DOS *code* page is the casualty, not the
   sysvars. Nothing to do with the raw SD ops, the &38 disturbance, or the card.
 
-**THE FIX (next session, well-defined):** preserve the B-DOS DOS page across the
+**FIX 1 — DONE + VALIDATED (Option 2 chosen).** The DEMO_CHAIN build now shifts the
+IN reblock to pages **4..26** and paged_call to **28** (leaving 29=DOS, 30, 31=disasm
+clear) — `render_disk_boot.asm` equ block, gated by `DEMO_CHAIN` (b2a keeps 8..30).
+Confirmed on the rig: the chain's hang **moved from the garbage text-scan (`&1Dxx`)
+to real B-DOS** — now it stops in B-DOS's keyboard-input wait (ROM `INPUTAD` `&01CA`
+/ `WAITKEY` `&04F0` / `KYIP` `&0502`), i.e. real B-DOS runs, HGTHD `rst 8` dispatches
+correctly, but the operation FAILS and B-DOS drops into its error-prompt "press a
+key" loop (hangs in emulation, no key).
+
+**FIX 2 — NEXT (the directory clobber).** HGTHD(asmdemo) fails "not found" because
+`render_disk_write_dirent` (`render_disk_sink.asm`) **zeroes the whole linearSec-0
+directory sector** when it writes RELEASESRC — leaving a **type-0 (empty) entry in
+slot 1** that halts B-DOS's directory scan BEFORE `asmdemo` (linearSec 1). Fix:
+append RELEASESRC into the first FREE dir slot (RMW that sector), preserving all
+existing entries + the `BDOS`@232 stamp — do NOT zero linearSec 0. This is also a
+real shared-card data-safety fix (render currently destroys other files' entries).
+Update b2a's `TestRenderDiskBootFaithful` to reconstruct RELEASESRC by name
+(`reconstructRecordFileByName`) since it will no longer be at linearSec-0 slot 0.
+(A confounded experiment writing the dirent to an empty linearSec confirmed the
+DOS fix but corrupted RELEASESRC's own entry, so it did NOT cleanly validate FIX 2
+— implement the real free-slot writer.) After FIX 2, HGTHD should find asmdemo,
+the chain loads+runs the assembler, and Phase A's gate should pass.
+
+**Superseded fix menu (kept for context):** preserve the B-DOS DOS page across the
 reblock. Two options:
 1. **Save/restore the DOSFLG page.** Read `DOSFLG` (`&5BC2`) for the DOS page (`&1D`
    here, but read it, don't hardcode); copy that physical page to a free page
