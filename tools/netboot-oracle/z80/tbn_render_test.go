@@ -262,6 +262,68 @@ func TestTbnRenderGlobalLabelRet(t *testing.T) {
 	assertRenderMatch(t, got, want)
 }
 
+// TestTbnRenderDirectives is slice 5's parity proof: a source exercising the
+// common DIRECTIVE (0x04) record forms — `.arch`/`.cpu` (SYS_NAME operands),
+// `.set` with constant and symbol-reference operands, `.org` (origin re-base),
+// `.align` (padding that moves the PC so a post-align label flushes at the
+// right offset), `.ascii`/`.asciz` (escaped strings + string PC sizing), and a
+// compound-expression `.set` that drives the infix printExpr path. It must
+// render byte-identically to render.Emit, proving the operand/expr printer and
+// the directive PC accounting.
+func TestTbnRenderDirectives(t *testing.T) {
+	src := []byte("  .arch armv8-a\n" +
+		"  .cpu cortex-a53\n" +
+		"  .set WIDTH, 0x780\n" +
+		"  .set HEIGHT, 1200\n" +
+		"  .org 0x1000\n" +
+		"_start:\n" +
+		"  nop\n" +
+		"  .align 4\n" +
+		"aligned:\n" +
+		"  ret\n" +
+		"  .ascii \"hi\"\n" +
+		"  .asciz \"world\"\n" +
+		"  .set X, WIDTH+1\n")
+	tbn := buildCompactTBN(t, src, "s5.s")
+
+	want, err := render.Emit(tbn)
+	if err != nil {
+		t.Fatalf("render.Emit: %v", err)
+	}
+
+	got := renderTBNOnZ80(t, tbn)
+	assertRenderMatch(t, got, want)
+}
+
+// TestTbnRenderDirectiveExprForms extends slice 5's coverage to the operand
+// forms the primary fixture only lightly touches: writeEscapedString's escape
+// branches (\t \n \" \\ \xNN, plus raw printables) and printExpr's
+// asOperand parenthesisation across nested binary, unary NEG/NOT and shift
+// operators. Each must render byte-identically to render.Emit.
+func TestTbnRenderDirectiveExprForms(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+	}{
+		// \t \n \" \\ in a .ascii, control + high bytes as \xNN in a .asciz.
+		{"escapes", "  .ascii \"a\\tb\\nc\\\"d\\\\e\"\n  .asciz \"\\x01\\x7f end\"\n"},
+		// Nested binary needs the inner group parenthesised; NEG/NOT/shift each
+		// wrap their non-atomic operand.
+		{"nested", "  .set A, 5\n  .set Y, (A+1)*2\n  .set Z, -A\n  .set S, A<<2\n  .set N, ~A\n"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			tbn := buildCompactTBN(t, []byte(c.src), c.name+".s")
+			want, err := render.Emit(tbn)
+			if err != nil {
+				t.Fatalf("render.Emit: %v", err)
+			}
+			got := renderTBNOnZ80(t, tbn)
+			assertRenderMatch(t, got, want)
+		})
+	}
+}
+
 // buildCompactTBN builds a compact `.tbn` from source via the frontend +
 // assembler (the same pipeline compact_ir_b8d_test.go uses), so the fixture
 // carries a realistic editor region + header tables.
