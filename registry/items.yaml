@@ -5469,9 +5469,11 @@
   title: Clamp the ENC settle window on run-boundary survival (PR 820 §3 residual)
   description: |
     A settle window still OPEN at a run boundary carries its OLD-timeline ABSOLUTE settleUntilT deadline unclamped into the new (smaller) run timeline, so a run stopping within sdInitSettleTStates of its last SD byte pins the entire next run's identity probes stale (the i327 artifact in a narrower shape). Fix (Pete, PR 820 review): on survival re-base the deadline to t + (settleUntilT - tNow_old) — the REMAINING budget — preserving the i242 back-to-back microseconds-apart catch while preventing whole-run re-arming. In enc28j60.go SetTState. Host-testable, no hardware.
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 855, role: completing}
   parent: i291
 
 - id: i291b
