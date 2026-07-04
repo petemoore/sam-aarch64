@@ -6747,6 +6747,6 @@
   title: One-off backlog-size-over-time report (open items vs commit history)
   description: |
     Pete asked (2026-07-06) whether the OPEN backlog is growing or shrinking over time — it appears to grow while he's away. One-off analysis: plot open-item count (leaf + total) and DONE against the commit history, handling the tracking-source evolution (early: none; mid: docs/notes/item-registry-*.md markdown; recent: registry/items.yaml). Doc-only artifact in docs/notes/backlog-size-over-time.md (+PNG); no maintenance. Explains the split-inflation dynamic (umbrella→N sub-items grows the count even as work ships).
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
