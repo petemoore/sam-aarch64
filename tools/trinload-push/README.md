@@ -115,6 +115,33 @@ real on-hardware auto-load + boot is a **separate hardware shot** (emulation-ver
 not hardware-verified, CLAUDE.md §5). The launcher boots whatever record you name — make
 sure it holds a bootable disk.
 
+## `push-and-boot.py` — push a `.mgt` to a free record and boot it, one command (i284)
+
+The clean, repeatable one-command demo of the network SD write: it chains
+`sd-push.py`'s `push_mgt` (which now REPORTS the record it claimed — the finalize
+`'D'`+record reply, i308) into `boot-record.py`, so the record number never has to
+be copied by hand between the two steps.
+
+```sh
+make netboot-sd-push netboot-boot-record        # build both programs
+DEPLOY_CHECKED=1 tools/trinload-push/push-and-boot.py 192.168.2.75 mydisk.mgt
+```
+
+Args: `<sam-ip> <mgt-path> [--no-boot] [--force] [--sd-push-bin …] [--boot-bin …]
+[--boot-map …] [--page N]`. `--no-boot` pushes and prints the claimed record only;
+`--force` overrides the bootability pre-check.
+
+Before spending the ~2-minute push it runs `boot-record.py`'s bootability check on
+the `.mgt` (the same i331 stack-overlap / i332 BASIC-auto guard) and REFUSES a
+will-not-boot disk up front, so a disk that cannot boot never claims a record. Both
+legs are hardware-proven independently — `sd_push` wrote a `cj.mgt` record that
+booted CJ's Elephant on the real SAM (i295/#784), and `boot-record` booted a stored
+record that TFTP-self-confirmed on the wire (i319b) — this wrapper adds only the
+orchestration (thread the claimed record from the push into the boot). Exit codes
+match the legs: 0 = pushed and booted (or pushed, with `--no-boot`); 1 = failure or
+a refused disk; 3 = the push likely completed but its finalize reply was lost so the
+record is unknown — verify with `list-records.py` and boot with `boot-record.py`.
+
 ## `delete-record.py` — free/delete a Trinity SD record N via `delete_record` (i317)
 
 The store/boot/**delete** toolkit closer: it patches the record number into

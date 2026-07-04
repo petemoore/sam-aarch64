@@ -1009,6 +1009,10 @@ trinpush-help:
 	@echo '  Push + run any netboot *_trinload.bin (org &8000):'
 	@echo '    DEPLOY_CHECKED=1 tools/trinload-push/trinload-push.py <sam-ip> build/netboot_dumper.bin 1 0x8000'
 	@echo
+	@echo '  Push a .mgt to a free SD record AND boot it — one command (i284):'
+	@echo '    make netboot-sd-push netboot-boot-record'
+	@echo '    DEPLOY_CHECKED=1 tools/trinload-push/push-and-boot.py <sam-ip> mydisk.mgt'
+	@echo
 	@echo 'DEPLOY_CHECKED=1 is required — without it the deploy-guard hook shows the hardware-readiness checklist.'
 	@echo 'Details: tools/trinload-push/README.md ; docs/notes/netboot-trinity-testing.md'
 
