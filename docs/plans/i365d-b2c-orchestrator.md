@@ -199,9 +199,16 @@ reblock. Two options:
    reblock still fills page 29 for the render (render reads it), then the DOS is
    restored for the assemble chain. Reuse `rdb_load_tbn`'s LMPR-toggled flat-copy
    discipline (DI, SP in section D, restore boot LMPR). Gate under `DEMO_CHAIN`.
-2. **Reblock IN avoiding the DOS page.** Retarget the 23 IN pages to a contiguous
-   run that excludes page 29 (needs the reader's page walk to tolerate the shifted
-   base and a spare page — check `reader.asm`/`in_map_current` contiguity first).
+2. **Reblock IN avoiding the DOS page.** The reader needs a CONTIGUOUS run
+   (`reader.asm:38` — page-cross is a plain LMPR increment), so you can't skip 29
+   mid-range; shift the whole run below it. Concrete arrangement that fits (usable
+   RAM = pages 4-31; need 23 IN + disasm + paged_call + the DOS-at-29 = 26): set
+   **`IN_PAGE`=4** (IN = 4..26), move **`PAGED_CALL_PAGE`=30** (out of the IN run;
+   it's at 7 today, which any low-enough 23-page run would swallow), keep
+   **disasm=31**, leaving **DOS=29** and spares 27/28 untouched. Verify the come-up
+   (EEPROM/ENC/CSD scratch) doesn't use pages 4..7, and gate the shifted constants
+   under `DEMO_CHAIN` so b2a's render is unchanged. No page-copy, but it touches
+   more equ sites than Option 1.
 
 Option 1 is the least invasive and does not touch the render reader. Once the DOS
 survives, the chain's HGTHD/HLOAD/HSAVE should just work (the mechanism is proven)
