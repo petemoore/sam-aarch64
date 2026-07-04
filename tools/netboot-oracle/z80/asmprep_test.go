@@ -1,18 +1,20 @@
 // asmprep_test.go — host-verification of src/asmprep.asm (i31b: the on-SAM
-// assembler-source preprocessor; Brick 1).
+// assembler-source preprocessor; Bricks 1 + 2a).
 //
 // Drives prep_run under the flat-memory koron-go/z80 harness and byte-compares
 // its expanded output against the Go authority, frontend.Preprocess
-// (tools/sam-aarch64/frontend/preprocess.go), on .set/.if-only fixtures. The
-// authority is imported directly (as the asmparse corpus test does), so there
-// is no transcription to drift.
+// (tools/sam-aarch64/frontend/preprocess.go). The authority is imported
+// directly (as the asmparse corpus test does), so there is no transcription to
+// drift.
 //
-// Brick 1's scope is the conditional-assembly core: the leading
-// `# <line> "<file>"` directive, `.set NAME, INT` capture + pass-through, and
-// `.if SYMBOL`/`.else`/`.endif` with a nesting frame stack. Macros (Brick 2),
-// .include + mid-stream # line emission (Brick 3) and the chain wiring
-// (Brick 4) are separate items; the fixtures here deliberately contain no
-// .macro/.endm/.include/macro-invocation, so brick-1 prep_run is byte-identical
+// Coverage: TestAsmprepBrick1 + TestAsmprepBrick1Random exercise the
+// conditional-assembly core (leading `# <line> "<file>"` directive, `.set`
+// capture + pass-through, `.if`/`.else`/`.endif` nesting). TestAsmprepBrick2aDefine
+// + TestAsmprepBrick2aStorage exercise macro DEFINITION (.macro/.endm parse +
+// collect + store) — a definition is consumed (emits nothing), so the byte-
+// compare still holds, and the stored records are validated via exposed symbols.
+// Macro invocation/expansion is Brick 2b; .include is Brick 3; so the fixtures
+// here contain no macro-invocation or .include, keeping prep_run byte-identical
 // to frontend.Preprocess on this input domain.
 package z80_test
 

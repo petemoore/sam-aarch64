@@ -1661,12 +1661,14 @@ SET_NAMES:        defs 1024       ; name arena
 IF_STACK:         defs 3*64       ; {active, taken, hadElse}
 STRIP_BUF:        defs 512        ; stripTrailingComment scratch (>= max line)
 
-; Macro table + pools (see the "Macro definition" section header).
-MACRO_MAX:        equ 32
-MACRO_TAB:        defs 12*32      ; {name_ptr:2,name_len:1,nparams:1,params_ptr:2,nbody:2,body_ptr:2,defline:2}
-PARAM_IDX:        defs 4*128      ; {ptr:2 (into MACRO_STRPOOL), len:2}
-BODY_IDX:         defs 4*512      ; {ptr:2 (into PREP_SRC), len:2}
-MACRO_STRPOOL:    defs 1024       ; copied param-name bytes
+; Macro table + pools (see the "Macro definition" section header). Sized with
+; margin over the real spectrum4 corpus (~33 macro defs, short params/bodies);
+; explicit overflow-to-error guards land with b2b's error plumbing.
+MACRO_MAX:        equ 64
+MACRO_TAB:        defs 12*64      ; {name_ptr:2,name_len:1,nparams:1,params_ptr:2,nbody:2,body_ptr:2,defline:2}
+PARAM_IDX:        defs 4*256      ; {ptr:2 (into MACRO_STRPOOL), len:2}
+BODY_IDX:         defs 4*1024     ; {ptr:2 (into PREP_SRC), len:2}
+MACRO_STRPOOL:    defs 2048       ; copied param-name bytes
 
 PREP_PATH:        defs 128        ; caller writes a NUL-terminated path
 PREP_OUT_CAP:     equ 8192
