@@ -36,7 +36,10 @@
                 org     &8000
                 endif
 
+                if defined(REASM_MAX)==0
 REASM_MAX:        equ 16645             ; TLS 1.3 max record: 5 + (2^14 + 256)
+                endif                   ; a composition may pre-set a smaller bound
+                                        ; (the flat host-test build in tls_main.asm)
 
 ; ===========================================================================
 ; State + buffers (data first so every label is defined before the code, the
