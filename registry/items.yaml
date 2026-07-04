@@ -5680,9 +5680,9 @@
 - id: i304b
   title: Splice 1.5t device-layer diffs into the 1.5a pyz80 source to byte-match bdos15t-beta6.bin
   description: |
-    Second brick for i304. Base = reference/bdos/bdos15a.asm (i304a: byte-exact, symbolicated with l_XXXX address-labels where l_XXXX == the ANALYSIS region-diff table's a&XXXX, so that table maps directly onto the source). Apply the documented 1.5t (Trinity fork) changes region-by-region (per ~/sam-archive/bdos/analysis: region-diffs.txt + bdos15t-beta6.annotated.dis): Atom device layer -> SD/SPI driver, CHS->32-bit linear seek, SD init ladder, CSD/records math, record-base poke, hot-swap RESTORE, banner/DIR/message text, DEVICE command removed. Iterate assemble->diff until byte-identical to the 11044-byte extracted/bdos15t-beta6.bin. Graft Edwin's routine NAMES from bdos15a.src.txt onto the l_XXXX labels of routines you touch (human-verified per routine; do not auto-graft). NOTE: 1.5t is Colin's proprietary binary (out-of-repo, ~/sam-archive, SKIP_PRIVATE_TESTS-gated) -- the reconstructed SOURCE is ours; the byte-match gate must NOT commit Colin's bytes: resolve the reference bin from ~/sam-archive like csd_decode_colin_test.go. Deliverable: reference/bdos/bdos15t src (pyz80) + private-gated byte-identity target.
+    Second brick for i304 (q79 resolved: option b -- the byte-exact 1.5t SOURCE stays PRIVATE, per the publication policy 'trinity.mgt contents stay out of the repo'; it reproduces Colin's proprietary binary so it is not committed to the public repo). Base = reference/bdos/bdos15a.asm (i304a byte-exact, l_XXXX address-labels == the ANALYSIS region-diff a&XXXX). In a PRIVATE working copy under ~/sam-archive, apply the documented 1.5t (Trinity fork) changes region-by-region (~/sam-archive/bdos/analysis: region-diffs.txt + bdos15t-beta6.annotated.dis): Atom device layer -> SD/SPI driver, CHS->32-bit linear seek, SD init ladder, CSD/records math, record-base poke, hot-swap RESTORE, banner/DIR/message text, DEVICE command removed. Iterate assemble->diff until byte-identical to extracted/bdos15t-beta6.bin. Graft Edwin's routine names from bdos15a.src.txt onto touched routines (human-verified). IN-REPO DELIVERABLE (public): a SKIP_PRIVATE_TESTS-gated byte-match test that resolves both the source and the bin from ~/sam-archive (like csd_decode_colin_test.go) and asserts pyz80(source)==bin -- proves correctness without committing Colin's bytes. The private annotated source lives in ~/sam-archive (agents on Pete's host read it as the authority).
   status: OPEN
-  depends_on: [i304a, q79]
+  depends_on: [i304a]
   kind: leaf
   owner: agent
   parent: i304
@@ -5690,7 +5690,7 @@
 - id: i304c
   title: Annotate 1.5t routines; make bdos15t src THE cited Trinity-HW B-DOS authority + update citations
   description: |
-    Final brick for i304. Annotate the new/changed 1.5t routines in the byte-matching source from i304b, grafting Edwin's retained 1.5a comments + routine names from bdos15a.src.txt (the naming/comment reference; per-routine human-verified) onto the remaining l_XXXX labels. Then promote reference/bdos/bdos15t src to THE in-repo cited Trinity-HW B-DOS authority: add its Trinity-HW provenance marker + tools/trinity-authority-ledger.txt entry (per CLAUDE.md rule 8 / i273), and update the in-repo references/plan/code citations that currently point at 1.5a (feedback_bdos_15t_not_15a: the root-cause fix so agents stop reaching for 1.5a). Update reference/bdos/README + docs pointer.
+    Final brick for i304 (q79 option b). Annotate the private 1.5t source from i304b (graft Edwin's retained 1.5a comments + names, per-routine human-verified). Make it THE cited Trinity-HW B-DOS authority WITHOUT publishing Colin's bytes: the in-repo public authority pointer is docs/notes/bdos-trinity-fork-analysis.md (the existing publication-safe derived doc) + the private-gated byte-match test (i304b); the byte-exact annotated source stays in ~/sam-archive (accessible to agents on Pete's host). Update the in-repo references/plan/code citations that currently point at 1.5a to point at the 1.5t authority (the doc + private source) -- feedback_bdos_15t_not_15a root-cause fix. If a Trinity-HW Go model needs the authority marker, add tools/trinity-authority-ledger.txt entry per i273.
   status: OPEN
   depends_on: [i304b]
   kind: leaf
@@ -6536,7 +6536,7 @@
   description: |
     Deploy the b4 demo .mgt to a Trinity SD record via sd-push.py (first-free, data-safe) then boot via boot-record.py / push-and-boot.py (launchers refuse non-bootable BASIC-auto/stack-overlap shapes). On real SAM: TAPO power-cycle (i266), record boots the driver -> generates+saves+serves; host fetches release.src+release.img over TFTP and verifies (release.img byte-matches GNU/Go release.img; release.src = the rendered listing). Self-serve hw (i266 TAPO + i272 capture).
   status: OPEN
-  depends_on: [q77, i365d, i365c-b3]
+  depends_on: [i365d, i365c-b3]
   kind: leaf
   owner: agent
   parent: i365
