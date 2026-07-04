@@ -5645,9 +5645,11 @@
   title: "Reconcile the firmware-fetch record naming: Z80 storage_sink_leaf names records by hex(name[0:3]) but the Go authority bdos.SpanRecordName is content-addressed hex(hash[0:3])"
   description: |
     Discovered during i231b-b4i (#782 review). RULE-6 divergence in the hardware-gated HTTP firmware-fetch store path. The Go authority tools/netboot-oracle/bdos/span.go:52 SpanRecordName(blobHash [32]byte, index) returns a CONTENT-ADDRESSED name: fmt.Sprintf('%02x%02x%02x%03d', blobHash[0], blobHash[1], blobHash[2], index) — hex of the first 3 bytes of the blob's SHA-256 HASH + the zero-padded record index. But the Z80 src/netboot/http_main.asm storage_sink_leaf passes FW_STORE_NAME_PTR (the manifest NAME ptr set by store_begin), not a hash, to fw_span.asm fw_span_record_name — which hex-encodes the first 3 bytes of whatever HL points to. So the Z80 names records hex(NAME[0:3])+index, NOT hex(HASH[0:3])+index. fw_span.asm's own comment ('Mirrors bdos.SpanRecordName(blobHash...)', 'Emit hash[0], hash[1], hash[2]') says it should take a HASH — inconsistent with the caller passing the name. This is PRE-EXISTING (not introduced by #782; the bootable was byte-identical) and hardware-gated (the http_main store path is unverified on real hardware, CLAUDE.md §5), and #782's new tests accurately document the CURRENT name-based behavior. RECONCILE: (a) is the Z80 a port bug — storage_sink_leaf should pass a hash pointer (CONN_PINNED_HASH or the computed digest) to be content-addressed like the authority — OR (b) are the authority + fw_span.asm comment stale and name-based naming is the intended design? Check the serve side (netboot_serve reads 'the same convention' per http_main.asm) — does it expect name-hex or hash-hex? If the persist + serve sides agree (name-hex) the round-trip works but diverges from the authority; if they disagree, records can't be found. Per rule 6 the Go authority is the encoding truth unless there's a documented reason to diverge (like the plain-vs-suffixed SpanPlan choice). May escalate to a qN if the design intent needs Pete. Relates to i101 (serve record naming), the fw_span/http_main store leaf.
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 850, role: completing}
 
 - id: i315
   title: "sd_push: reorder .mgt sectors track-major -> side-major on write so pushed records boot (SAM-side)"
@@ -6188,6 +6190,8 @@
   title: "http store leaf names records by hex(filename) not content-hash: storage_sink_leaf passes FW_STORE_NAME_PTR to fw_span_record_name (which expects the blob SHA-256 digest ptr)"
   description: |
     The i70b shot-4 hardware read-back (i362 read-record of REC 199) revealed the HTTP store leaf names each HSAVE'd record 'hex(filename[0..2])+NNN' instead of the intended content-addressed '<hash6><NNN>'. ROOT CAUSE: http_main.asm:628-630 storage_sink_leaf does 'ld hl,(FW_STORE_NAME_PTR); call fw_span_record_name' — but fw_span_record_name's contract (fw_span.asm:82) is HL = ptr to the 32-byte blob SHA-256 DIGEST (it hex-encodes hash[0..2]). FW_STORE_NAME_PTR is the logical FILENAME ptr. So for LICENCE.broadcom the record was named '4c4943000' (hex of 'LIC'=4c 49 43, +index 000) instead of the correct 'c7283f000' (hex of the pinned SHA-256 c7283ff5..., +000). Note FW_SPAN_HASH (fw_span.asm:46) is declared 'in: 32-byte digest' but NEVER written by any code — the intended hash buffer is dead. FIX (CLAUDE.md rule 6, port bdos.SpanRecordName which uses blobHash): thread the current file's 32-byte SHA-256 digest ptr — the manifest entry's sha256 field in FW_MANIFEST (fw_source.asm) — from prov_start/store_begin through to storage_sink_leaf and pass THAT to fw_span_record_name (or populate FW_SPAN_HASH from it). Content-addressed retrieval (TFTP serve-by-name / the picker) needs the right name, so provisioned files are otherwise unretrievable. TEST GAP that let it through: fw_span_test.go asserts the function in isolation with a correct hash ptr; the http_main faithful store test does NOT assert the stored record NAME. Add an integration assertion (faithful store leaf -> read back the record's directory entry name == bdos.SpanRecordName(pinnedHash,0)) so it can't regress. Hardware-confirmed via i362.
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 850, role: completing}
