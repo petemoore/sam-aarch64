@@ -562,11 +562,12 @@ jobs:
 
   # paged — sweeps the paged fixture corpus end-to-end.  Same container as
   # core..operands; runs `make ci-paged` which exercises the paged-OUT
-  # machinery introduced by paged IN/OUT (sections-B emit during the
-  # LMPR_ENCTAB window + LMPR_OUT_HIGH bracket for the high zone + HSAVE
-  # auto-paging across &C000).  The fixture corpus contains a >16 KB
-  # long-emit fixture that crosses the OUT_ZONE low → high boundary.  See
-  # docs/specs/paged-out-design.md.
+  # machinery: emit writes each byte into the OUT buffer's single
+  # contiguous page-pool run through a per-byte section-B (&4000..&7FFF)
+  # LMPR bracket, advancing the LMPR one page at each &8000 run-page
+  # boundary; HSAVE then saves the whole run through section C, auto-paging
+  # across &C000.  The fixture corpus contains a >16 KB long-emit fixture
+  # that crosses OUT-run page boundaries.  See docs/specs/paged-out-design.md.
   paged:
     runs-on: ubuntu-latest
     needs: build-image

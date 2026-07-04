@@ -6054,9 +6054,11 @@
   title: "PR 824 review residuals: page-count wrap edge at >4MB totals, two stale two-zone doc-comments"
   description: |
     Non-blocking findings from the PR 824 pre-merge review (review 4621373253, inline anchors): (1) src/main_loop.asm:218 - for pass-1 totals 4177921..4194303 the run-page-count inc b wraps 255->0, allocating 1 page and mis-tagging the failure as b0 (invariant) instead of b3 (OOM); no OOB writes, unreachable on real hardware (pool <= 32 pages) - clamp or fail b4-style on page-count overflow. (2) .github/workflows/ci.yml:521-527 comment still describes the old two-zone emit bracket. (3) tools/z80-test-harness-go/harness.go ~914 comment says 'UIFA[31]: start page (= 5)' - now the dynamic run base. Also src/README.md:44 stale suite list.
-  status: OPEN
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 848, role: completing}
 
 - id: i351
   title: "PR 826 review residuals: compact_inst PASS_PC header inaccuracy (latent trap for the production compactor) + two section-D comment fixes"

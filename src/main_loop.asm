@@ -224,6 +224,8 @@ reset_out_size_ok:
                 or      c                   ; Z ⇔ (OUT_TOTAL & &3FFF) == 0
                 jr      z, reset_out_no_partial
                 inc     b                   ; + the partial page
+                jr      z, reset_out_oom    ; page count wrapped 255->0: 256 pages
+                                            ; exceed the pool's reach — OOM (tag b3)
 reset_out_no_partial:
                 ld      a, b
                 or      a
