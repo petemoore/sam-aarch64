@@ -1277,8 +1277,16 @@ build_oack_opts:
                 inc     de
                 ld      hl, str_tsize
                 call    copy_cstr_incl_nul
+                ; tsize is the FULL 32-bit file size — release.src is 417 KB, so a
+                ; 16-bit render would wrap mod 65536 and mislead a pre-allocating
+                ; client (the DATA stream is byte-correct regardless; tsize is
+                ; advisory). Copy XFER_SIZE into csd_div_n (boot-only scratch, idle
+                ; during serve) and render all 32 bits.
                 ld      hl, (XFER_SIZE)
-                call    write_dec_u16
+                ld      (csd_div_n), hl
+                ld      hl, (XFER_SIZE + 2)
+                ld      (csd_div_n + 2), hl
+                call    write_dec_u32
                 xor     a
                 ld      (de), a
                 inc     de
@@ -1286,6 +1294,39 @@ build_oack_opts:
                 ex      de, hl
                 or      a
                 sbc     hl, de                 ; HL = length
+                ret
+
+; write_dec_u32 — write the 32-bit LE value in csd_div_n as decimal ASCII at DE
+; (no leading zeros). Consumes csd_div_n (divides it down to 0) via csd_div32,
+; collecting remainders LSB-first on the stack behind an &ff sentinel, then
+; emits them MSB-first — the same shape as write_dec_u16. csd_div32 clobbers DE,
+; so the output cursor is saved across each divide. Clobbers AF/BC/DE/HL.
+write_dec_u32:
+                ld      a, &ff
+                push    af                     ; sentinel
+w32_div_loop:
+                push    de                     ; csd_div32 clobbers DE (the cursor)
+                ld      bc, 10
+                call    csd_div32              ; csd_div_n /= 10, HL = remainder
+                pop     de
+                ld      a, l
+                add     a, "0"
+                push    af                     ; the digit
+                ld      hl, (csd_div_n)
+                ld      a, h
+                or      l
+                ld      hl, (csd_div_n + 2)
+                or      h
+                or      l
+                jr      nz, w32_div_loop
+w32_pop_loop:
+                pop     af
+                cp      &ff
+                jr      z, w32_done
+                ld      (de), a
+                inc     de
+                jr      w32_pop_loop
+w32_done:
                 ret
 
 ; copy_cstr_incl_nul — copy a NUL-terminated string at HL to DE (incl. the NUL).

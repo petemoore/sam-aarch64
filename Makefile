@@ -899,7 +899,11 @@ netboot-server-record: $(BUILD)/netboot_server.bin $(BUILD)/build-disk
 # + B-DOS 1.5t and asserts the served bytes byte-match the ramp payload.
 $(BUILD)/largefile_ramp.bin:
 	@mkdir -p $(BUILD)
-	python3 -c "import sys; sys.stdout.buffer.write(bytes((i*13+7)&0xff for i in range(40000)))" > $@
+	# 70000 bytes (> 64 KB) so the served file exercises BOTH the >64K disk
+	# stream (32-bit XFER_OFFSET/remaining, i365c-b1) AND the 32-bit OACK tsize
+	# (i365c-b3): the OACK byte-comparison vs the Go authority fails if tsize
+	# wraps mod 65536.
+	python3 -c "import sys; sys.stdout.buffer.write(bytes((i*13+7)&0xff for i in range(70000)))" > $@
 
 .PHONY: netboot-server-largefile-record
 netboot-server-largefile-record: $(BUILD)/netboot_server.bin $(BUILD)/build-disk $(BUILD)/largefile_ramp.bin
