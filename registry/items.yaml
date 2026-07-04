@@ -6392,6 +6392,15 @@
   owner: agent
   parent: i365c
 
+- id: i365c-b3
+  title: 32-bit OACK tsize for large-file serve
+  description: |
+    build_oack_opts renders the TFTP OACK 'tsize' option 16-bit (write_dec_u16 of XFER_SIZE low word), so for release.src (417KB) the advertised tsize wraps mod 65536. The DATA stream is byte-correct (the serve path uses the full 32-bit XFER_SIZE), and tsize is advisory (RFC 2349) so standard clients (tftp/curl/atftp) fetch fine, but a strict pre-allocating client would be misled. Render tsize as a full 32-bit decimal before i365e serves release.src on hardware. Flagged by the #861 §3 review; Makefile comment already acknowledges the limit.
+  status: OPEN
+  kind: leaf
+  owner: agent
+  parent: i365c
+
 - id: i365d
   title: "Autoboot CODE-auto driver: render->save->assemble->save->tftp-serve with on-screen messages; compose the demo .mgt"
   description: |
@@ -6399,7 +6408,7 @@
     
     DEMO ASSEMBLE STEP (i365b DONE #859): use build/assembler-demo.bin (pyz80 -D DEMO_ASM=1) — a callable ret-exit assembler that HSAVEs as 'RELEASEIMG'; the driver CALLs it (it returns). ONE release-unstripped.tbn (DOS file 'IN') feeds BOTH render + assembler (assembler loads only the prefix). Render should save 'RELEASESRC'. §859-review YELLOWs to honour HERE: (a) the driver must keep its own stack + the assembler's return frame OUTSIDE the assembler's &C100-down boot stack AND its &8000 code image (else the ret target corrupts) — the harness parked the caller SP at &FFFE (section D); (b) hardware-confirm a record boot leaves its record selected for HSAVE (no HRECORD was added to save_out_file) — if not, add a one-time driver-level HRECORD of the boot record before the steps.
   status: OPEN
-  depends_on: [i365a, i365b, i365c-b1]
+  depends_on: [i365a, i365b, i365c]
   kind: umbrella
   owner: agent
   parent: i365
@@ -6418,7 +6427,7 @@
   description: |
     Wall/driver (docs/specs/i365-demo-architecture.md, slice i365d-b2). A Z80 CODE-auto driver (org &8000, ALHK-exec'd; a record boot REQUIRES CODE-auto -- i332) that: prints 'Generating source...' (RST &10, pattern src/netboot/mgt_screen_demo_standalone.asm), renders release.tbn->release.src via the b1 sink; prints 'Generating image...', CALLs the DEMO_ASM assembler (build/assembler-demo.bin: start: saves caller SP, HSAVEs RELEASEIMG, ret -- keep the caller stack + return frame OUTSIDE the assembler's &C100-down boot stack AND its &8000 image, #859 review); serves both via the i365c large-file server. ONE release-unstripped.tbn (DOS 'IN') feeds render (whole) + assembler (prefix only, main_loop.asm:1560). Compose via build-disk -code-auto/-netboot-code-auto (netboot-server-record is the template) + NBMANIFEST (RELEASESRC->release.src, RELEASEIMG->release.img). Hardware-confirm a record boot leaves its record selected for HSAVE; else add a one-time driver HRECORD. Gate via assembler_record_vessel_test.go pattern.
   status: OPEN
-  depends_on: [i365d-b1, i365c]
+  depends_on: [i365d-b1, i365c-b1, i365c-b2, i365c-b3]
   kind: leaf
   owner: agent
   parent: i365d
@@ -6428,7 +6437,7 @@
   description: |
     Deploy the b4 demo .mgt to a Trinity SD record via sd-push.py (first-free, data-safe) then boot via boot-record.py / push-and-boot.py (launchers refuse non-bootable BASIC-auto/stack-overlap shapes). On real SAM: TAPO power-cycle (i266), record boots the driver -> generates+saves+serves; host fetches release.src+release.img over TFTP and verifies (release.img byte-matches GNU/Go release.img; release.src = the rendered listing). Self-serve hw (i266 TAPO + i272 capture).
   status: OPEN
-  depends_on: [q77, i365d]
+  depends_on: [q77, i365d, i365c-b3]
   kind: leaf
   owner: agent
   parent: i365
