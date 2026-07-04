@@ -888,6 +888,27 @@ netboot-server-record: $(BUILD)/netboot_server.bin $(BUILD)/build-disk
 	    -netboot-extra bcm2711-rpi-400.dtb=$(NETBOOT_STANDINS)/bcm2711-rpi-400.dtb \
 	    $(BUILD)/netboot_server_record.mgt
 
+# netboot-server-largefile-record (i365c) — a boot_record-bootable server vessel
+# whose directory ALSO carries one LARGE plain CODE file (ramp.bin, 40000 bytes
+# = multi-page > 16 KB, but < 64 KB so the OACK tsize fits 16 bits). The server's
+# store walk indexes it as disk-backed (NB_DISK_TABLE) and streams it from the
+# record's sectors on demand; config.txt (small) still serves from the arena.
+# The ramp is a distinctive per-byte pattern (distinct from the AUTOnbsrv/bdos
+# infrastructure bytes) so a wrong-chain read cannot masquerade as a match.
+# Emulation gate: TestNetbootServerLargeFile boots this on the captured real ROM
+# + B-DOS 1.5t and asserts the served bytes byte-match the ramp payload.
+$(BUILD)/largefile_ramp.bin:
+	@mkdir -p $(BUILD)
+	python3 -c "import sys; sys.stdout.buffer.write(bytes((i*13+7)&0xff for i in range(40000)))" > $@
+
+.PHONY: netboot-server-largefile-record
+netboot-server-largefile-record: $(BUILD)/netboot_server.bin $(BUILD)/build-disk $(BUILD)/largefile_ramp.bin
+	$(BUILD)/build-disk -netboot $(BUILD)/netboot_server.bin -netboot-name AUTOnbsrv \
+	    -netboot-code-auto \
+	    -netboot-extra config.txt=$(NETBOOT_STANDINS)/config.txt \
+	    -netboot-extra ramp.bin=$(BUILD)/largefile_ramp.bin \
+	    $(BUILD)/netboot_server_largefile_record.mgt
+
 # netboot-serve (i96) — the serve-files TFTP demo server: ARP + TFTP only (no DHCP,
 # no Pi PXE blob), serving a few files baked into the binary to a plain TFTP/curl
 # client.  Two builds from one source:
@@ -1510,7 +1531,7 @@ netboot-z80-routines: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-bu
 # SKIP_PRIVATE_TESTS-gated, and CI (no private data) can't build it.
 NETBOOT_PRIVATE_ARTIFACTS := $(if $(wildcard src/netboot/bootloader_chunk1_data.asm),netboot-eeprom-flash-chunk1)
 .PHONY: netboot-z80-artifacts
-netboot-z80-artifacts: netboot-z80-routines netboot-http-boot-debug netboot-http-smoke-boot editmodel-z80 editmodel-paged-z80 pagepool-z80 spill-z80 viewport-z80 asmlex-z80 asmparse-z80 asmparse-paged-z80 parse-paged-driver-z80 chain-paged-driver-z80 b8d-chain-paged-driver-z80 pass1-ir-z80 compact-ir-z80 compact-ser-z80 sysreg-data netboot-serve-record netboot-server-record disk-record tbn-render-driver-z80 release-unstripped-tbn $(NETBOOT_PRIVATE_ARTIFACTS)
+netboot-z80-artifacts: netboot-z80-routines netboot-http-boot-debug netboot-http-smoke-boot editmodel-z80 editmodel-paged-z80 pagepool-z80 spill-z80 viewport-z80 asmlex-z80 asmparse-z80 asmparse-paged-z80 parse-paged-driver-z80 chain-paged-driver-z80 b8d-chain-paged-driver-z80 pass1-ir-z80 compact-ir-z80 compact-ser-z80 sysreg-data netboot-serve-record netboot-server-record netboot-server-largefile-record disk-record tbn-render-driver-z80 release-unstripped-tbn $(NETBOOT_PRIVATE_ARTIFACTS)
 
 ci-netboot-z80: netboot-z80-artifacts
 	cd tools/sampage && go test ./...
