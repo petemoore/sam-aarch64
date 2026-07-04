@@ -1443,24 +1443,12 @@ $(BUILD)/trinity_identity_stamp.bin $(BUILD)/trinity_identity_stamp.map: src/net
 netboot-trinity-identity: $(BUILD)/trinity_identity_stamp.bin $(BUILD)/trinity_identity_stamp.map
 
 # netboot-client (i82) — the TFTP client boot disk: fetch a file (a .mgt image)
-# from a TFTP server and write it to Trinity storage via the B-DOS hooks.  Two
-# builds from one source:
-#   * the host-test binary (NETBOOT_HOSTTEST) excludes client_main + eeprom.asm +
-#     the B-DOS hook dispatch so the harness drives client_first/client_run_once
-#     directly; netboot_client_test.go asserts the ARP request + the RRQ + the ACK
-#     cadence + the accumulated STAGING bytes match the Go client.Client authority
-#     byte-for-byte (the B-DOS HSAVE write-out is real-hardware-only, not exercised).
-#   * the bootable binary (no flag) includes client_main + eeprom.asm + the B-DOS
-#     HSAVE so it reads the SAM's real MAC/IP, fetches, and writes to Trinity (the
-#     disk built by netboot-client-disk).
-$(BUILD)/netboot_client.bin $(BUILD)/netboot_client.map: src/netboot/netboot_client.asm $(asm_deps/src/netboot/netboot_client.asm)
-	@mkdir -p $(BUILD)
-	pyz80 -D NETBOOT_HOSTTEST=1 \
-	    --obj=$(BUILD)/netboot_client.bin \
-	    --mapfile=$(BUILD)/netboot_client.map \
-	    src/netboot/netboot_client.asm
-
-netboot-client: $(BUILD)/netboot_client.bin $(BUILD)/netboot_client.map
+# from a TFTP server and write it to Trinity storage via the B-DOS hooks. One build
+# from one source (netboot_client_boot.bin, below); netboot_client_test.go drives
+# the client's routines by symbol against that same boot binary, asserting the ARP
+# request + the RRQ + the ACK cadence + the accumulated STAGING bytes match the Go
+# client.Client authority byte-for-byte (the B-DOS HSAVE write-out is
+# real-hardware-only, not exercised in the harness).
 
 # The bootable client binary: the full program including the EEPROM config read +
 # the client_main fetch-then-HSAVE flow, for real Trinity. Like the serve image it
@@ -1701,7 +1689,7 @@ $(BUILD)/tbn_render_driver.bin $(BUILD)/tbn_render_driver.map: src/tbn_render_dr
 tbn-render-driver-z80: $(BUILD)/tbn_render_driver.bin $(BUILD)/tbn_render_driver.map
 
 # Every netboot routine binary the harness tests load.
-netboot-z80-routines: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-build-tcp-segment netboot-sha256 netboot-hmac-sha256 netboot-hkdf netboot-hkdf-expand-label netboot-chacha20 netboot-poly1305 netboot-x25519-field netboot-aead netboot-tls-keyschedule netboot-tls-record netboot-tls-transcript netboot-tls-client-hello netboot-tls-server-flight netboot-tls-client netboot-tls-main netboot-encdrv netboot-dhcp-loop netboot-tcp-conn netboot-http-get netboot-fw-source netboot-body-sink netboot-tls-reasm netboot-fw-span netboot-http netboot-http-boot netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke netboot-server netboot-serve netboot-client netboot-dumper netboot-csd-probe netboot-sd-push netboot-boot-record netboot-delete-record netboot-list-records netboot-hook-roundtrip netboot-render-disk-probe netboot-samboot-config netboot-trinity-identity netboot-serve-boot netboot-serve-boot-debug netboot-client-boot netboot-fetch-boot-boot netboot-trinload netboot-sd-csd netboot-sd-listread netboot-eeprom-roundtrip netboot-port-probe netboot-settle-probe netboot-mgt-screen-demo
+netboot-z80-routines: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-build-tcp-segment netboot-sha256 netboot-hmac-sha256 netboot-hkdf netboot-hkdf-expand-label netboot-chacha20 netboot-poly1305 netboot-x25519-field netboot-aead netboot-tls-keyschedule netboot-tls-record netboot-tls-transcript netboot-tls-client-hello netboot-tls-server-flight netboot-tls-client netboot-tls-main netboot-encdrv netboot-dhcp-loop netboot-tcp-conn netboot-http-get netboot-fw-source netboot-body-sink netboot-tls-reasm netboot-fw-span netboot-http netboot-http-boot netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke netboot-server netboot-serve netboot-dumper netboot-csd-probe netboot-sd-push netboot-boot-record netboot-delete-record netboot-list-records netboot-hook-roundtrip netboot-render-disk-probe netboot-samboot-config netboot-trinity-identity netboot-serve-boot netboot-serve-boot-debug netboot-client-boot netboot-fetch-boot-boot netboot-trinload netboot-sd-csd netboot-sd-listread netboot-eeprom-roundtrip netboot-port-probe netboot-settle-probe netboot-mgt-screen-demo
 
 # netboot-z80-artifacts — every artifact the tools/netboot-oracle/z80 suite
 # loads from build/, as ONE aggregate target.  This is the single source of
