@@ -6337,6 +6337,53 @@
      Demonstrates the assembler CORE end-to-end (list + assemble + save + serve) with ONLY the interactive editor missing.
      KNOWN PIECES: build/release.mgt already bundles assembler.bin(prod,&8000)+release.compact.tbn+disasm.bin(d15)+enctab.enc+sysreg+zx0, and its assembler already assembles release.compact.tbn byte-identically to GNU (release gate) => the ASSEMBLE half exists; missing is SAVE-to-disk of the output as a real B-DOS/SAMDOS file (not the SimCoupe OUT side-channel). i93b proved HRECORD->HSAVE->HGTHD->HLOAD on B-DOS 1.5t hw (save API exists). TFTP serve is hw-proven (i96 first-light, i95b-b1 integrated server booted from record 187, 16.8KB/s). Record store+boot proven (i295/i319/i332 sd_push + CODE-auto vessel + boot-record.py).
      OPEN GAP under research (3 agents 2026-07-04): whether an on-SAM .tbn->source-text LISTER exists (the 'Generating source' half) or must be built/ported, or whether release.src should instead come from disassembling release.img (disasm.bin). Leaves split once research lands.
-  status: IN_PROGRESS
+  status: OPEN
   kind: umbrella
   owner: agent
+
+- id: i365a
+  title: "Port render.Emit (.tbn -> source text) to Z80 — the editor's display path; render release.tbn DIRECTLY to release.src on-SAM (no assemble/disassemble)"
+  description: |
+    Pete's steer 2026-07-04: release.src MUST be rendered DIRECTLY from the .tbn (exactly what the editor does — take .tbn content + display as text), NOT assemble-then-disassemble (which loses label names, comments, directives, data/code split, macros/includes). Go authority to port (CLAUDE.md §6 — mechanical, known answer): tools/sam-aarch64/render/ render.Emit/EmitLines (~1.6KLOC): (1) editor-region reader (front-coded name table + .global flags + comment/blank-run sidecar past editor_region_offset — src/reader.asm today stops there), (2) PC-order record walker (labels/locals from header tables; DIRECTIVE; LIT_DATA -> .byte/.word; INSN_RUN -> feed each base word through on-disk disasm.bin(d15) for mnemonic+operands, splice mode-1 patches from expr bytecode), (3) expr-bytecode + operand/symbol-name printer. Use a .tbn that RETAINS the editor region (names/comments) = release-unstripped.tbn, NOT the stripped compact one, so the listing shows real names+comments. VERIFY during impl: macros/.include appear host-expanded before the .tbn exists (agent 1); if so no .tbn shows unexpanded macros regardless — direct render still preserves the names/comments/directives disassembly loses, so it stays correct; document what the render CAN and cannot show. Emulation-first: gate in tools/netboot-oracle/z80 vs render.Emit output byte-for-byte over the corpus. Advances the M9 editor display path.
+  status: OPEN
+  kind: leaf
+  owner: agent
+  parent: i365
+
+- id: i365b
+  title: "On-SAM assemble release.tbn -> release.img + HSAVE to disk ('Generating image...')"
+  description: |
+    Agent 2 research: the prod assembler ALREADY HLOADs the .tbn (disk file 'IN') -> two-pass main_assemble -> emit_byte into the OUT page-pool buffer -> save_out_file HSAVEs it via REAL rst8 HOOK_HSAVE(132); the release gate proves the saved 'OUT' file is GNU-byte-identical. So assemble+save EXISTS. Demo gaps: (1) rename SAM output 'OUT' -> a <=10-char name (SAM names max 10 chars; 'release.img' is 11 — the on-wire TFTP name can still be release.img); (2) for an SD-record boot target prepend BD_HOOK_HRECORD select before HSAVE (i93b hook_roundtrip pattern, hw-proven on B-DOS 1.5t). Refs: src/assembler.asm:674-691, src/main_loop.asm:1835-1868, src/netboot/hook_roundtrip.asm:143-181.
+  status: OPEN
+  kind: leaf
+  owner: agent
+  parent: i365
+
+- id: i365c
+  title: Serve release.src + release.img over TFTP from the demo (network-verifiable end-to-end proof)
+  description: |
+    Serve BOTH produced files over TFTP so a host fetches them and confirms the run really happened + produced the files (Pete's self-confirmation). TFTP serve is hw-proven (i96 first-light; i95b-b1 integrated ARP+DHCP+TFTP server booted from record 187, ~16.8KB/s, option-60 PXEClient gate). Integrate the existing server to serve the two files by name (advertise release.src / release.img). Driver invokes it as the final step. Refs: i95b-b1 server, make netboot-serve.
+  status: OPEN
+  kind: leaf
+  owner: agent
+  parent: i365
+
+- id: i365d
+  title: "Autoboot CODE-auto driver: render->save->assemble->save->tftp-serve with on-screen messages; compose the demo .mgt"
+  description: |
+    A Z80 CODE-auto driver (AUTO* CODE file at org &8000, ALHK-exec'd) that prints 'Generating source...' (RST &10, per mgt_screen_demo_standalone.asm:96-136), renders release.tbn->release.src (b1)+HSAVEs; prints 'Generating image...', assembles->release.img (b2)+HSAVEs; serves both over TFTP (b3). Record boot REQUIRES a CODE-auto vessel — a BASIC-auto record can NEVER boot (i332). Combined-vs-chained: assembler+render+server likely exceed one 16KB &C000 window, so the driver probably HLOADs sibling CODE files in sequence and calls each (agent 3). Compose demo .mgt via build-disk -code-auto: driver + assembler + disasm(d15) + enctab + sysreg + zx0 + release-unstripped.tbn. Emulation-gate via the assembler_record_vessel_test.go pattern (boot exact AUTO* vessel through modelled ALHK + real B-DOS HLOAD + SPI).
+  status: OPEN
+  depends_on: [i365a, i365b, i365c]
+  kind: leaf
+  owner: agent
+  parent: i365
+
+- id: i365e
+  title: Store demo .mgt on a Trinity record + boot on real SAM + fetch release.src/.img over TFTP (end-to-end hardware proof)
+  description: |
+    Deploy the b4 demo .mgt to a Trinity SD record via sd-push.py (first-free, data-safe) then boot via boot-record.py / push-and-boot.py (launchers refuse non-bootable BASIC-auto/stack-overlap shapes). On real SAM: TAPO power-cycle (i266), record boots the driver -> generates+saves+serves; host fetches release.src+release.img over TFTP and verifies (release.img byte-matches GNU/Go release.img; release.src = the rendered listing). Self-serve hw (i266 TAPO + i272 capture).
+  status: OPEN
+  depends_on: [i365d]
+  kind: leaf
+  owner: agent
+  parent: i365
