@@ -208,6 +208,12 @@ jobs:
         run: make netboot-smoke-disk netboot-server-disk netboot-serve-disk netboot-serve-record netboot-server-record netboot-client-disk netboot-http-disk disk-record
       - name: Serve push launcher config-patch test (i121d)
         run: make netboot-trinpush-test
+      - name: B-DOS 1.5a reassembly byte-match (i304a)
+        # Reassemble the reconstructed 1.5a source (pyz80) and assert byte-identity
+        # with the freeware bdos15a.bin. Proves the toolchain reproduces Edwin
+        # Blink's binary exactly, de-risking the i304b 1.5t splice. Freeware oracle,
+        # no private artifacts.
+        run: make bdos15a-bytematch
 
   # sysreg-sync — Go↔Z80 sysreg table sync guard (repo-audit §5 / §6 #9).
   # Two complementary checks, both pure Go (no container, no binutils):
