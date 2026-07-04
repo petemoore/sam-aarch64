@@ -1788,6 +1788,7 @@
   description: |
     The wiring: new src/netboot/tls_main.asm composes tls_reasm + tls_client + tcp_conn's CONN_SINK_FILTER dispatch with two shims — tls_sink_feed (CONN_SINK_FILTER target: HL=window,BC=len -> jp tls_reasm_feed) and tls_record_shim (REASM_EMIT_PTR: copy the emitted record REASM_BUF->TC_RX, set TC_RX_LEN, call tls_client_on_record). Emulation-first: a new tools/netboot-oracle/z80/tls_integration_test.go replays the existing captured handshake flight (records <=TC_RX=1056, flat-buildable) chunked at mis-aligned TCP-segment sizes THROUGH storage_sink_flush (the real dispatch) and asserts TC_PHASE reaches DONE / secrets match the Go authority. REASM_BUF placed in low memory so the composite fits flat. Land via PR. body_sink_write is the precedent.
   status: OPEN
+  depends_on: [q75]
   kind: leaf
   owner: agent
   parent: i88c
@@ -4945,6 +4946,7 @@
   description: |
     Record-picker UI (Increment 2 of i264). HOME DECISION (Pete 2026-07-01, q59): the picker lives in the WRITABLE EEPROM as its OWN chunk(s), extending the bootblock code -- NOT the ~250-byte config chunk (A), not B-DOS scratch (B), not a separate SD record (C). The ~250B limit was the CONFIG chunk only. VERIFIED against ~/sam-archive/samboot-capture/eeprom.bin: 128KB total, 88.3% blank flash (0xFF) = ~113KB FREE, ~15KB used (~12KB is B-DOS 1.5t in the low ~12KB; the chunk directory is up at ~122-131KB; the middle ~110KB is empty). Ample. On a key-held boot the bootblock loads+runs the picker chunk (as it loads the B-DOS chunks), reads the on-card record list via the raw SD driver, renders a BIOS-style menu by number+name, takes a selection, persists to the SAMBOOT Config chunk (write_chunk). Develop+emulate in netboot-oracle; EEPROM flash hardware-gated (i266/Pete); build in the private trinity-autoboot repo (q55). BIOS-menu UI design = a future sprint.
   status: OPEN
+  depends_on: [q76]
   kind: leaf
   owner: agent
   parent: i264
