@@ -208,4 +208,16 @@ survives, the chain's HGTHD/HLOAD/HSAVE should just work (the mechanism is prove
 and Phase A's gate should pass. Then do Phase B (serve + long names + messages).
 Also fix the latent shared-card dir-clobber (`render_disk_write_dirent` zeroes
 linearSec 0) when convenient — orthogonal to this, but real.
+
+**Page-copy gotcha (Option 1):** the 16 KB physical-page→page copy must run from a
+section that is NOT being remapped during the copy. Mapping the DOS page (29) in
+section A (LMPR) and the free page (6) in section C (HMPR) would evict render's own
+code (which lives in section C at `&8000+`). So run the copy loop from **section D**
+(`&C000+`, HMPR-stable) or **section B**, or stage through a 16 KB buffer — mirror
+`rdb_load_tbn`'s existing flat-write discipline (its write loop stays mapped while
+only section A toggles). A neat variant of Option 1: instead of restoring, RELOCATE
+— copy DOS 29→6 before the reblock and set `DOSFLG` (`&5BC2`) = 6, so B-DOS runs
+from page 6 and the reblock's clobber of 29 is harmless (verify page 6 is truly
+free for the whole render first). Whichever: DI around it, and read `DOSFLG` for the
+page (don't hardcode 29).
 </content>
