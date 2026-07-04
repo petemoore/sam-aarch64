@@ -16,9 +16,10 @@
 ; flush placed by PC.  The comment sidecar / mode-1 patch overlays are later
 ; slices — an unexpected record kind falls through to `fail`.
 ;
-; Output: canonical GNU-as text is appended byte-by-byte to render_out; its
-; length lands in render_out_len (both section-C, HMPR-stable — the driver's
-; harness reads them after render_run returns).
+; Output: canonical GNU-as text is streamed byte-by-byte out RENDER_SINK_PORT
+; (render_out_append), which the harness captures.  The output (~417 KB for the
+; release corpus) is never buffered resident; render_out_len keeps a 32-bit
+; running byte count for diagnostics only.
 
 
 ; -----------------------------------------------------------------------
@@ -35,11 +36,13 @@
 ; boundary (emit.go:74-122, overlay.go:36-48).
 ;
 ; Input:  the reader cursor (IN_POS_*) points at the staged `.tbn`.
-; Output: render_out / render_out_len populated.
+; Output: the source text streamed out RENDER_SINK_PORT; render_out_len holds the
+;         byte count.
 ; -----------------------------------------------------------------------
 render_emit:
                 ld      hl, 0
                 ld      (render_out_len), hl
+                ld      (render_out_len + 2), hl
                 xor     a
                 ld      (render_prev_stmt), a
 
@@ -47,6 +50,8 @@ render_emit:
                 call    reader_init             ; seeds header tables via the
                                                 ;   store callbacks, bounds IN_END
                 call    render_read_editor      ; name table + .global flags
+                call    render_sort_labels      ; order ties by name (newHeaderDefs)
+                call    render_sort_locals      ; order ties by digit
                 call    render_globals          ; emit "  .global NAME\n" lines
                 call    render_walk
 
@@ -56,13 +61,16 @@ render_emit:
                 call    render_flush
 
 ; Safety: every sidecar row must have been placed by the PC walk (emit.go:231-234).
-; A stranded row (cursor < count) is a PC-accounting bug or corrupt sidecar — a
-; loud HALT here beats silently dropping a comment.
-                ld      hl, (render_sidecar_cursor)
-                ld      de, (render_sidecar_count)
+; With the streamed sidecar that means no rows remain undecoded AND no decoded
+; row is still pending — a stranded row is a PC-accounting bug or corrupt sidecar,
+; and a loud HALT here beats silently dropping a comment.
+                ld      hl, (render_sc_remaining)
+                ld      a, h
+                or      l
+                jp      nz, fail                ; undecoded rows remain
+                ld      a, (render_sc_pending)
                 or      a
-                sbc     hl, de
-                jp      c, fail                 ; cursor < count → rows unplaced
+                jp      nz, fail                ; a decoded row was never placed
 
                 ld      a, (render_prev_stmt)
                 or      a
@@ -819,7 +827,7 @@ render_emit_target_text:
 ; constant target: v<0 → signed decimal (%d); v>=0 → "0x" + hex (0x%x).
                 ld      hl, render_out_append
                 ld      (render_sink_addr), hl
-                ld      a, (render_num32 + 3)
+                ld      a, (render_num32 + 7)
                 bit     7, a
                 jp      nz, render_emit_dec_s32
                 jp      render_emit_hashx_s32
@@ -875,26 +883,41 @@ render_copy_cstr:
 
 
 ; -----------------------------------------------------------------------
-; render_out_append — append the byte in A to render_out; bump
-; render_out_len.
+; render_out_append — STREAM the byte in A to the harness output sink.
 ;
-; render_out lives in section C (HMPR-stable), so the append is unaffected
-; by the LMPR window the reader toggles for the IN pages.
+; The full-release render (~417 KB) never fits resident, so the output is not
+; buffered: each byte is emitted to RENDER_SINK_PORT, which the Go harness
+; captures (an attached IODevice accumulates every write to that port, exactly
+; as the assembler harness captures the printer channel).  render_out_len keeps
+; a 32-bit running byte count for diagnostics; the harness capture is the
+; authority the test byte-compares against render.Emit.
 ;
-; Input:  A = byte.  Output: byte stored, render_out_len += 1.
-; Clobbers: HL, DE, F.  Preserves A, BC.
+; An OUT touches no memory and does not disturb the LMPR/HMPR windows, so the
+; sink is valid in any paging state the render passes through.
+;
+; Input:  A = byte.  Output: byte emitted, render_out_len += 1.
+; Clobbers: HL, F.  Preserves A, BC, DE.
 ; -----------------------------------------------------------------------
 render_out_append:
+                out     (RENDER_SINK_PORT), a   ; stream the byte (A preserved)
                 push    af
-                ld      hl, (render_out_len)
-                ld      de, render_out
-                add     hl, de                  ; HL = render_out + len
-                pop     af
-                ld      (hl), a
                 ld      hl, (render_out_len)
                 inc     hl
                 ld      (render_out_len), hl
+                ld      a, h
+                or      l
+                jr      nz, render_oa_done      ; low word did not wrap
+                ld      hl, (render_out_len + 2)
+                inc     hl
+                ld      (render_out_len + 2), hl
+render_oa_done:
+                pop     af
                 ret
+
+; RENDER_SINK_PORT — the port the streamed source text is written to.  Mirrors
+; the printer data port (print.asm) so the same "emit a byte" shape drives a
+; disk/printer sink on real hardware; the harness captures raw writes to it.
+RENDER_SINK_PORT:       equ     &E8
 
 
 ; -----------------------------------------------------------------------
@@ -998,6 +1021,214 @@ render_pc_advance4:
                 ret
 
 
+; =======================================================================
+; Header-def tie ordering (newHeaderDefs, pc.go:44-66).  At a shared offset the
+; Go authority sorts labels by NAME and locals by DIGIT (labels always before
+; locals — the render_flush labels-then-locals order handles that).  The header
+; tables arrive offset-ascending but in the assembler's table order within a
+; tie, so render_sort_labels / render_sort_locals bubble-sort each equal-offset
+; GROUP into the required order once, before the walk.  Bubbling only swaps
+; ADJACENT rows with EQUAL offsets, so the offset ordering is preserved.
+; =======================================================================
+
+; render_sort_labels — order render_labels ties by name (ascending).
+render_sort_labels:
+                ld      hl, (render_label_count)
+                ld      de, 2
+                or      a
+                sbc     hl, de
+                ret     c                       ; < 2 rows: nothing to sort
+render_sl_pass:
+                xor     a
+                ld      (render_sl_swapped), a
+                ld      hl, 0
+                ld      (render_sl_i), hl
+render_sl_loop:
+                ld      hl, (render_sl_i)
+                inc     hl
+                ld      de, (render_label_count)
+                or      a
+                sbc     hl, de
+                jr      nc, render_sl_endpass   ; i+1 >= count
+                ld      hl, (render_sl_i)
+                call    render_label_row_addr   ; HL = &render_labels[i]
+                ld      (render_sl_pi), hl
+                ld      de, 6
+                add     hl, de
+                ld      (render_sl_pj), hl      ; &render_labels[i+1]
+                call    render_sl_offsets_eq
+                jr      nz, render_sl_next      ; different offsets: leave ordered
+                call    render_sl_name_gt       ; CF set iff name(i) > name(j)
+                jr      nc, render_sl_next
+                ld      hl, (render_sl_pi)
+                ld      de, (render_sl_pj)
+                ld      b, 6
+                call    render_swap_bytes
+                ld      a, 1
+                ld      (render_sl_swapped), a
+render_sl_next:
+                ld      hl, (render_sl_i)
+                inc     hl
+                ld      (render_sl_i), hl
+                jr      render_sl_loop
+render_sl_endpass:
+                ld      a, (render_sl_swapped)
+                or      a
+                jr      nz, render_sl_pass
+                ret
+
+; render_sort_locals — order render_locals ties by digit (ascending).
+render_sort_locals:
+                ld      hl, (render_local_count)
+                ld      de, 2
+                or      a
+                sbc     hl, de
+                ret     c
+render_slo_pass:
+                xor     a
+                ld      (render_sl_swapped), a
+                ld      hl, 0
+                ld      (render_sl_i), hl
+render_slo_loop:
+                ld      hl, (render_sl_i)
+                inc     hl
+                ld      de, (render_local_count)
+                or      a
+                sbc     hl, de
+                jr      nc, render_slo_endpass
+                ld      hl, (render_sl_i)
+                call    render_local_row_addr   ; HL = &render_locals[i]
+                ld      (render_sl_pi), hl
+                ld      de, 5
+                add     hl, de
+                ld      (render_sl_pj), hl
+                call    render_sl_offsets_eq
+                jr      nz, render_slo_next
+; digit(i) > digit(j) ? (rows are {offset u32}{digit u8})
+                ld      hl, (render_sl_pi)
+                ld      de, 4
+                add     hl, de
+                ld      a, (hl)                 ; digit(i)
+                ld      b, a
+                ld      hl, (render_sl_pj)
+                add     hl, de
+                ld      a, (hl)                 ; digit(j)
+                ld      c, a
+                ld      a, b
+                cp      c                       ; digit(i) - digit(j)
+                jr      c, render_slo_next      ; i < j → ordered
+                jr      z, render_slo_next      ; equal → no swap
+                ld      hl, (render_sl_pi)
+                ld      de, (render_sl_pj)
+                ld      b, 5
+                call    render_swap_bytes
+                ld      a, 1
+                ld      (render_sl_swapped), a
+render_slo_next:
+                ld      hl, (render_sl_i)
+                inc     hl
+                ld      (render_sl_i), hl
+                jr      render_slo_loop
+render_slo_endpass:
+                ld      a, (render_sl_swapped)
+                or      a
+                jr      nz, render_slo_pass
+                ret
+
+; render_label_row_addr — HL = index → HL = render_labels + index*6.
+render_label_row_addr:
+                ld      d, h
+                ld      e, l
+                add     hl, hl                  ; 2*index
+                add     hl, de                  ; 3*index
+                add     hl, hl                  ; 6*index
+                ld      de, render_labels
+                add     hl, de
+                ret
+
+; render_local_row_addr — HL = index → HL = render_locals + index*5.
+render_local_row_addr:
+                ld      d, h
+                ld      e, l
+                add     hl, hl                  ; 2*index
+                add     hl, hl                  ; 4*index
+                add     hl, de                  ; 5*index
+                ld      de, render_locals
+                add     hl, de
+                ret
+
+; render_sl_offsets_eq — Z=1 iff the 4-byte offsets at (render_sl_pi) and
+; (render_sl_pj) are equal.
+render_sl_offsets_eq:
+                ld      hl, (render_sl_pi)
+                ld      de, (render_sl_pj)
+                ld      b, 4
+render_sloe_loop:
+                ld      a, (de)
+                cp      (hl)
+                ret     nz
+                inc     hl
+                inc     de
+                djnz    render_sloe_loop
+                ret                             ; Z from last CP (equal)
+
+; render_sl_name_gt — CF set iff name(row i) > name(row j) lexicographically.
+render_sl_name_gt:
+                ld      hl, (render_sl_pi)
+                ld      de, 4
+                add     hl, de
+                ld      e, (hl)
+                inc     hl
+                ld      d, (hl)                 ; DE = name_id(i)
+                call    render_name_of          ; HL = strA ptr
+                ld      (render_sl_strA), hl
+                ld      hl, (render_sl_pj)
+                ld      de, 4
+                add     hl, de
+                ld      e, (hl)
+                inc     hl
+                ld      d, (hl)                 ; DE = name_id(j)
+                call    render_name_of          ; HL = strB ptr
+                ex      de, hl                  ; DE = strB
+                ld      hl, (render_sl_strA)    ; HL = strA
+                ; fall through to render_strcmp_gt
+
+; render_strcmp_gt — CF set iff the C-string at HL > the C-string at DE
+; (byte-wise lexicographic; a prefix is smaller — matches Go string `<`).
+render_strcmp_gt:
+render_scg_loop:
+                ld      a, (de)                 ; strB[k]
+                ld      b, a
+                ld      a, (hl)                 ; strA[k]
+                cp      b                       ; strA[k] - strB[k]
+                jr      c, render_scg_le        ; strA < strB
+                jr      nz, render_scg_gt       ; strA > strB
+                or      a                       ; equal bytes: nul terminator?
+                jr      z, render_scg_le        ; both ended → equal (not gt)
+                inc     hl
+                inc     de
+                jr      render_scg_loop
+render_scg_gt:
+                scf
+                ret
+render_scg_le:
+                or      a                       ; clear CF
+                ret
+
+; render_swap_bytes — swap B bytes at (HL) and (DE).
+render_swap_bytes:
+                ld      a, (hl)
+                ld      c, a
+                ld      a, (de)
+                ld      (hl), a
+                ld      a, c
+                ld      (de), a
+                inc     hl
+                inc     de
+                djnz    render_swap_bytes
+                ret
+
+
 ; -----------------------------------------------------------------------
 ; render_flush — drain the comment/blank-run sidecar at the current PC, then
 ; emit every header definition whose offset == PC.  Mirrors flush() (emit.go:122)
@@ -1097,46 +1328,33 @@ render_oep_ne:
 ; Clobbers: A, BC, DE, HL.
 ; -----------------------------------------------------------------------
 render_flush_comments:
-                ld      hl, (render_sidecar_cursor)
-                ld      de, (render_sidecar_count)
+render_fc_loop:
+; Ensure a row is decoded into the pending slot.
+                ld      a, (render_sc_pending)
                 or      a
-                sbc     hl, de
-                ret     nc                          ; cursor >= count → done
-                call    render_sc_row_addr          ; HL = &render_sidecar_rows[cursor]
-                call    render_sc_anchor_le_pc      ; C set iff anchor > pc (stop)
+                jr      nz, render_fc_have_pending
+                ld      hl, (render_sc_remaining)
+                ld      a, h
+                or      l
+                ret     z                           ; no rows remain
+                call    render_sc_stream_decode     ; decode one row → pending
+render_fc_have_pending:
+; Stop if the pending row's anchor is still ahead of the PC.
+                call    render_sc_pend_anchor_le_pc ; C set iff anchor > pc
                 ret     c
-                call    render_sc_emit_row
-                ld      hl, (render_sidecar_cursor)
-                inc     hl
-                ld      (render_sidecar_cursor), hl
-                jr      render_flush_comments
+                call    render_sc_place_pending
+                xor     a
+                ld      (render_sc_pending), a
+                jr      render_fc_loop
 
 
-; render_sc_row_addr — HL = render_sidecar_rows + render_sidecar_cursor*10.
-render_sc_row_addr:
-                ld      hl, (render_sidecar_cursor)
-                ld      d, h
-                ld      e, l                        ; DE = cursor
-                add     hl, hl                      ; 2*cursor
-                add     hl, de                      ; 3*cursor
-                add     hl, hl                      ; 6*cursor
-                add     hl, de                      ; 7*cursor
-                add     hl, de                      ; 8*cursor
-                add     hl, de                      ; 9*cursor
-                add     hl, de                      ; 10*cursor
-                ld      de, render_sidecar_rows
-                add     hl, de
-                ret
-
-
-; render_sc_anchor_le_pc — CARRY set iff row.anchor > render_pc (drain stops);
-; CARRY clear iff anchor <= pc (emit).  Computes pc - anchor as an unsigned
-; 32-bit subtract, LSB first; the final borrow is the comparison result.  INC
-; HL/DE and LD do not disturb the carry chain.  Preserves HL (the row ptr).
-; Input:  HL = &row (anchor at +0).
-render_sc_anchor_le_pc:
-                push    hl
+; render_sc_pend_anchor_le_pc — CARRY set iff the pending row's anchor >
+; render_pc (drain stops); CARRY clear iff anchor <= pc (place).  pc - anchor as
+; an unsigned 32-bit subtract, LSB first; the final borrow is the result (INC
+; HL/DE and LD do not disturb the carry chain).
+render_sc_pend_anchor_le_pc:
                 ld      de, render_pc
+                ld      hl, render_sc_pend_anchor
                 ld      a, (de)
                 sub     (hl)                        ; pc[0] - anchor[0]
                 inc     hl
@@ -1151,18 +1369,13 @@ render_sc_anchor_le_pc:
                 inc     de
                 ld      a, (de)
                 sbc     a, (hl)                     ; pc[3] - anchor[3] - borrow
-                pop     hl
                 ret                                 ; C = borrow = (pc < anchor)
 
 
-; render_sc_emit_row — dispatch one sidecar row on its kind.  emitComment
-; (emit.go:111-113) / emitBlank (emit.go:114-116).  Input: HL = &row.
-render_sc_emit_row:
-                push    hl
-                ld      de, SC_OFF_KIND
-                add     hl, de
-                ld      a, (hl)
-                pop     hl
+; render_sc_place_pending — emit the pending sidecar row on its kind.
+; emitComment (emit.go:111-113) / emitBlank (emit.go:114-116).
+render_sc_place_pending:
+                ld      a, (render_sc_pend_kind)
                 cp      SIDECAR_BLANK
                 jp      z, render_sc_emit_blank
                 ; fall through to render_sc_emit_comment
@@ -1176,31 +1389,17 @@ render_sc_emit_row:
 ; comment, takes its own "//line\n" (closing an open statement with '\n' first).
 ; prevWasStatement becomes false.
 ;
-; Input:  HL = &row (placement +5, len +6, body ptr +8).
+; Input:  the pending row (render_sc_pend_place / render_sc_pend_len) with its
+;         body already copied into render_body_buf by render_sc_stream_decode.
 ; -----------------------------------------------------------------------
 render_sc_emit_comment:
-                push    hl
-                ld      de, SC_OFF_PLACE
-                add     hl, de
-                ld      a, (hl)
+                ld      a, (render_sc_pend_place)
                 ld      (render_cb_placement), a
-                pop     hl
-                push    hl
-                ld      de, SC_OFF_BODY
+                ld      hl, render_body_buf
+                ld      (render_cb_start), hl       ; body base
+                ld      de, (render_sc_pend_len)
                 add     hl, de
-                ld      e, (hl)
-                inc     hl
-                ld      d, (hl)                     ; DE = body ptr
-                ld      (render_cb_start), de
-                pop     hl
-                ld      de, SC_OFF_LEN
-                add     hl, de
-                ld      e, (hl)
-                inc     hl
-                ld      d, (hl)                     ; DE = body length
-                ld      hl, (render_cb_start)
-                add     hl, de
-                ld      (render_cb_end), hl         ; end = body ptr + length
+                ld      (render_cb_end), hl         ; end = body base + length
                 ld      a, 1
                 ld      (render_cb_first), a
 
@@ -1309,14 +1508,10 @@ render_cb_emit_slashline:
 ; close it with '\n' (that newline is the statement's own line, not a blank),
 ; then emit render_cb (run length) blank lines.  prevWasStatement becomes false.
 ;
-; Input:  HL = &row (run length at +6).
+; Input:  the pending row's run length (render_sc_pend_len).
 ; -----------------------------------------------------------------------
 render_sc_emit_blank:
-                ld      de, SC_OFF_LEN
-                add     hl, de
-                ld      e, (hl)
-                inc     hl
-                ld      d, (hl)                     ; DE = run length (u16)
+                ld      de, (render_sc_pend_len)    ; run length (u16)
                 push    de
                 ld      a, (render_prev_stmt)
                 or      a
@@ -1380,9 +1575,10 @@ render_elo_no_nl:
                 pop     hl
                 ld      de, 4
                 add     hl, de
-                ld      a, (hl)                     ; A = digit (0..9)
-                add     a, "0"
-                call    render_out_append
+                ld      a, (hl)                     ; A = local number (0..255)
+                ld      hl, render_out_append
+                ld      (render_sink_addr), hl
+                call    render_emit_byte_dec_sink   ; number (may be multi-digit)
                 ld      a, ":"
                 call    render_out_append
                 ld      a, 1
@@ -1906,29 +2102,34 @@ render_eie_notconst:
                 jp      render_out_append
 
 
-; render_emit_const_directive — print render_num32 in directive context, no
-; leading '#': decimal for a magnitude in 1..255, else %#x (emit.go:491-503).
+; render_emit_const_directive — print render_num32 (signed 64-bit) in directive
+; context, no leading '#': decimal for a magnitude in 1..255, else %#x
+; (emit.go:491-503: v in (-256, 256) → %d, else %#x).
 render_emit_const_directive:
                 ld      hl, render_out_append
                 ld      (render_sink_addr), hl
-                ld      a, (render_num32 + 3)
+                ld      a, (render_num32 + 7)
                 bit     7, a
                 jr      nz, render_ecd_neg
-; v >= 0: decimal iff bytes 1..3 are all zero (v < 256).
+; v >= 0: decimal iff bytes 1..7 are all zero (v < 256).
                 ld      a, (render_num32 + 1)
                 ld      hl, render_num32 + 2
+                ld      b, 6
+render_ecd_pz:
                 or      (hl)
                 inc     hl
-                or      (hl)
+                djnz    render_ecd_pz
                 jr      z, render_ecd_dec
                 jp      render_emit_hashx_s32
 render_ecd_neg:
-; v < 0: decimal iff bytes 1..3 are all &FF and byte0 != 0 (v > -256).
+; v < 0: decimal iff bytes 1..7 are all &FF and byte0 != 0 (v > -256).
                 ld      a, (render_num32 + 1)
                 ld      hl, render_num32 + 2
+                ld      b, 6
+render_ecd_nf:
                 and     (hl)
                 inc     hl
-                and     (hl)
+                djnz    render_ecd_nf
                 cp      &FF
                 jp      nz, render_emit_hashx_s32
                 ld      a, (render_num32)
@@ -2009,9 +2210,10 @@ render_ssr_local:
                 ld      (render_ssr_id + 1), a       ; direction (0=f,1=b)
                 call    render_expr_atend
                 jp      nz, render_ssr_no
+                ld      hl, render_out_append
+                ld      (render_sink_addr), hl
                 ld      a, (render_ssr_id)
-                add     a, "0"
-                call    render_out_append
+                call    render_emit_byte_dec_sink    ; number (may be multi-digit)
                 ld      a, (render_ssr_id + 1)
                 or      a
                 ld      a, "f"
@@ -2161,8 +2363,7 @@ render_pe_local:
                 call    render_pe_frag_begin
                 ld      hl, (render_expr_operand)
                 ld      a, (hl)
-                add     a, "0"
-                call    render_pe_putc
+                call    render_emit_byte_dec_sink    ; number (sink = render_pe_putc)
                 ld      hl, (render_expr_operand)
                 inc     hl
                 ld      a, (hl)
@@ -2535,21 +2736,13 @@ render_ev_unary_neg:
 render_ev_unary_not:
                 call    render_ev_pop_num32
                 ld      hl, render_num32
+                ld      b, 8
+render_ev_not_loop:
                 ld      a, (hl)
                 cpl
                 ld      (hl), a
                 inc     hl
-                ld      a, (hl)
-                cpl
-                ld      (hl), a
-                inc     hl
-                ld      a, (hl)
-                cpl
-                ld      (hl), a
-                inc     hl
-                ld      a, (hl)
-                cpl
-                ld      (hl), a
+                djnz    render_ev_not_loop
                 call    render_ev_push_num32
                 jp      render_ev_loop
 render_ev_end:
@@ -2569,12 +2762,12 @@ render_ev_do_binary:
                 call    render_ev_pop_num32
                 ld      hl, render_num32
                 ld      de, render_ev_b
-                ld      bc, 4
+                ld      bc, 8
                 ldir
                 call    render_ev_pop_num32
                 ld      hl, render_num32
                 ld      de, render_ev_a
-                ld      bc, 4
+                ld      bc, 8
                 ldir
                 ld      a, (render_cur_op)
                 cp      EXPR_OP_ADD
@@ -2593,94 +2786,100 @@ render_ev_do_binary:
                 jp      z, render_ev_op_shr
                 jp      fail
 render_ev_op_add:
-                ld      hl, (render_ev_a)
-                ld      de, (render_ev_b)
+                ld      hl, (render_ev_a + 0)
+                ld      de, (render_ev_b + 0)
                 add     hl, de
-                ld      (render_num32), hl
+                ld      (render_num32 + 0), hl
                 ld      hl, (render_ev_a + 2)
                 ld      de, (render_ev_b + 2)
                 adc     hl, de
                 ld      (render_num32 + 2), hl
+                ld      hl, (render_ev_a + 4)
+                ld      de, (render_ev_b + 4)
+                adc     hl, de
+                ld      (render_num32 + 4), hl
+                ld      hl, (render_ev_a + 6)
+                ld      de, (render_ev_b + 6)
+                adc     hl, de
+                ld      (render_num32 + 6), hl
                 jp      render_ev_push_num32
 render_ev_op_sub:
-                ld      hl, (render_ev_a)
-                ld      de, (render_ev_b)
+                ld      hl, (render_ev_a + 0)
+                ld      de, (render_ev_b + 0)
                 or      a
                 sbc     hl, de
-                ld      (render_num32), hl
+                ld      (render_num32 + 0), hl
                 ld      hl, (render_ev_a + 2)
                 ld      de, (render_ev_b + 2)
                 sbc     hl, de
                 ld      (render_num32 + 2), hl
+                ld      hl, (render_ev_a + 4)
+                ld      de, (render_ev_b + 4)
+                sbc     hl, de
+                ld      (render_num32 + 4), hl
+                ld      hl, (render_ev_a + 6)
+                ld      de, (render_ev_b + 6)
+                sbc     hl, de
+                ld      (render_num32 + 6), hl
                 jp      render_ev_push_num32
+; render_ev_op_and/or/xor — bytewise 64-bit: num32 = a, then num32 op= b.
 render_ev_op_and:
-                ld      a, (render_ev_a + 0)
-                ld      hl, render_ev_b + 0
-                and     (hl)
-                ld      (render_num32 + 0), a
-                ld      a, (render_ev_a + 1)
-                ld      hl, render_ev_b + 1
-                and     (hl)
-                ld      (render_num32 + 1), a
-                ld      a, (render_ev_a + 2)
-                ld      hl, render_ev_b + 2
-                and     (hl)
-                ld      (render_num32 + 2), a
-                ld      a, (render_ev_a + 3)
-                ld      hl, render_ev_b + 3
-                and     (hl)
-                ld      (render_num32 + 3), a
-                jp      render_ev_push_num32
-render_ev_op_or:
-                ld      a, (render_ev_a + 0)
-                ld      hl, render_ev_b + 0
-                or      (hl)
-                ld      (render_num32 + 0), a
-                ld      a, (render_ev_a + 1)
-                ld      hl, render_ev_b + 1
-                or      (hl)
-                ld      (render_num32 + 1), a
-                ld      a, (render_ev_a + 2)
-                ld      hl, render_ev_b + 2
-                or      (hl)
-                ld      (render_num32 + 2), a
-                ld      a, (render_ev_a + 3)
-                ld      hl, render_ev_b + 3
-                or      (hl)
-                ld      (render_num32 + 3), a
-                jp      render_ev_push_num32
-render_ev_op_xor:
-                ld      a, (render_ev_a + 0)
-                ld      hl, render_ev_b + 0
-                xor     (hl)
-                ld      (render_num32 + 0), a
-                ld      a, (render_ev_a + 1)
-                ld      hl, render_ev_b + 1
-                xor     (hl)
-                ld      (render_num32 + 1), a
-                ld      a, (render_ev_a + 2)
-                ld      hl, render_ev_b + 2
-                xor     (hl)
-                ld      (render_num32 + 2), a
-                ld      a, (render_ev_a + 3)
-                ld      hl, render_ev_b + 3
-                xor     (hl)
-                ld      (render_num32 + 3), a
-                jp      render_ev_push_num32
-render_ev_op_shl:
-; render_num32 = a; shift left by b (b>=32 or any high byte → 0).
                 ld      hl, render_ev_a
                 ld      de, render_num32
-                ld      bc, 4
+                ld      bc, 8
                 ldir
-                ld      a, (render_ev_b + 1)
-                ld      hl, render_ev_b + 2
-                or      (hl)
+                ld      hl, render_num32
+                ld      de, render_ev_b
+                ld      b, 8
+render_evand_loop:
+                ld      a, (de)
+                and     (hl)
+                ld      (hl), a
                 inc     hl
+                inc     de
+                djnz    render_evand_loop
+                jp      render_ev_push_num32
+render_ev_op_or:
+                ld      hl, render_ev_a
+                ld      de, render_num32
+                ld      bc, 8
+                ldir
+                ld      hl, render_num32
+                ld      de, render_ev_b
+                ld      b, 8
+render_evor_loop:
+                ld      a, (de)
                 or      (hl)
-                jr      nz, render_ev_shl_zero
-                ld      a, (render_ev_b)
-                cp      32
+                ld      (hl), a
+                inc     hl
+                inc     de
+                djnz    render_evor_loop
+                jp      render_ev_push_num32
+render_ev_op_xor:
+                ld      hl, render_ev_a
+                ld      de, render_num32
+                ld      bc, 8
+                ldir
+                ld      hl, render_num32
+                ld      de, render_ev_b
+                ld      b, 8
+render_evxor_loop:
+                ld      a, (de)
+                xor     (hl)
+                ld      (hl), a
+                inc     hl
+                inc     de
+                djnz    render_evxor_loop
+                jp      render_ev_push_num32
+render_ev_op_shl:
+; render_num32 = a; shift left by b.  A shift count >= 64 (or any high byte of
+; b set — Go's a<<uint64(b) with b>=64 or b<0) yields 0.
+                ld      hl, render_ev_a
+                ld      de, render_num32
+                ld      bc, 8
+                ldir
+                call    render_ev_shift_count        ; A = count, or >=64 sentinel
+                cp      64
                 jr      nc, render_ev_shl_zero
                 or      a
                 jp      z, render_ev_push_num32
@@ -2691,26 +2890,21 @@ render_ev_shl_loop:
                 jp      render_ev_push_num32
 render_ev_shl_zero:
                 ld      hl, 0
-                ld      (render_num32), hl
+                ld      (render_num32 + 0), hl
                 ld      (render_num32 + 2), hl
+                ld      (render_num32 + 4), hl
+                ld      (render_num32 + 6), hl
                 jp      render_ev_push_num32
 render_ev_op_shr:
-; render_num32 = a; arithmetic shift right by b (capped at 32 → sign fill).
+; render_num32 = a; arithmetic shift right by b (count capped at 64 → sign fill).
                 ld      hl, render_ev_a
                 ld      de, render_num32
-                ld      bc, 4
+                ld      bc, 8
                 ldir
-                ld      a, (render_ev_b + 1)
-                ld      hl, render_ev_b + 2
-                or      (hl)
-                inc     hl
-                or      (hl)
-                jr      nz, render_ev_shr_cap
-                ld      a, (render_ev_b)
-                cp      33
+                call    render_ev_shift_count        ; A = count, or >=64 sentinel
+                cp      64
                 jr      c, render_ev_shr_have
-render_ev_shr_cap:
-                ld      a, 32
+                ld      a, 64
 render_ev_shr_have:
                 or      a
                 jp      z, render_ev_push_num32
@@ -2720,18 +2914,36 @@ render_ev_shr_loop:
                 djnz    render_ev_shr_loop
                 jp      render_ev_push_num32
 
-; render_ev_push_num32 / _pop_num32 — 32-bit value stack.
+; render_ev_shift_count — A = the shift amount from render_ev_b, or 64 (clamped)
+; when any byte above byte 0 is set (b >= 256, always a full shift).
+render_ev_shift_count:
+                ld      hl, render_ev_b + 1
+                ld      b, 7
+                ld      a, 0
+render_evsc_loop:
+                or      (hl)
+                inc     hl
+                djnz    render_evsc_loop
+                jr      z, render_evsc_lowbyte       ; high bytes all zero
+                ld      a, 64                        ; clamp to a full shift
+                ret
+render_evsc_lowbyte:
+                ld      a, (render_ev_b)
+                ret
+
+; render_ev_push_num32 / _pop_num32 — 64-bit value stack (depth * 8 bytes).
 render_ev_push_num32:
                 ld      a, (render_ev_depth)
                 ld      l, a
                 ld      h, 0
                 add     hl, hl
-                add     hl, hl                       ; depth * 4
+                add     hl, hl
+                add     hl, hl                       ; depth * 8
                 ld      de, render_ev_stack
                 add     hl, de
                 ex      de, hl
                 ld      hl, render_num32
-                ld      bc, 4
+                ld      bc, 8
                 ldir
                 ld      a, (render_ev_depth)
                 inc     a
@@ -2745,10 +2957,11 @@ render_ev_pop_num32:
                 ld      h, 0
                 add     hl, hl
                 add     hl, hl
+                add     hl, hl                       ; depth * 8
                 ld      de, render_ev_stack
                 add     hl, de
                 ld      de, render_num32
-                ld      bc, 4
+                ld      bc, 8
                 ldir
                 ret
 
@@ -2757,7 +2970,15 @@ render_ev_pop_num32:
 ; 32-bit signed helpers used by both the const printer and PC sizing.
 ; -----------------------------------------------------------------------
 
-; render_sx8_to_num32 — A (int8) → render_num32 sign-extended.
+; render_signfill — fill C bytes at (HL) with A (a sign byte 0/&FF).
+render_signfill:
+                ld      (hl), a
+                inc     hl
+                dec     c
+                jr      nz, render_signfill
+                ret
+
+; render_sx8_to_num32 — A (int8) → render_num32 sign-extended to 64 bits.
 render_sx8_to_num32:
                 ld      (render_num32), a
                 ld      b, 0
@@ -2766,12 +2987,11 @@ render_sx8_to_num32:
                 ld      b, &FF
 render_sx8_p:
                 ld      a, b
-                ld      (render_num32 + 1), a
-                ld      (render_num32 + 2), a
-                ld      (render_num32 + 3), a
-                ret
+                ld      hl, render_num32 + 1
+                ld      c, 7
+                jp      render_signfill
 
-; render_sx16_to_num32 — (render_expr_operand) int16 → render_num32.
+; render_sx16_to_num32 — (render_expr_operand) int16 → render_num32 (64-bit).
 render_sx16_to_num32:
                 ld      hl, (render_expr_operand)
                 ld      a, (hl)
@@ -2785,94 +3005,108 @@ render_sx16_to_num32:
                 ld      b, &FF
 render_sx16_p:
                 ld      a, b
-                ld      (render_num32 + 2), a
-                ld      (render_num32 + 3), a
-                ret
+                ld      hl, render_num32 + 2
+                ld      c, 6
+                jp      render_signfill
 
-; render_sx32_to_num32 — (render_expr_operand) int32 → render_num32.
+; render_sx32_to_num32 — (render_expr_operand) int32 → render_num32 (64-bit).
 render_sx32_to_num32:
                 ld      hl, (render_expr_operand)
                 ld      de, render_num32
                 ld      bc, 4
                 ldir
-                ret
+                ld      a, (render_num32 + 3)
+                ld      b, 0
+                bit     7, a
+                jr      z, render_sx32_p
+                ld      b, &FF
+render_sx32_p:
+                ld      a, b
+                ld      hl, render_num32 + 4
+                ld      c, 4
+                jp      render_signfill
 
-; render_sx64_to_num32 — (render_expr_operand) low 32 bits → render_num32.
-; Narrows Go's int64 push to 32 bits (see slice header note).
+; render_sx64_to_num32 — (render_expr_operand) int64 → render_num32 (all 8 bytes).
 render_sx64_to_num32:
                 ld      hl, (render_expr_operand)
                 ld      de, render_num32
-                ld      bc, 4
+                ld      bc, 8
                 ldir
                 ret
 
-; render_neg_num32 — render_num32 = -render_num32 (two's complement).
+; render_neg_num32 — render_num32 = -render_num32 (64-bit two's complement).
 render_neg_num32:
                 ld      hl, render_num32
+                ld      b, 8
+render_neg_cpl:
                 ld      a, (hl)
                 cpl
                 ld      (hl), a
                 inc     hl
+                djnz    render_neg_cpl
+                ld      hl, render_num32
+                ld      b, 8
+                scf                                  ; the +1 of two's complement
+render_neg_inc:
                 ld      a, (hl)
-                cpl
+                adc     a, 0
                 ld      (hl), a
-                inc     hl
-                ld      a, (hl)
-                cpl
-                ld      (hl), a
-                inc     hl
-                ld      a, (hl)
-                cpl
-                ld      (hl), a
-                ld      hl, (render_num32)
-                inc     hl
-                ld      (render_num32), hl
-                ld      a, h
-                or      l
-                ret     nz
-                ld      hl, (render_num32 + 2)
-                inc     hl
-                ld      (render_num32 + 2), hl
+                inc     hl                           ; INC HL / DJNZ preserve carry
+                djnz    render_neg_inc
                 ret
 
-; render_num32_shl1 — render_num32 <<= 1.
+; render_num32_shl1 — render_num32 <<= 1 (64-bit; LD preserves carry).
 render_num32_shl1:
-                ld      hl, (render_num32)
+                ld      hl, (render_num32 + 0)
                 add     hl, hl
-                ld      (render_num32), hl
+                ld      (render_num32 + 0), hl
                 ld      hl, (render_num32 + 2)
                 adc     hl, hl
                 ld      (render_num32 + 2), hl
+                ld      hl, (render_num32 + 4)
+                adc     hl, hl
+                ld      (render_num32 + 4), hl
+                ld      hl, (render_num32 + 6)
+                adc     hl, hl
+                ld      (render_num32 + 6), hl
                 ret
 
-; render_num32_sar1 — render_num32 >>= 1 (arithmetic).
+; render_num32_sar1 — render_num32 >>= 1 (64-bit arithmetic; MSB word first).
 render_num32_sar1:
-                ld      hl, (render_num32 + 2)
+                ld      hl, (render_num32 + 6)
                 sra     h
                 rr      l
-                ld      (render_num32 + 2), hl
-                ld      hl, (render_num32)
+                ld      (render_num32 + 6), hl
+                ld      hl, (render_num32 + 4)
                 rr      h
                 rr      l
-                ld      (render_num32), hl
+                ld      (render_num32 + 4), hl
+                ld      hl, (render_num32 + 2)
+                rr      h
+                rr      l
+                ld      (render_num32 + 2), hl
+                ld      hl, (render_num32 + 0)
+                rr      h
+                rr      l
+                ld      (render_num32 + 0), hl
                 ret
 
-; render_num32_is_zero — Z=1 iff render_num32 == 0.
+; render_num32_is_zero — Z=1 iff render_num32 == 0 (all 8 bytes).
 render_num32_is_zero:
                 ld      a, (render_num32)
                 ld      hl, render_num32 + 1
+                ld      b, 7
+render_niz_loop:
                 or      (hl)
                 inc     hl
-                or      (hl)
-                inc     hl
-                or      (hl)
+                djnz    render_niz_loop
                 ret
 
-; render_u32_div10 — render_num32 /= 10; A = remainder (base-256 long div).
+; render_u32_div10 — render_num32 /= 10; A = remainder (64-bit base-256 long div).
 render_u32_div10:
                 ld      c, 0                         ; running remainder
-                ld      b, 4
-                ld      hl, render_num32 + 3         ; MSB first
+                ld      b, 8
+                ld      hl, render_num32 + 7         ; MSB first
 render_div10_byteloop:
                 ld      d, c
                 ld      e, (hl)                      ; DE = rem*256 + byte
@@ -2903,10 +3137,11 @@ render_div10_qdone:
 
 
 ; -----------------------------------------------------------------------
-; render_emit_dec_s32 — append render_num32 as signed decimal via render_sink.
+; render_emit_dec_s32 — append render_num32 (signed 64-bit) as decimal via
+; render_sink.
 ; -----------------------------------------------------------------------
 render_emit_dec_s32:
-                ld      a, (render_num32 + 3)
+                ld      a, (render_num32 + 7)
                 bit     7, a
                 jr      z, render_dec_pos
                 ld      a, "-"
@@ -2942,10 +3177,49 @@ render_dec_emit_go:
 
 
 ; -----------------------------------------------------------------------
-; render_emit_hashx_s32 — append render_num32 as Go's %#x via render_sink.
+; render_emit_byte_dec_sink — append A (an unsigned 0..255) as decimal via
+; render_sink (leading zeros suppressed, always at least one digit).  Numeric
+; local labels carry a number, not a single 0..9 digit (Go renders `%d%c`, e.g.
+; "10f"), so this replaces the `add a,'0'` single-digit path at every local site.
+; Clobbers A, BC, DE, HL (render_sink preserves BC/DE/A across each byte).
+; -----------------------------------------------------------------------
+render_emit_byte_dec_sink:
+                ld      e, a                         ; E = remaining value
+                ld      d, 0                         ; D = 0 while suppressing leading zeros
+                ld      c, 100
+                call    render_ebd_place
+                ld      c, 10
+                call    render_ebd_place
+                ld      a, e                         ; units digit (always emitted)
+                add     a, "0"
+                jp      render_sink                  ; tail-call
+render_ebd_place:
+                ld      a, e
+                ld      b, "0" - 1                   ; B = '0' + quotient (pre-increment)
+render_ebd_sub:
+                inc     b
+                sub     c
+                jr      nc, render_ebd_sub
+                add     a, c                         ; undo the over-subtract → remainder
+                ld      e, a
+                ld      a, b
+                cp      "0"
+                jr      nz, render_ebd_emit          ; nonzero quotient → emit
+                ld      a, d
+                or      a
+                ret     z                            ; leading zero → suppress
+                ld      a, "0"
+render_ebd_emit:
+                ld      d, 1                          ; stop suppressing after a real digit
+                jp      render_sink                  ; tail-call (returns to render_ebd_place's caller)
+
+
+; -----------------------------------------------------------------------
+; render_emit_hashx_s32 — append render_num32 (signed 64-bit) as Go's %#x via
+; render_sink.
 ; -----------------------------------------------------------------------
 render_emit_hashx_s32:
-                ld      a, (render_num32 + 3)
+                ld      a, (render_num32 + 7)
                 bit     7, a
                 jr      z, render_hx_pos
                 ld      a, "-"
@@ -2958,8 +3232,8 @@ render_hx_pos:
                 call    render_sink
                 xor     a
                 ld      (render_hexseen), a
-                ld      b, 4
-                ld      hl, render_num32 + 3
+                ld      b, 8
+                ld      hl, render_num32 + 7
 render_hx_byteloop:
                 ld      c, (hl)
                 push    hl
@@ -3221,8 +3495,10 @@ render_dir_byte_size:
                 jp      z, render_dbs_balign
 render_dbs_zero:
                 ld      hl, 0
-                ld      (render_num32), hl
+                ld      (render_num32 + 0), hl
                 ld      (render_num32 + 2), hl
+                ld      (render_num32 + 4), hl
+                ld      (render_num32 + 6), hl
                 ret
 render_dbs_x1:
                 jp      render_dbs_set_opcount
@@ -3259,11 +3535,13 @@ render_dbs_4:
                 ld      (render_num32), hl
                 ld      hl, 0
                 ld      (render_num32 + 2), hl
+                ld      (render_num32 + 4), hl
+                ld      (render_num32 + 6), hl
                 ret
 render_dbs_align:
                 call    render_dir_eval_op0          ; render_num32 = N, Z=const?
                 jp      nz, render_dbs_zero
-                ld      a, (render_num32 + 3)
+                ld      a, (render_num32 + 7)
                 bit     7, a
                 jp      nz, render_dbs_zero          ; N < 0 → 0
                 call    render_num32_is_zero
@@ -3291,17 +3569,19 @@ render_dbs_balign:
 render_dbs_balign_go:
                 jp      render_align_pad
 
-; render_dbs_set_opcount — render_num32 = op_count (zero-extended).
+; render_dbs_set_opcount — render_num32 = op_count (zero-extended to 64 bits).
 render_dbs_set_opcount:
                 ld      a, (render_dir_opcount)
                 ld      (render_num32), a
                 xor     a
                 ld      (render_num32 + 1), a
-                ld      (render_num32 + 2), a
-                ld      (render_num32 + 3), a
+                ld      hl, 0
+                ld      (render_num32 + 2), hl
+                ld      (render_num32 + 4), hl
+                ld      (render_num32 + 6), hl
                 ret
 
-; render_dir_op0_len — render_num32 = length of operand-0's string.
+; render_dir_op0_len — render_num32 = length of operand-0's string (64-bit).
 render_dir_op0_len:
                 ld      hl, (render_dir_ops_ptr)
                 inc     hl                           ; skip kind
@@ -3311,6 +3591,8 @@ render_dir_op0_len:
                 ld      (render_num32), de
                 ld      hl, 0
                 ld      (render_num32 + 2), hl
+                ld      (render_num32 + 4), hl
+                ld      (render_num32 + 6), hl
                 ret
 
 ; render_dir_eval_op0 — EvalConst on operand-0's expression → render_num32.
@@ -3559,8 +3841,10 @@ render_str_absg3:       defm    "abs_g3"
 ; Render state + output buffer (section C — read by the driver's harness
 ; after render_run returns).
 ; -----------------------------------------------------------------------
-RENDER_MAX_LABELS:      equ     64
-RENDER_MAX_LOCALS:      equ     64
+; Sized for the full release corpus: 282 header-label defs, 172 numeric-local
+; defs (both read once by reader_init and flushed by PC during the walk).
+RENDER_MAX_LABELS:      equ     320
+RENDER_MAX_LOCALS:      equ     192
 
 render_label_count:     defw    0       ; header label rows stored
 render_label_cursor:    defw    0       ; flush cursor into render_labels
@@ -3575,6 +3859,13 @@ render_origin_vma:      defb    0, 0, 0, 0      ; origin VMA (set by the leading
 
 render_labels:          defs    RENDER_MAX_LABELS * 6   ; [offset u32][name_id u16]
 render_locals:          defs    RENDER_MAX_LOCALS * 5   ; [offset u32][digit u8]
+
+; Header-def tie-sort scratch (render_sort_labels / render_sort_locals).
+render_sl_i:            defw    0       ; bubble-sort outer index
+render_sl_swapped:      defb    0       ; a swap happened this pass
+render_sl_pi:          defw    0       ; &row[i]
+render_sl_pj:          defw    0       ; &row[i+1]
+render_sl_strA:        defw    0       ; name(row i) string ptr
 
 render_prev_stmt:       defb    0       ; prevWasStatement flag (emit.go)
 render_rir_src:         defw    0       ; INSN_RUN mode-0 element source cursor
@@ -3612,8 +3903,7 @@ render_cb_scan:         defw    0       ; '\n' scan cursor
 render_cb_seg_end:      defw    0       ; current segment end (exclusive)
 render_cb_seg_len:      defw    0       ; current segment length (post-'\r'-strip)
 
-render_out_len:         defw    0       ; bytes written to render_out
-render_out:             defs    512     ; rendered source text
+render_out_len:         defb    0, 0, 0, 0      ; 32-bit count of bytes streamed out
 
 
 ; -----------------------------------------------------------------------
@@ -3623,7 +3913,7 @@ RENDER_EV_MAX_DEPTH:    equ     16      ; const-eval value-stack depth
 RENDER_PE_MAX_DEPTH:    equ     16      ; printExpr text-stack depth
 RENDER_PE_ARENA_SIZE:   equ     512     ; printExpr fragment arena
 
-render_num32:           defs    4       ; 32-bit signed accumulator / result
+render_num32:           defs    8       ; 64-bit signed accumulator / result
 
 render_dir_id:          defb    0       ; current directive id
 render_dir_opcount:     defb    0       ; operand count
@@ -3643,16 +3933,16 @@ render_expr_operand:    defw    0       ; ptr to the current opcode's inline ope
 render_cur_op:          defb    0       ; current expr opcode
 
 render_ev_depth:        defb    0       ; const-eval value-stack depth
-render_ev_stack:        defs    RENDER_EV_MAX_DEPTH * 4
-render_ev_a:            defs    4       ; binary-op left operand
-render_ev_b:            defs    4       ; binary-op right operand
+render_ev_stack:        defs    RENDER_EV_MAX_DEPTH * 8 ; 64-bit values
+render_ev_a:            defs    8       ; binary-op left operand
+render_ev_b:            defs    8       ; binary-op right operand
 
 render_align:           defs    4       ; alignment boundary
 render_align_n:         defb    0       ; .align exponent (align = 1 << n)
 render_align_addr:      defs    4       ; (origin+pc) dividend (consumed by mod)
 render_align_rem:       defs    4       ; (origin+pc) mod align
 
-render_decbuf:          defs    12      ; decimal digits (reverse order)
+render_decbuf:          defs    24      ; decimal digits (reverse order; 64-bit)
 render_decptr:          defw    0       ; decimal-digit cursor
 render_hexseen:         defb    0       ; %#x leading-zero suppression flag
 render_sink_addr:       defw    render_out_append   ; active byte sink

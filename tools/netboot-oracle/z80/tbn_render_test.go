@@ -1,19 +1,20 @@
 // tbn_render_test.go — oracle for the Z80 `.tbn` → source-text renderer
-// (i365a slice 1).  It runs build/tbn_render_driver.bin in the koron-go/z80
-// emulator over a single-`nop` on-disk `.tbn` and asserts the rendered text
-// byte-matches the Go authority render.Emit.
+// (i365a).  It runs build/tbn_render_driver.bin in the koron-go/z80 emulator
+// over an on-disk `.tbn` and asserts the streamed source text byte-matches the
+// Go authority render.Emit.
 //
 // The renderer reuses build/disasm.bin (the src/disasm.asm disassembler) for
 // instruction decode via paged_call, so both binaries are loaded: the driver
-// into a section-C page (+ its section-D neighbour), disasm.bin into physical
-// page 15 (DISASM_PAGE).  The fixture `.tbn` is staged in the IN page and
-// render_run walks it, writing text to render_out with its length in
-// render_out_len (both section-C, read after the routine returns).
+// into a section-C page (+ its section-D neighbour), disasm.bin into the top
+// physical page (DISASM_PAGE).  The `.tbn` is staged across a contiguous run of
+// IN pages (one page for a small fixture, ~23 for the full release), and
+// render_run streams the rendered text out RENDER_SINK_PORT, which the harness
+// captures (renderSink).  The S8 capstone (TestTbnRenderFullRelease) renders the
+// full build/release-unstripped.tbn byte-for-byte.
 package z80_test
 
 import (
 	"bytes"
-	"encoding/binary"
 	"os"
 	"testing"
 
@@ -25,9 +26,31 @@ import (
 	"github.com/petemoore/sam-aarch64/tools/sampage"
 )
 
-// renderTBNOnZ80 boots build/tbn_render_driver.bin over the staged `.tbn` and
-// returns the bytes render_run wrote to render_out.  Shared by the slice tests.
-func renderTBNOnZ80(t *testing.T, tbn []byte) []byte {
+// renderSink captures the streamed source text: the driver emits each rendered
+// byte with `out (RENDER_SINK_PORT), a`, and this IODevice accumulates every
+// write to that port — the same shape the assembler harness uses to capture the
+// printer channel.  The output (~417 KB for the release corpus) is never resident
+// on the Z80 side, so this stream is the render's only observable output.
+type renderSink struct {
+	buf bytes.Buffer
+}
+
+// renderSinkPort mirrors RENDER_SINK_PORT in tbn_render.asm (the printer data
+// port &E8).
+const renderSinkPort = 0xE8
+
+func (s *renderSink) In(port uint8) uint8 { return 0xFF }
+func (s *renderSink) Out(port uint8, value uint8) {
+	if port == renderSinkPort {
+		s.buf.WriteByte(value)
+	}
+}
+
+// stageRenderMachine loads the driver, disasm.bin, and the `.tbn` (staged across
+// a contiguous run of IN pages) into a fresh machine, attaches the streaming
+// sink, and returns both.  The multi-page IN staging is the S8 capstone: a small
+// fixture occupies one IN page; the full release `.tbn` spans ~23 pages.
+func stageRenderMachine(t *testing.T, tbn []byte) (*z80h.Machine, *renderSink) {
 	t.Helper()
 	for _, path := range []string{tbnRenderDriverBin, tbnRenderDriverMap, tbnRenderDisasmBin} {
 		if _, err := os.Stat(path); err != nil {
@@ -59,61 +82,98 @@ func renderTBNOnZ80(t *testing.T, tbn []byte) []byte {
 	if len(secondPage) > 0 {
 		copy(pager.RAM[tbnRenderDriverPage+1][:], secondPage)
 	}
-	copy(pager.RAM[tbnRenderDisasmPage][:], disasmBin) // disasm.bin in page 15
-	copy(pager.RAM[tbnRenderInPage][:], tbn)           // `.tbn` at offset 0 of the IN page
+	copy(pager.RAM[tbnRenderDisasmPage][:], disasmBin) // disasm.bin in the top page
+
+	// Stage the `.tbn` across the contiguous IN run (pages tbnRenderInPage..).
+	// paged_call's page (tbnRenderInPage-1) is left empty — render_run installs
+	// the trampoline body there at runtime.
+	for off, page := 0, tbnRenderInPage; off < len(tbn); off, page = off+sampage.PageSize, page+1 {
+		end := off + sampage.PageSize
+		if end > len(tbn) {
+			end = len(tbn)
+		}
+		if page >= sampage.NumPages {
+			t.Fatalf("`.tbn` too large: %d bytes overflows the IN run at page %d", len(tbn), page)
+		}
+		copy(pager.RAM[page][:], tbn[off:end])
+	}
 
 	if err := mac.LoadSymbols(tbnRenderDriverMap); err != nil {
 		t.Fatalf("LoadSymbols: %v", err)
 	}
 
-	res, callErr := mac.CallEntry("render_run", z80h.Entry{})
+	sink := &renderSink{}
+	mac.AttachIO(sink)
+	return mac, sink
+}
+
+// renderTBNOnZ80 boots build/tbn_render_driver.bin over the staged `.tbn` and
+// returns the streamed source text.  Shared by the slice tests.
+func renderTBNOnZ80(t *testing.T, tbn []byte) []byte {
+	t.Helper()
+	mac, sink := stageRenderMachine(t, tbn)
+
+	res, callErr := mac.CallEntry("render_run", z80h.Entry{StepCap: renderStepCap})
 	if callErr != nil {
 		t.Fatalf("render_run: %v", callErr)
 	}
 	if !res.Halted {
 		t.Fatalf("render_run did not return cleanly (PC=&%04X)", res.PC)
 	}
-
-	outLenAddr, err := mac.Sym("render_out_len")
-	if err != nil {
-		t.Fatalf("render_out_len symbol: %v", err)
-	}
-	gotLen := int(binary.LittleEndian.Uint16(mac.Read(outLenAddr, 2)))
-
-	outAddr, err := mac.Sym("render_out")
-	if err != nil {
-		t.Fatalf("render_out symbol: %v", err)
-	}
-	return mac.Read(outAddr, gotLen)
+	return sink.buf.Bytes()
 }
 
+// renderStepCap bounds a render run.  The full-release render takes ~24.7M steps
+// (decoding ~9000 instructions through disasm.bin and streaming ~417 KB), past
+// the 5M default; this ceiling gives ~8x headroom yet still fails a genuine
+// runaway fast.
+const renderStepCap = 200_000_000
+
 // assertRenderMatch compares the Z80 render output against the Go authority,
-// printing the first byte divergence for debugging.
+// printing the first byte divergence with a readable context window.  It never
+// dumps the whole buffers (the release output is ~417 KB); on mismatch it reports
+// the lengths, the first differing offset, and ~200 bytes of got vs want around
+// it as Go-quoted strings (so newlines/tabs are visible).
 func assertRenderMatch(t *testing.T, got, want []byte) {
 	t.Helper()
 	if bytes.Equal(got, want) {
 		return
 	}
-	t.Errorf("render mismatch: Z80 %d bytes %X, host %d bytes %X", len(got), got, len(want), want)
+	t.Errorf("render mismatch: Z80 produced %d bytes, host authority %d bytes", len(got), len(want))
+
 	maxShow := len(got)
 	if len(want) < maxShow {
 		maxShow = len(want)
 	}
+	diff := -1
 	for i := 0; i < maxShow; i++ {
 		if got[i] != want[i] {
-			lo := i - 8
-			if lo < 0 {
-				lo = 0
-			}
-			hi := i + 16
-			if hi > maxShow {
-				hi = maxShow
-			}
-			t.Errorf("first diff at byte %d: got[%d:%d]=%X want[%d:%d]=%X",
-				i, lo, hi, got[lo:hi], lo, hi, want[lo:hi])
+			diff = i
 			break
 		}
 	}
+	if diff < 0 {
+		// One is a prefix of the other; the divergence is at the shorter length.
+		diff = maxShow
+	}
+	const ctx = 100
+	lo := diff - ctx
+	if lo < 0 {
+		lo = 0
+	}
+	clip := func(b []byte) []byte {
+		hi := diff + ctx
+		if hi > len(b) {
+			hi = len(b)
+		}
+		if lo > len(b) {
+			return nil
+		}
+		return b[lo:hi]
+	}
+	t.Errorf("first diff at byte %d", diff)
+	t.Errorf("got [%d:]  = %q", lo, clip(got))
+	t.Errorf("want[%d:]  = %q", lo, clip(want))
 }
 
 const (
@@ -122,24 +182,21 @@ const (
 	tbnRenderDisasmBin = "../../../build/disasm.bin"
 
 	// tbnRenderDriverPage is the physical page the driver's section C maps to
-	// (HMPR low 5 bits); section D is the next page.
+	// (HMPR low 5 bits); section D is the next page (driver data spills there for
+	// the full corpus, with STAGING_BUF + stack relocated to the top of it).
 	tbnRenderDriverPage = 3
-	// tbnRenderInPage is the physical page the fixture `.tbn` is staged in
-	// (LMPR_RENDER=&28 → section A = page 8, section B = page 9 = paged_call).
+	// tbnRenderInPage is the first physical page of the contiguous IN run; the
+	// `.tbn` is staged from here upward (IN_FIRST_LMPR=&28 → page 8).  The page
+	// below it (7) holds the runtime-installed paged_call body, out of the run.
 	tbnRenderInPage = 8
-	// tbnRenderDisasmPage is where build/disasm.bin is resident (DISASM_PAGE).
-	tbnRenderDisasmPage = 15
+	// tbnRenderDisasmPage is where build/disasm.bin is resident (DISASM_PAGE),
+	// the top page above the IN run.
+	tbnRenderDisasmPage = 31
 )
 
 // TestTbnRenderNop is slice 1's parity proof: a single-`nop` on-disk `.tbn`
 // renders to exactly "  nop\n" on the Z80, byte-identical to render.Emit.
 func TestTbnRenderNop(t *testing.T) {
-	for _, path := range []string{tbnRenderDriverBin, tbnRenderDriverMap, tbnRenderDisasmBin} {
-		if _, err := os.Stat(path); err != nil {
-			t.Fatalf("required binary not built (%s); run `make tbn-render-driver-z80`", path)
-		}
-	}
-
 	// Build the single-nop `.tbn` in-process (the on-disk overlay form).
 	var rw format.RecordWriter
 	rw.WriteInsnRun(0, []format.InsnElement{{BaseWord: 0xD503201F}}) // nop
@@ -155,80 +212,8 @@ func TestTbnRenderNop(t *testing.T) {
 		t.Fatalf("render.Emit: %v", err)
 	}
 
-	driverBin, err := os.ReadFile(tbnRenderDriverBin)
-	if err != nil {
-		t.Fatalf("read driver: %v", err)
-	}
-	disasmBin, err := os.ReadFile(tbnRenderDisasmBin)
-	if err != nil {
-		t.Fatalf("read disasm: %v", err)
-	}
-
-	// Fresh machine: section C = driver page, section D = its neighbour.
-	mac := z80h.New()
-	pager := mac.Pager()
-	pager.HMPR = tbnRenderDriverPage
-
-	firstPage := driverBin
-	var secondPage []byte
-	if len(driverBin) > sampage.PageSize {
-		firstPage = driverBin[:sampage.PageSize]
-		secondPage = driverBin[sampage.PageSize:]
-	}
-	copy(pager.RAM[tbnRenderDriverPage][:], firstPage)
-	if len(secondPage) > 0 {
-		copy(pager.RAM[tbnRenderDriverPage+1][:], secondPage)
-	}
-	copy(pager.RAM[tbnRenderDisasmPage][:], disasmBin) // disasm.bin in page 15
-	copy(pager.RAM[tbnRenderInPage][:], tbn)           // `.tbn` at offset 0 of the IN page
-
-	if err := mac.LoadSymbols(tbnRenderDriverMap); err != nil {
-		t.Fatalf("LoadSymbols: %v", err)
-	}
-
-	res, callErr := mac.CallEntry("render_run", z80h.Entry{})
-	if callErr != nil {
-		t.Fatalf("render_run: %v", callErr)
-	}
-	if !res.Halted {
-		t.Fatalf("render_run did not return cleanly (PC=&%04X)", res.PC)
-	}
-
-	outLenAddr, err := mac.Sym("render_out_len")
-	if err != nil {
-		t.Fatalf("render_out_len symbol: %v", err)
-	}
-	gotLen := int(binary.LittleEndian.Uint16(mac.Read(outLenAddr, 2)))
-
-	outAddr, err := mac.Sym("render_out")
-	if err != nil {
-		t.Fatalf("render_out symbol: %v", err)
-	}
-	got := mac.Read(outAddr, gotLen)
-
-	if !bytes.Equal(got, want) {
-		t.Errorf("render mismatch: Z80 %d bytes %X, host %d bytes %X", gotLen, got, len(want), want)
-		// Emit context around the first byte divergence to aid debugging.
-		maxShow := gotLen
-		if len(want) < maxShow {
-			maxShow = len(want)
-		}
-		for i := 0; i < maxShow; i++ {
-			if got[i] != want[i] {
-				lo := i - 8
-				if lo < 0 {
-					lo = 0
-				}
-				hi := i + 16
-				if hi > maxShow {
-					hi = maxShow
-				}
-				t.Errorf("first diff at byte %d: got[%d:%d]=%X want[%d:%d]=%X",
-					i, lo, hi, got[lo:hi], lo, hi, want[lo:hi])
-				break
-			}
-		}
-	}
+	got := renderTBNOnZ80(t, tbn)
+	assertRenderMatch(t, got, want)
 }
 
 // TestTbnRenderGlobalLabelRet is slice 2's parity proof.  A compact `.tbn`
@@ -475,6 +460,31 @@ func TestTbnRenderLitData(t *testing.T) {
 	// wider widths, and high-bit-set values (0xdeadbeef, 0x1122334455667788).
 	src := []byte("  .byte 0, 1, 0xf, 0xff\n  .hword 0x1234, 0x5678\n  .word 0xdeadbeef\n  .quad 0x1122334455667788\n")
 	tbn := buildCompactTBN(t, src, "s4.s")
+
+	want, err := render.Emit(tbn)
+	if err != nil {
+		t.Fatalf("render.Emit: %v", err)
+	}
+
+	got := renderTBNOnZ80(t, tbn)
+	assertRenderMatch(t, got, want)
+}
+
+// TestTbnRenderFullRelease is the S8 capstone: render the ENTIRE
+// build/release-unstripped.tbn (371 KB, ~23 IN pages) on the Z80 and assert the
+// streamed source text is byte-for-byte identical to the Go authority
+// render.Emit (~417 KB). It exercises every part of the streaming architecture at
+// scale — the multi-page IN window (the reader walks all 23 pages), the streaming
+// output sink (the 417 KB output is never resident), and the streamed comment/
+// blank-run sidecar (7839 rows / 291 KB of bodies read in-place, one at a time) —
+// plus the full-corpus resident tables (475 names, 282 labels, 172 locals). On
+// mismatch assertRenderMatch dumps the first differing offset with context.
+func TestTbnRenderFullRelease(t *testing.T) {
+	const tbnPath = "../../../build/release-unstripped.tbn"
+	tbn, err := os.ReadFile(tbnPath)
+	if err != nil {
+		t.Fatalf("read %s (run `make release-unstripped-tbn`): %v", tbnPath, err)
+	}
 
 	want, err := render.Emit(tbn)
 	if err != nil {

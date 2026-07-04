@@ -2,22 +2,43 @@
 ; renderer (i365a slice 1).
 ;
 ; org &8000; the harness deposits this image into a section-C page (+ its
-; section-D neighbour), build/disasm.bin into physical page DISASM_PAGE, and
-; the fixture `.tbn` into physical page IN_PAGE, then calls render_run.
+; section-D neighbour), build/disasm.bin into physical page DISASM_PAGE, and the
+; `.tbn` into a CONTIGUOUS run of physical pages starting at IN_PAGE, then calls
+; render_run.  A small fixture occupies one IN page; the full release `.tbn`
+; (371 KB) spans IN_PAGE..IN_PAGE+22.
 ;
 ; The renderer reuses the shared record reader (src/reader.asm) and the
 ; disassembler (build/disasm.bin) via paged_call.  This driver supplies the
-; IN-paging window helpers and the handful of reader symbols the standalone
-; build needs, tailored to a single-page IN buffer (the fixture `.tbn` fits
-; comfortably in one 16 KB page).
+; multi-page IN window helpers and the handful of reader symbols the standalone
+; build needs: the reader's byte primitives renormalise the section-A cursor
+; across the run by bumping LMPR (in_normalise_hl), so the walk crosses every
+; page of the `.tbn` transparently.  The 417 KB rendered text is NOT buffered —
+; it streams out a port the harness captures (render_out_append, tbn_render.asm).
 ;
-; Paging layout while rendering (LMPR = LMPR_RENDER):
-;   Section A (&0000-&3FFF) = physical page IN_PAGE   — the staged `.tbn`
-;   Section B (&4000-&7FFF) = physical page IN_PAGE+1 — paged_call body + comm
-;   Section C (&8000-&BFFF) = this driver (HMPR-selected)
-;   Section D (&C000-&FFFF) = driver's section-D page — STAGING_BUF + stack
-; paged_call temporarily swaps HMPR to DISASM_PAGE for the decode and restores
-; it, so section C/D return to the driver on every disasm return.
+; Paging layout (S8 — multi-page IN, the full release `.tbn` spans ~23 pages):
+;
+;   Two distinct LMPR states rotate during the render:
+;
+;   (a) an IN-read state, LMPR = IN_POS_PAGE (RAM0 | current `.tbn` page):
+;         Section A (&0000-&3FFF) = the current `.tbn` page
+;         Section B (&4000-&7FFF) = the NEXT `.tbn` page (record-header straddle)
+;       The reader roams the contiguous IN run (pages IN_PAGE..IN_PAGE+22) by
+;       bumping LMPR as the cursor crosses &4000 (in_normalise_hl).
+;
+;   (b) a decode/handler state, LMPR = LMPR_DECODE:
+;         Section A (&0000-&3FFF) = a scratch page (unread)
+;         Section B (&4000-&7FFF) = PAGED_CALL_PAGE — paged_call body + comm
+;       enctab_map_in restores this between record reads so render_decode_literal
+;       finds paged_call + the comm buffer in section B.
+;
+;   Section C/D (HMPR-selected) always hold this driver + its resident tables;
+;   paged_call swaps HMPR to DISASM_PAGE for the decode and restores it, so
+;   section C/D return to the driver on every disasm return.
+;
+; paged_call MUST live outside the IN run (else a record read would land on it):
+; it sits one page below the run at PAGED_CALL_PAGE, mapped to section B only by
+; LMPR_DECODE.  The reader's IN-read state (LMPR = IN page) maps the next IN page
+; into section B, never PAGED_CALL_PAGE.
 
                 org     &8000
 
@@ -27,18 +48,28 @@
 ; Record-kind constants (REC_KIND_INSN_RUN etc.), generated from the Go format.
                 include "tbn_constants.inc"
 
-; Disassembler decode target: page 15, entry &8000 (mirrors trampoline.asm).
+; Disassembler decode target: top physical page (above the IN run), entry &8000.
 DISASM_ENTRY:           equ     &8000
-DISASM_PAGE:            equ     15
+DISASM_PAGE:            equ     31
 
-; IN paging: the `.tbn` is staged in physical page IN_PAGE.  LMPR_RENDER maps
-; that page to section A and page IN_PAGE+1 (paged_call body) to section B.
+; IN paging: the `.tbn` is staged in a CONTIGUOUS run of physical pages starting
+; at IN_PAGE.  IN_FIRST_LMPR maps the first `.tbn` page to section A; the reader
+; bumps LMPR as the cursor advances, so section A follows pages IN_PAGE, IN_PAGE+1,
+; … up the run (the full 371 KB release `.tbn` spans IN_PAGE..IN_PAGE+22).
 IN_PAGE:                equ     8
-LMPR_RENDER:            equ     &20 | IN_PAGE   ; RAM0 bit + page 8 = &28
+IN_FIRST_LMPR:          equ     &20 | IN_PAGE   ; RAM0 bit + page 8 = &28
+
+; paged_call body page + the decode/handler LMPR that maps it to section B.
+; PAGED_CALL_PAGE is below the IN run; section B = LMPR page + 1, so
+; LMPR_DECODE = RAM0 | (PAGED_CALL_PAGE - 1) puts PAGED_CALL_PAGE at section B.
+PAGED_CALL_PAGE:        equ     7
+LMPR_DECODE:            equ     &20 | (PAGED_CALL_PAGE - 1)     ; = &26
 
 ; STAGING_BUF — the reader's 1 KB record staging area (section D, HMPR-stable).
-STAGING_BUF:            equ     &D500
-STAGING_BUF_END:        equ     &D900
+; Placed high in section D, above the driver's resident tables (which spill into
+; section D for the full corpus) and below the relocated stack top (&FFFE).
+STAGING_BUF:            equ     &E000
+STAGING_BUF_END:        equ     &E400
 
 ; paged_call installation slots (mirror chain_paged_driver.asm / trampoline.asm).
 TRAMPOLINE_DST:         equ     &7E00
@@ -58,34 +89,36 @@ PASS_PASS1:             equ     1
 ; render_run — set up the render window, install paged_call, point the reader
 ; at the staged `.tbn`, and render it.
 ;
-; Entry: the fixture `.tbn` is resident at offset 0 of physical page IN_PAGE.
-; Exit:  rendered text in render_out, length in render_out_len.  Boot LMPR/SP
-;        restored so the harness RET lands on its planted HALT trap.
+; Entry: the `.tbn` is resident from offset 0 of physical page IN_PAGE upward.
+; Exit:  the source text streamed out RENDER_SINK_PORT (harness-captured), byte
+;        count in render_out_len.  Boot LMPR/SP restored so the harness RET lands
+;        on its planted HALT trap.
 ;
 ; The stack is relocated to section D (HMPR-stable) for the duration, because
 ; the render toggles LMPR (moving section B out from under the boot stack) —
 ; the same save/relocate/restore discipline as chain_paged_driver.asm.
 ; ===========================================================================
 render_run:
-                ; Phase 0: save boot LMPR + SP, relocate the stack to section D.
+                ; Phase 0: save boot LMPR + SP, relocate the stack high in
+                ; section D (HMPR-stable, above the resident tables + STAGING_BUF).
                 in      a, (250)
                 ld      (render_saved_lmpr), a
                 ld      hl, 0
                 add     hl, sp
                 ld      (render_saved_sp), hl
-                ld      sp, &C0FE               ; section D (HMPR-stable) stack
+                ld      sp, &FFFE               ; section D (HMPR-stable) stack top
 
-                ; Phase 1: map the render window (section A = IN page, section B
-                ; = paged_call page) and install the paged_call body there.
-                ld      a, LMPR_RENDER
+                ; Phase 1: map the decode state (section B = PAGED_CALL_PAGE) and
+                ; install the paged_call body into that page.
+                ld      a, LMPR_DECODE
                 out     (250), a
                 ld      hl, paged_call_body
                 ld      de, PAGED_CALL_DST
                 ld      bc, paged_call_body_end - paged_call_body
                 ldir
 
-                ; Phase 2: point the reader cursor at the staged `.tbn`.
-                ld      a, LMPR_RENDER
+                ; Phase 2: point the reader cursor at the first staged `.tbn` page.
+                ld      a, IN_FIRST_LMPR
                 ld      (IN_BASE_LMPR), a
                 ld      (IN_POS_PAGE), a
                 ld      hl, 0
@@ -124,8 +157,9 @@ in_persist_hl:
                 ret
 
 ; in_normalise_hl — renormalise a section-A offset that ran past &3FFF into
-; (page+1, offset-&4000).  The fixture `.tbn` never crosses a page, so this is
-; a no-op in practice, but the reader calls it and it must be correct.
+; (page+1, offset-&4000), bumping LMPR so section A follows the next physical
+; page.  The IN run is contiguous, so a plain LMPR increment walks it; this is
+; how a multi-page `.tbn` (the full release) reads across page boundaries.
 in_normalise_hl:
 in_normalise_loop:
                 ld      a, h
@@ -138,13 +172,15 @@ in_normalise_loop:
                 out     (250), a
                 jr      in_normalise_loop
 
-; enctab_map_in — restore section A to the IN page.  The reader tail-calls
-; this after a record read to re-map the IN window.  The render path has no
-; ENCTAB, so it simply maps the IN page (LMPR_RENDER), which also keeps the
-; paged_call body mapped into section B.
+; enctab_map_in — restore the decode/handler LMPR.  The reader tail-calls this
+; after a record read; the render path has no ENCTAB, so it maps LMPR_DECODE,
+; which keeps the paged_call body + comm buffer mapped into section B for the
+; record handler's render_decode_literal.  (Section A becomes a scratch page —
+; the handlers read the staged record from STAGING_BUF in section D, not the IN
+; window, and the next reader_next_kind re-maps the IN page via in_map_current.)
 enctab_map_in:
                 di
-                ld      a, LMPR_RENDER
+                ld      a, LMPR_DECODE
                 out     (250), a
                 ret
 
