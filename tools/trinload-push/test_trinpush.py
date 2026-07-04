@@ -16,8 +16,10 @@ import importlib.util
 import os
 import socket
 import struct
+import tempfile
 import threading
 import unittest
+from unittest import mock
 
 import trinpush as tp
 
@@ -403,3 +405,119 @@ class TestBootHazard(unittest.TestCase):
         self.assertEqual((name, filetype, load), ("AUTOasm", 0x13, 0x8000))
         self.assertEqual(length, 20391)
         self.assertIsNone(boot_record.boot_hazard(auto))
+
+
+def _load_push_and_boot():
+    """Import push-and-boot.py (dashed filename) as a module."""
+    path = os.path.join(os.path.dirname(__file__), "push-and-boot.py")
+    spec = importlib.util.spec_from_file_location("push_and_boot_launcher", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+push_and_boot = _load_push_and_boot()
+
+
+class TestPushAndBoot(unittest.TestCase):
+    """i284: the one-command wrapper's ORCHESTRATION — the record claimed by the
+    push must thread into the boot, the bootability pre-check must gate BEFORE the
+    push, and every push outcome must route correctly. The two legs themselves
+    (sd_push write, boot_record boot) are hardware-proven separately and mocked
+    here; only the gluing logic is under test."""
+
+    def _write_mgt(self, img):
+        """Write a composed .mgt to a temp file (auto-removed) and return its path."""
+        fd, path = tempfile.mkstemp(suffix=".mgt")
+        os.write(fd, img)
+        os.close(fd)
+        self.addCleanup(os.remove, path)
+        return path
+
+    def _clean_mgt(self):
+        # A CODE AUTO* at &8000 — the clean vessel class (no i331/i332 hazard).
+        return self._write_mgt(_mgt_with_auto("AUTOgame", 0x13, 0x8000, 20000))
+
+    def _basic_mgt(self):
+        # A BASIC AUTO* — the i332 livelock shape the pre-check must refuse.
+        return self._write_mgt(_mgt_with_auto("AUTO", 0x10, 0x8000, 100))
+
+    def test_claimed_record_threads_into_boot(self):
+        mgt = self._clean_mgt()
+        with mock.patch.object(push_and_boot.sd_push, "push_mgt",
+                               return_value=(0, 7)) as pm, \
+             mock.patch.object(push_and_boot.boot_record, "main",
+                               return_value=0) as bm:
+            rc = push_and_boot.run("1.2.3.4", mgt)
+        self.assertEqual(rc, 0)
+        pm.assert_called_once()
+        bm.assert_called_once()
+        argv = bm.call_args.args[0]
+        # The record claimed by the push (7) is booted, and the pushed image is
+        # passed as --image so boot-record re-applies its i331/i332 guard.
+        self.assertEqual(argv[1], "7")
+        self.assertIn("--image", argv)
+        self.assertEqual(argv[argv.index("--image") + 1], mgt)
+
+    def test_no_boot_stops_after_push(self):
+        mgt = self._clean_mgt()
+        with mock.patch.object(push_and_boot.sd_push, "push_mgt",
+                               return_value=(0, 7)) as pm, \
+             mock.patch.object(push_and_boot.boot_record, "main") as bm:
+            rc = push_and_boot.run("1.2.3.4", mgt, no_boot=True)
+        self.assertEqual(rc, 0)
+        pm.assert_called_once()
+        bm.assert_not_called()
+
+    def test_hazard_refused_before_push(self):
+        # A will-not-boot disk must be refused WITHOUT spending the ~2-min push.
+        mgt = self._basic_mgt()
+        with mock.patch.object(push_and_boot.sd_push, "push_mgt") as pm, \
+             mock.patch.object(push_and_boot.boot_record, "main") as bm:
+            rc = push_and_boot.run("1.2.3.4", mgt)
+        self.assertEqual(rc, 1)
+        pm.assert_not_called()
+        bm.assert_not_called()
+
+    def test_force_overrides_hazard(self):
+        mgt = self._basic_mgt()
+        with mock.patch.object(push_and_boot.sd_push, "push_mgt",
+                               return_value=(0, 5)) as pm, \
+             mock.patch.object(push_and_boot.boot_record, "main",
+                               return_value=0) as bm:
+            rc = push_and_boot.run("1.2.3.4", mgt, force=True)
+        self.assertEqual(rc, 0)
+        pm.assert_called_once()
+        self.assertIn("--force", bm.call_args.args[0])
+
+    def test_push_failure_does_not_boot(self):
+        mgt = self._clean_mgt()
+        with mock.patch.object(push_and_boot.sd_push, "push_mgt",
+                               return_value=(1, None)), \
+             mock.patch.object(push_and_boot.boot_record, "main") as bm:
+            rc = push_and_boot.run("1.2.3.4", mgt)
+        self.assertEqual(rc, 1)
+        bm.assert_not_called()
+
+    def test_lost_finalize_reply_cannot_boot(self):
+        # code 3 + record None (i335): the push likely landed but the record is
+        # unknown, so we cannot auto-boot — propagate 3, do not boot.
+        mgt = self._clean_mgt()
+        with mock.patch.object(push_and_boot.sd_push, "push_mgt",
+                               return_value=(3, None)), \
+             mock.patch.object(push_and_boot.boot_record, "main") as bm:
+            rc = push_and_boot.run("1.2.3.4", mgt)
+        self.assertEqual(rc, 3)
+        bm.assert_not_called()
+
+    def test_boot_failure_propagates(self):
+        mgt = self._clean_mgt()
+        with mock.patch.object(push_and_boot.sd_push, "push_mgt",
+                               return_value=(0, 9)), \
+             mock.patch.object(push_and_boot.boot_record, "main", return_value=1):
+            rc = push_and_boot.run("1.2.3.4", mgt)
+        self.assertEqual(rc, 1)
+
+
+if __name__ == "__main__":
+    unittest.main()

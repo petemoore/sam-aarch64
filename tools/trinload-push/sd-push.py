@@ -132,9 +132,15 @@ def send_name(sock, dst, name):
 
 
 def push_mgt(sam, mgt_path, sd_push_bin):
-    """Run the two-stage push; return a process exit code: 0 = pushed and
-    finalize-confirmed ('D'), 1 = failure, 3 = finalize reply lost but sd_push
-    exited back to trinload — verify with list-records.py (i335)."""
+    """Run the two-stage push; return `(code, record)`.
+
+    `code` is a process exit code: 0 = pushed and finalize-confirmed ('D'),
+    1 = failure, 3 = finalize reply lost but sd_push exited back to trinload —
+    verify with list-records.py (i335). `record` is the 1-based Trinity SD
+    record sd_push claimed (from the finalize 'D'/'E' reply, i308), or None
+    when it is unknown (a pre-finalize failure, or an older sd_push binary that
+    reports no record). The record is what push-and-boot.py feeds boot-record.py
+    to boot exactly the record just written (i284)."""
     data = open(mgt_path, "rb").read()
     if len(data) != RECORD_SECTORS * SECTOR:
         print(f"WARNING: {mgt_path} is {len(data)} B, not {RECORD_SECTORS * SECTOR} "
@@ -145,7 +151,7 @@ def push_mgt(sam, mgt_path, sd_push_bin):
     push_bin = open(sd_push_bin, "rb").read()
     if not push_and_run(sam, push_bin, page=1, addr=0x8000):
         print("FAILED: could not push/run sd_push (is TrinLoad listening on the SAM?)")
-        return 1
+        return 1, None
 
     # Stage 2: talk sd_push's own protocol on the same port. sd_push's startup
     # (EEPROM read + ENC init + CSD ladder + free-record list scan) takes ~12 s
@@ -158,7 +164,7 @@ def push_mgt(sam, mgt_path, sd_push_bin):
     dst, _ = discover_tool(sock, sam, b"SP", attempts=15)
     if dst is None:
         print("FAILED: sd_push did not answer discovery (it may not have come up)")
-        return 1
+        return 1, None
 
     record_name = os.path.basename(mgt_path)
     send_name(sock, dst, record_name)
@@ -172,16 +178,16 @@ def push_mgt(sam, mgt_path, sd_push_bin):
     where = f"record {record}" if record else "the free record (number unreported)"
     if reply == b"D":
         print(f"DONE: sd_push validated a complete record and wrote it to {where}")
-        return 0
+        return 0, record
     if reply == b"E":
         print(f"ERROR: sd_push reported an incomplete record (sector count != 1600; "
               f"the target was {where})")
-        return 1
+        return 1, record
     # No 'D'/'E' through every attempt: ask who owns the port now (i335).
     _, disc = discover(sock, sam, attempts=3)
     code, message = lost_reply_verdict(disc)
     print(("WARNING: " if code == 3 else "ERROR: ") + message)
-    return code
+    return code, record
 
 
 if __name__ == "__main__":
@@ -191,4 +197,5 @@ if __name__ == "__main__":
         sys.exit(2)
     MGT = sys.argv[2]
     BIN = sys.argv[3] if len(sys.argv) > 3 else "build/sd_push.bin"
-    sys.exit(push_mgt(SAM, MGT, BIN))
+    code, _ = push_mgt(SAM, MGT, BIN)
+    sys.exit(code)
