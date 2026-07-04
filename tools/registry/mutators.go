@@ -1189,16 +1189,3 @@ func (m *multiFlag) Set(v string) error {
 	*m = append(*m, v)
 	return nil
 }
-
-// dedupStrings removes duplicate strings, preserving first-occurrence order.
-func dedupStrings(ss []string) []string {
-	seen := map[string]bool{}
-	out := []string{}
-	for _, s := range ss {
-		if !seen[s] {
-			seen[s] = true
-			out = append(out, s)
-		}
-	}
-	return out
-}
