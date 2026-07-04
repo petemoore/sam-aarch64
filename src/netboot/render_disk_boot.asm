@@ -229,6 +229,8 @@ rdb_main:
                 ; section B is a data page, which HGTHD's sysvar access needs correct.
                 in      a, (250)
                 ld      (rdb_bdos_lmpr), a
+                in      a, (251)               ; the pristine boot HMPR (the &8000..&FFFF
+                ld      (rdb_boot_hmpr), a     ; exec window ALHK set) for the overlay chain
     endif
                 ; No ROM screen work at come-up (CLSLOWER / RST &10) — under an ALHK
                 ; record boot that context is not yet safe (it hangs, unlike the
@@ -391,6 +393,10 @@ rdb_chain_next:
                 im      1
                 ld      a, (rdb_bdos_lmpr)     ; ROM0 in A + B-DOS sysvar page in B
                 out     (250), a               ; (the pristine boot LMPR, from rdb_main)
+                ld      a, (rdb_boot_hmpr)     ; restore the boot exec window so the next
+                out     (251), a               ; overlay loads to &8000 into a RAM page pair
+                                               ; clear of the DOS page (render left HMPR at
+                                               ; the paged_call/IN window during the render)
 
                 ; --- arm HGTHD for asmdemo -> BD_DIFA (pages, length) -----------
                 ; The DOS-page clobber (the reblock overwriting B-DOS at DOSFLG=page
@@ -779,6 +785,7 @@ rdb_saved_sp:   defw    0                      ; caller SP parked across the LMP
 rdb_boot_lmpr:  defb    0                      ; boot LMPR (ROM0 in section A), restored per read
     if defined(DEMO_CHAIN)
 rdb_bdos_lmpr:  defb    0                      ; pristine B-DOS boot LMPR (ROM0 A + sysvar B), for the chain
+rdb_boot_hmpr:  defb    0                      ; pristine boot HMPR (the &8000 exec window), for the chain
     endif
 
 ; ===========================================================================

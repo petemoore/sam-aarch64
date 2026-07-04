@@ -413,24 +413,25 @@ rds_build_header:
                 ret
 
 ; ===========================================================================
-; render_disk_write_dirent — build the 256-byte directory entry for the file in
-; slot 0 of a fresh directory sector (linearSec 0), re-stamping "BDOS"@232 so the
-; record stays HRECORD-valid, and write it. Clobbers AF, BC, DE, HL.
+; render_disk_write_dirent — build the 256-byte directory entry for the file and
+; APPEND it into the first FREE directory slot, PRESERVING every existing entry (and
+; the record's "BDOS"@232 validity stamp in linearSec 0). Clobbers AF, BC, DE, HL.
 ;
-; Uses RDS_WORK_BUF as the 512-byte sector image (its streamed content is spent).
+; Why the first free slot, not linearSec 0: B-DOS 1.5t's directory scan HALTS at the
+; first type-0 (empty) entry, so a file appended after a type-0 gap is invisible to
+; HGTHD (the i365d-b2c chain hang). Zeroing linearSec 0 also destroyed other files'
+; entries — a shared-card data-safety bug. So we read-modify-write the sector holding
+; the first free slot instead. Needs NETBOOT_WANT_RECORD_READ (bd_record_read_hw).
+;
+; Builds the entry in RDS_WORK_BUF[0..255]; RDS_FIRST_BUF (spent after the header
+; cache is copied below) is reused as the scan + RMW sector buffer.
 ; ===========================================================================
 render_disk_write_dirent:
-                ; zero the whole sector image.
+                ; zero the 256-byte entry image.
                 ld      hl, RDS_WORK_BUF
                 ld      de, RDS_WORK_BUF + 1
-                ld      bc, 511
+                ld      bc, 255
                 ld      (hl), 0
-                ldir
-
-                ; "BDOS" validity stamp at +232.
-                ld      hl, bdos_id_str
-                ld      de, RDS_WORK_BUF + 232
-                ld      bc, 4
                 ldir
 
                 ; --- directory entry at +0 ---
@@ -485,15 +486,66 @@ render_disk_write_dirent:
                 ld      (RDS_WORK_BUF + &F3), a ; +0xF3..F4 ExecAddrMod16K = 0xFFFF
                 ld      (RDS_WORK_BUF + &F4), a
 
-                ; write the directory sector at linearSec 0.
+                ; --- find the first FREE directory slot (type 0) --------------
+                ; Scan linearSec 0..RDS_DIR_SECS-1, two 256-byte entries each. RDS_
+                ; FIRST_BUF is spent (header cached above) -> reuse as the read buffer.
                 ld      hl, 0
+                ld      (rds_dir_lin), hl
+rds_dirent_scan:
+                ld      hl, (rds_dir_lin)
                 ld      (BD_REC_LINEAR), hl
-                ld      hl, RDS_WORK_BUF
+                ld      hl, RDS_FIRST_BUF
+                call    bd_record_read_hw       ; read the dir sector
+                jr      c, rds_dirent_err       ; read failure
+                ; slot 0 of linearSec 0 is reserved: its +232 holds the "BDOS"
+                ; record-validity stamp, which a file entry spliced here would zero.
+                ; Never place there — start linearSec 0 at slot 1. (Real records keep
+                ; the system 'bdos' entry in slot 0, so this only matters for a
+                ; freshly-formatted empty record.)
+                ld      hl, (rds_dir_lin)
+                ld      a, h
+                or      l
+                jr      z, rds_dirent_slot1     ; linearSec 0 -> skip slot 0
+                ld      a, (RDS_FIRST_BUF)      ; slot 0 type
+                and     a
+                jr      nz, rds_dirent_slot1
+                ld      hl, 0                   ; slot 0 free -> offset 0
+                jr      rds_dirent_place
+rds_dirent_slot1:
+                ld      a, (RDS_FIRST_BUF + 256) ; slot 1 type
+                and     a
+                jr      nz, rds_dirent_advance
+                ld      hl, 256                 ; slot 1 free -> offset 256
+                jr      rds_dirent_place
+rds_dirent_advance:
+                ld      hl, (rds_dir_lin)      ; both full -> next sector
+                inc     hl
+                ld      (rds_dir_lin), hl
+                ld      a, l
+                cp      RDS_DIR_SECS
+                jr      c, rds_dirent_scan
+                jr      rds_dirent_err          ; directory full -> no free slot
+rds_dirent_place:
+                ; HL = slot offset (0 or 256) within the read sector in RDS_FIRST_BUF.
+                ld      de, RDS_FIRST_BUF
+                add     hl, de
+                ex      de, hl                  ; DE = RDS_FIRST_BUF + offset (dest)
+                ld      hl, RDS_WORK_BUF        ; source = the built entry
+                ld      bc, 256
+                ldir                            ; splice the entry in, preserving the rest
+                ; write the modified sector back at its linearSec.
+                ld      hl, (rds_dir_lin)
+                ld      (BD_REC_LINEAR), hl
+                ld      hl, RDS_FIRST_BUF
                 call    bd_record_write_hw
                 ret     nc
+rds_dirent_err:
                 ld      a, 1
                 ld      (RDS_ERR), a
                 ret
+
+RDS_DIR_SECS:   equ     40                     ; record directory sectors (tracks 0-3)
+rds_dir_lin:    defw    0                      ; the directory linearSec being scanned
 
 ; ===========================================================================
 ; rds_fill_bitmap — set the first RDS_SECCOUNT bits of the 195-byte map at

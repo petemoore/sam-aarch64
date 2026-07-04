@@ -1269,7 +1269,7 @@ netboot-hook-roundtrip: $(BUILD)/hook_roundtrip.bin $(BUILD)/hook_roundtrip.map
 # (CLAUDE.md §5 — emulation-verified is not hardware-verified).
 $(BUILD)/render_disk_probe.bin $(BUILD)/render_disk_probe.map: src/netboot/render_disk_probe.asm $(asm_deps/src/netboot/render_disk_probe.asm)
 	@mkdir -p $(BUILD)
-	pyz80 -D NETBOOT_WANT_RECORD_WRITE=1 --obj=$(BUILD)/render_disk_probe.bin \
+	pyz80 -D NETBOOT_WANT_RECORD_WRITE=1 -D NETBOOT_WANT_RECORD_READ=1 -D NETBOOT_REAL_LISTREAD=1 --obj=$(BUILD)/render_disk_probe.bin \
 	    --mapfile=$(BUILD)/render_disk_probe.map \
 	    src/netboot/render_disk_probe.asm
 	@tools/netboot-boot-fit-check.sh $(BUILD)/render_disk_probe.bin 16384 render_disk_probe.bin

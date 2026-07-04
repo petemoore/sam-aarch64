@@ -227,10 +227,33 @@ Worked-out implementation (do this next session with fresh context):
   (`reconstructRecordFileByName`, and an assertDirEntry variant that scans for the
   "RELEASESRC" entry) since it's no longer at slot 0. Check the probe's test too.
 
-After FIX 2: HGTHD finds asmdemo → the chain loads+runs the assembler → Phase A's
-gate should pass (then verify the assembler ret lands on CHAIN_DONE and both files
-reconstruct). This is a real shared-card data-safety fix too (render currently
+FIX 2 result (VALIDATED): HGTHD now finds asmdemo (the WAITKEY hang is gone) and
+the chain loads+runs the assembler. b2a/sink/probe tests need updating (RELEASESRC
+moved off linearSec-0 slot 0; the writer no longer stamps BDOS — it preserves the
+record's existing one, so the sink probe's all-zeros scratch record must be seeded
+FORMATTED). This is also a real shared-card data-safety fix (render no longer
 destroys the first directory sector's other files).
+
+**FIX 3 — boot-HMPR restore (DONE, hygiene):** `rdb_chain_next` now restores the
+pristine boot HMPR (captured at `rdb_main`) before the overlay HLOAD, so the next
+overlay loads into the boot exec window (render left HMPR at its paged_call/IN
+window). Correct for the handoff, though it did not by itself fix FIX 4 below.
+
+**FIX 4 — NEXT (assembler crashes ~0.27M steps into its run).** With FIX 1-3, the
+chain reaches the assembler and it RUNS, but crashes ~0.27M steps in (a full
+assemble is ~4.67M): the PC lands in a text page (`@PC-3` = render output text
+"torvalds…", `win@8000` = text) and HALTs at ~`&B015`. The assembler loaded and
+started but wedged mid-run — likely a paging/state interaction between render's
+DEMO_CHAIN layout (IN=4..26, paged_call=28, and residual render IN data in pages
+16..26) and the assembler's own layout (payloads pages 4/13/15, paged_call 14, IN
+prefix 7..12, `&C100`-down section-D stack). Debug next session: StopPC at the
+assembler's entry (`&8000` = asmSym for asmdemo's start) to confirm it loads +
+starts cleanly, then step/StopPC forward through its come-up (`enctab_trampoline_
+setup`, `load_page15_payload`, `load_enctab`, `load_in_file`) to find the first
+op that diverges vs the standalone b2b boot (which assembles fine). Suspect the
+section-D stack landing on a page render left dirty, or an off-axis page collision.
+Once the assembler completes + `ret`s onto CHAIN_DONE, verify both files
+reconstruct → Phase A green → Phase B (serve + long names + on-screen messages).
 
 **Superseded fix menu (kept for context):** preserve the B-DOS DOS page across the
 reblock. Two options:
