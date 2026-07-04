@@ -1330,6 +1330,44 @@ $(BUILD)/assemble_disk_boot_record.mgt: $(BUILD)/assembler-demo.bin $(BUILD)/enc
 
 netboot-assemble-disk-boot-record: $(BUILD)/assemble_disk_boot_record.mgt
 
+# netboot-render-chain (i365d-b2c) — the render->disk vessel built with DEMO_CHAIN:
+# after streaming RELEASESRC to the record it hands the machine to the assembler
+# overlay (asmdemo) via the section-B overlay-loader stub (rdb_chain_next). Same
+# render engine as b2a; the only delta is the chain tail (guarded by DEMO_CHAIN).
+$(BUILD)/render_chain.bin $(BUILD)/render_chain.map: src/netboot/render_disk_boot.asm $(asm_deps/src/netboot/render_disk_boot.asm) $(BUILD)/disasm.bin
+	@mkdir -p $(BUILD)
+	pyz80 -D NETBOOT_WANT_RECORD_WRITE=1 -D NETBOOT_WANT_RECORD_READ=1 -D NETBOOT_REAL_LISTREAD=1 -D DEMO_CHAIN=1 \
+	    --obj=$(BUILD)/render_chain.bin \
+	    --mapfile=$(BUILD)/render_chain.map \
+	    src/netboot/render_disk_boot.asm
+	@tools/netboot-boot-fit-check.sh $(BUILD)/render_chain.bin 32768 render_chain.bin
+
+netboot-render-chain: $(BUILD)/render_chain.bin $(BUILD)/render_chain.map
+
+# netboot-demo-orchestrator-record (i365d-b2c) — compose the capstone demo record:
+# the DEMO_CHAIN render vessel as the AUTOrdb CODE-auto boot file, plus every file
+# the render->assemble chain HLOADs by name: asmdemo (the callable assembler), IN
+# (release-unstripped.tbn, read whole by render + prefix by the assembler), disasm
+# (render's page-31 decode engine) and the assembler's prod payloads enctab.enc /
+# sd13 / d15 / zx013. The assembler loaders pass an explicit dest + read length/
+# pages from the DIFA header, so the extras' stored load address is immaterial —
+# only the store name + content matter (d15 and disasm are both disasm.bin under
+# two names). Phase A: the chain ends at the assembler's clean exit (a DI;HALT
+# barrier); the serve leg + NBMANIFEST long names are Phase B.
+$(BUILD)/demo_orchestrator_record.mgt: $(BUILD)/render_chain.bin $(BUILD)/assembler-demo.bin $(BUILD)/enctab.enc release-unstripped-tbn $(BUILD)/sysreg_data.bin $(BUILD)/disasm.bin $(BUILD)/zx0.bin $(BUILD)/build-disk
+	$(BUILD)/build-disk -netboot $(BUILD)/render_chain.bin -netboot-name AUTOrdb \
+	    -netboot-code-auto \
+	    -netboot-extra asmdemo=$(BUILD)/assembler-demo.bin \
+	    -netboot-extra IN=$(BUILD)/release-unstripped.tbn \
+	    -netboot-extra disasm=$(BUILD)/disasm.bin \
+	    -netboot-extra d15=$(BUILD)/disasm.bin \
+	    -netboot-extra enctab.enc=$(BUILD)/enctab.enc \
+	    -netboot-extra sd13=$(BUILD)/sysreg_data.bin \
+	    -netboot-extra zx013=$(BUILD)/zx0.bin \
+	    $(BUILD)/demo_orchestrator_record.mgt
+
+netboot-demo-orchestrator-record: $(BUILD)/demo_orchestrator_record.mgt
+
 # netboot-samboot-config (i176) — the SAMBOOT BIOS config reader: a leaf routine
 # (samboot_read_config) that reads the editable default-boot-record config from a
 # named Trinity EEPROM chunk ("SAMBOOT Config  ") and returns the auto-boot

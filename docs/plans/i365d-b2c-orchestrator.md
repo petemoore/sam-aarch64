@@ -100,4 +100,49 @@ overlays + the prod payload set + a netboot manifest on one record.
 Every path runs on the faithful rig (`tools/netboot-oracle/z80/`, real ROM +
 B-DOS 1.5t + SPI SD) before hardware; `SKIP_PRIVATE_TESTS` gates the private
 captures. The on-hardware shot is `i365e` (separate).
+
+## Session-1 progress + the blocker (2026-07-05)
+
+**Built + working:** the overlay-chain mechanism (`render_disk_boot.asm`
+`-D DEMO_CHAIN`: `rdb_chain_next` + `rdb_chain_stub_src`), the demo record
+composition (`Makefile` `netboot-render-chain` + `netboot-demo-orchestrator-record`
+— render AUTOrdb + asmdemo + IN + disasm/d15 + enctab.enc/sd13/zx013), and the
+Phase-A faithful gate (`demo_orchestrator_faithful_test.go`). Verified on the rig:
+render **completes** (phase='5' verdict='P', RELEASESRC streamed), reaches
+`rdb_chain_next`, restores the pristine boot LMPR, and invokes the `asmdemo`
+lookup. b2a's gate still passes (the chain code is fully `DEMO_CHAIN`-gated).
+
+**THE BLOCKER — B-DOS SD-driver coexistence.** `rdb_chain_next`'s `HGTHD(asmdemo)`
+(`bdos_lookup_hook`, `rst 8`) **hangs in B-DOS's SD read** (ROM ~`&1DxE`, phase
+marker stuck at 'C'), after the render's raw CMD17 (rdb_load_tbn reblock) + CMD24
+(sink) ops. Ruled out by targeted experiments this session:
+- **Not the directory clobber.** Writing RELEASESRC's dirent to an *empty*
+  linearSec (5), leaving the directory 100% intact, still hangs. (But the clobber
+  IS a latent shared-card data-safety bug — `render_disk_write_dirent` zeroes the
+  whole linearSec-0 sector; fix it when unblocked: append into the first free dir
+  slot, preserve existing entries + the `BDOS`@232 stamp.)
+- **Not the LMPR section B.** Restoring the pristine boot LMPR captured at
+  `rdb_main` entry (`rdb_bdos_lmpr`, ROM0 in A + sysvar page in B) — kept, it is
+  correct — did not unblock.
+- **Not the physical card / no static buffer overlaps sysvars.** `csd_set_bd_records`
+  (our raw driver) reads the card fine at chain time *without hanging*; RDS buffers
+  are at `&9888`/`&9A88` (section C), nothing maps into `&4B00–&5Cxx`.
+- Come-up's `HGTHD(disasm)` works (before any raw CMD17/24); the chain's HGTHD is
+  the **first raw-SD → B-DOS-SD transition in one boot** anywhere in the codebase.
+
+**Next step:** read Colin's B-DOS 1.5t SD driver (`~/sam-archive`, the authority
+per CLAUDE.md rule 8) to find what internal driver state (cached sector / card
+address pointer / block-len / device-select mode) its directory read assumes, and
+restore/reset that state at the end of the render (before the chain), OR before
+the chain HGTHD. This is the crux of Phase A; assemble + serve are wired and
+waiting on it.
+
+**Fallback if intractable:** assemble-FIRST ordering (assembler boots pure-B-DOS,
+chains to render last) structurally avoids raw→B-DOS, but has a body-sector
+collision (render's fixed `RDS_DATA_BASE=40` write overruns B-DOS's HSAVE'd
+RELEASEIMG) that would then need solving — likely harder than the SD resync.
+
+Current state: `TestDemoOrchestratorFaithful` is RED (fails fast at ~200M steps /
+~20s, not a hang) on branch `i365d-b2c`. Not merged — the Phase A gate is the
+merge bar (CLAUDE.md rule 5).
 </content>

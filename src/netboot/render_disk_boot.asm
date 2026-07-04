@@ -88,6 +88,14 @@ RDB_IM2_TABLE:          equ     &F900          ; 257 bytes: &F900..&FA00 inclusi
 RDB_IM2_VEC:            equ     &F9            ; every table byte
 RDB_IM2_HANDLER:        equ     &F9F9          ; = RDB_IM2_VEC * &101 (ei ; reti)
 
+; --- i365d-b2c overlay-chain slots (section B, clear of B-DOS sysvars <=&5FFF and
+;     of the &7E00+ trampoline area render already owns). The chain-stub is copied
+;     here and run from OUTSIDE the &8000 window it HLOADs the next overlay into.
+OVL_STUB_DST:           equ     &7C00          ; the straight-line loader stub body
+CHAIN_DONE:             equ     &7C40          ; the DI;HALT completion barrier (Phase A StopPC)
+OVL_RETADDR:            equ     &7C50          ; 2 bytes = CHAIN_DONE; the next overlay's ret frame
+OVL_STUB_SP:            equ     &7DF0          ; the stub's HLOAD scratch stack (grows down)
+
 ; STAGING_BUF is a LABEL placed after all code (see the end of the file), not
 ; the driver's fixed &E000 — the come-up/sink code occupies what would be the
 ; driver's &D316..&E000 gap, so the reader's staging must live above it.
@@ -204,6 +212,15 @@ IN_END_OFFSET:          defw    0
 ; ===========================================================================
 rdb_main:
                 di
+    if defined(DEMO_CHAIN)
+                ; Capture the pristine B-DOS boot LMPR (ROM0 in section A + the
+                ; B-DOS sysvar page in section B, as ALHK entered us) for the b2c
+                ; chain's B-DOS lookup. rdb_boot_lmpr (captured later in rdb_load_tbn)
+                ; only guarantees ROM0 in section A for the raw SD reads — its
+                ; section B is a data page, which HGTHD's sysvar access needs correct.
+                in      a, (250)
+                ld      (rdb_bdos_lmpr), a
+    endif
                 ; No ROM screen work at come-up (CLSLOWER / RST &10) — under an ALHK
                 ; record boot that context is not yet safe (it hangs, unlike the
                 ; trinload-booted probe). b2a's gate reads rdb_phase from memory;
@@ -330,6 +347,13 @@ rdb_verdict_set:
                 ld      a, "5"
                 ld      (rdb_phase), a
 
+    if defined(DEMO_CHAIN)
+                ; i365d-b2c: RELEASESRC is on the record. Hand the machine to the
+                ; assembler overlay (asmdemo) — load it over the &8000 window and
+                ; run it (it HSAVEs RELEASEIMG). See rdb_chain_next.
+                jp      rdb_chain_next
+    endif
+
 ; ===========================================================================
 ; rdb_done — the completion barrier: DI;HALT. The faithful test runs to the halt
 ; and reads rdb_phase/rdb_verdict from memory. A StopPC would be unreliable here —
@@ -340,6 +364,74 @@ rdb_verdict_set:
 rdb_done:
                 di
                 halt
+
+    if defined(DEMO_CHAIN)
+; ===========================================================================
+; rdb_chain_next (i365d-b2c) — hand the machine to the next overlay (asmdemo).
+; The render is done and RELEASESRC is on the record. We restore a clean B-DOS
+; runtime (boot LMPR = ROM0 in section A + the B-DOS sysvar page in section B,
+; IM 1, DI), arm the HGTHD lookup of the assembler CODE file, then LDIR a tiny
+; straight-line loader stub to section-B low RAM (OUTSIDE the &8000 window) and
+; JP it. The stub HLOADs asmdemo over &8000 (13 KB, fits section C) and enters
+; it. The assembler is callable: it saves the SP at entry and `ret`s at exit —
+; we leave that SP pointing at OVL_RETADDR, whose word is CHAIN_DONE, so the
+; assembler's clean exit lands on the DI;HALT barrier the faithful gate StopPCs.
+; ===========================================================================
+rdb_chain_next:
+                di
+                im      1
+                ld      a, (rdb_bdos_lmpr)     ; ROM0 in A + B-DOS sysvar page in B
+                out     (250), a               ; (the pristine boot LMPR, from rdb_main)
+
+                ; --- arm HGTHD for asmdemo -> BD_DIFA (pages, length) -----------
+                ; KNOWN BLOCKER (i365d-b2c Phase A, this session): this HGTHD hangs
+                ; in B-DOS's SD read after the render's raw CMD17/CMD24 ops. The
+                ; physical card is fine (csd_set_bd_records reads it here without
+                ; hanging); it is B-DOS's own SD-driver internal state that wedges —
+                ; the first raw-SD-then-B-DOS-SD transition in one boot. See the plan.
+                ld      hl, rdb_name_asmdemo
+                ld      (BD_NAME_PTR), hl
+                call    bdos_name_to_uifa
+                call    bdos_lookup_hook       ; UIFA->&4B00, HGTHD arms svde, DIFA->BD_DIFA
+
+                ; --- lay down the DI;HALT barrier + the assembler's ret frame ----
+                ld      a, &F3                 ; DI
+                ld      (CHAIN_DONE), a
+                ld      a, &76                 ; HALT
+                ld      (CHAIN_DONE + 1), a
+                ld      hl, CHAIN_DONE
+                ld      (OVL_RETADDR), hl      ; ret frame word = CHAIN_DONE
+
+                ; --- copy the loader stub to low RAM and enter it ---------------
+                ld      hl, rdb_chain_stub_src
+                ld      de, OVL_STUB_DST
+                ld      bc, rdb_chain_stub_end - rdb_chain_stub_src
+                ldir
+                jp      OVL_STUB_DST
+
+; rdb_chain_stub_src — the straight-line overlay loader, copied to OVL_STUB_DST
+; and run from section B (LMPR-stable, outside the &8000 window it overwrites).
+; Absolute addresses only (no self-relative control flow) so it runs correctly
+; at OVL_STUB_DST regardless of where it is assembled. Reads the armed BD_DIFA
+; (still mapped in section C until the HLOAD) for the page count + length, HLOADs
+; the whole file to &8000, then enters it with SP = OVL_RETADDR.
+rdb_chain_stub_src:
+                ld      sp, OVL_STUB_SP
+                ld      a, (BD_DIFA + BD_OFF_PAGES)
+                ld      c, a                   ; C = whole-file page count
+                ld      a, (BD_DIFA + BD_OFF_LENGTH)
+                ld      e, a
+                ld      a, (BD_DIFA + BD_OFF_LENGTH + 1)
+                and     BD_DIFA_MARKER         ; clear the +36 bit-7 marker
+                ld      d, a                   ; DE = length-mod-16K
+                ld      hl, &8000              ; HLOAD dest = the current window (section C)
+                rst     8
+                defb    BD_HOOK_HLOAD          ; load asmdemo to &8000 (longjmps on read error)
+                di                             ; PTDOS EIs inside RST 8
+                ld      sp, OVL_RETADDR        ; the assembler captures this SP; its ret -> CHAIN_DONE
+                jp      &8000
+rdb_chain_stub_end:
+    endif
 
 ; ===========================================================================
 ; rdb_hload_page — HGTHD + trampoline-HLOAD a named CODE file into a target
@@ -653,6 +745,10 @@ rdb_name_out:   defm    "RELEASESRC"           ; 10-char on-record output name
                 defb    0
 rdb_name_disasm: defm   "disasm"               ; the render's decode engine payload
                 defb    0
+    if defined(DEMO_CHAIN)
+rdb_name_asmdemo: defm  "asmdemo"               ; i365d-b2c: the assembler overlay (DEMO_ASM)
+                defb    0
+    endif
 rdb_name_in_padded:                            ; the 10-char on-record name of the
                 defm    "IN        "           ; DOS 'IN' file (2 + 8 spaces), for
                                                ; the directory scan in rdb_load_tbn
@@ -668,6 +764,9 @@ rdb_dst_off:    defw    0                      ; flat write cursor: offset withi
 rdb_hdr_skip:   defb    0                      ; bytes to skip at the stream start (9, then 0)
 rdb_saved_sp:   defw    0                      ; caller SP parked across the LMPR-toggling load
 rdb_boot_lmpr:  defb    0                      ; boot LMPR (ROM0 in section A), restored per read
+    if defined(DEMO_CHAIN)
+rdb_bdos_lmpr:  defb    0                      ; pristine B-DOS boot LMPR (ROM0 A + sysvar B), for the chain
+    endif
 
 ; ===========================================================================
 ; RDB_CONFIG — host/test-patchable config block (boot_record idiom), patched by
