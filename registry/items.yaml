@@ -1353,7 +1353,7 @@
   description: |
     The full i70 payoff, blocked on a persist design reconciliation: at FW_RECORD_CAP=6144 (http_main.asm:333) start.elf alone becomes 486 HSAVE files in ONE B-DOS record directory (~80-slot limit) — the fw_span record-spanning design (src/netboot/fw_span.asm, phase3-delivery-design.md) must be reconciled with directory capacity (span across multiple first-FREE records or raise the per-file window) before any multi-MB persist. Also assess the i347 IM2 exposure for the 10-18+ min full fetch (Z80 SHA-256 in the loop dominates; measured bands in trinity-capabilities.md), and decide the cdn reachability story (LAN mirror of the pinned a43df3a firmware blobs vs resolved cdn IP; blobs verified live 2026-07-03, SHA-256-pinned so an untrusted proxy is fine).
   status: OPEN
-  depends_on: [i70b]
+  depends_on: [i70b, i360]
   kind: leaf
   owner: agent
   parent: i70
