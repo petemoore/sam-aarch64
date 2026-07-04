@@ -6497,3 +6497,11 @@
   status: OPEN
   kind: leaf
   owner: agent
+
+- id: i367
+  title: "TestBootRecordAssemblerRecordVessel fails on private rig: page-4 enctab byte-compare &40≠&45"
+  description: |
+    Pre-existing failure surfaced during i365d-b2b (2026-07-05). TestBootRecordAssemblerRecordVessel (tools/netboot-oracle/z80/assembler_record_vessel_test.go) FAILS on the private-capture rig: it boots the BUILD_TESTS AUTOasm record vessel green and reaches main_assemble (all boot self-tests pass), but its post-boot assertion that runtime physical page 4 byte-0 equals build/enctab.enc byte-0 fails — got &40, want &45 ('E', the ENC1 magic). i.e. load_enctab does not leave the raw enctab.enc header resident at page-4 offset 0 (it HLOADs then processes the DIFA header), yet the test compares page-4[0:len] to the raw file. Since the assembler boots green + reaches main_assemble, enctab is functionally loaded fine; only the raw-byte assertion is wrong (or the ENC1 header format post-dates the assertion). SKIP_PRIVATE_TESTS-gated so it SKIPS in public CI (main shows green without ever running it) — a latent failure. Confirmed pre-existing: assembler_record_vessel_test.go, src/loader.asm, src/assembler.asm byte-identical to origin/main; a full 'make netboot-z80-artifacts' fresh rebuild still fails. Orthogonal to i365d-b2b (which passes). Fix: correct the test's expected page-4 layout to match what load_enctab leaves (skip/adjust for the ENC1/DIFA header), or confirm+fix a real HLOAD-placement bug. Likely applies to the zx013 page-13 compare in the same test too.
+  status: OPEN
+  kind: leaf
+  owner: agent
