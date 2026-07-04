@@ -499,7 +499,7 @@
 - id: i31b-b2
   title: "Brick 2: macros — define, arg-split, \\param substitution, recursion guard"
   description: |
-    Port preprocess.go parseMacroHeader, collectMacroBody, splitMacroArgs, buildSubstituter, tryExpandMacroInvocation, and the .macro/.endm handling in processLines, including the recursion-cycle guard and body re-preprocessing. Extends src/asmprep.asm; oracle extends asmprep_test.go with the macro cases from preprocess_test.go (simple macro, longest-arg-first, token-paste, subst-inside-string, recursive macro, .if-inside-macro, unterminated macro). Depends on i31b-b1.
+    Port preprocess.go parseMacroHeader, collectMacroBody, splitMacroArgs, buildSubstituter, tryExpandMacroInvocation, and the .macro/.endm handling in processLines, including the recursion-cycle guard and body re-preprocessing. Extends src/asmprep.asm; oracle extends asmprep_test.go with the macro cases from preprocess_test.go (simple macro, longest-arg-first, token-paste, subst-inside-string, recursive macro, .if-inside-macro, unterminated macro). Depends on i31b-b1. GUARD (from the b1 #876 review): add an OBSERVABLE oracle fixture for stripTrailingComment's escaped-quote-after-spliced-/*-*/-block behaviour — b1 made prep_strip_comment check the last EMITTED byte (faithful to Go's post-splice s[i-1]), but in b1 the strip result only feeds isBareIdent/parseIntLiteral so it is unobservable; once b2 emits strip results into macro args this divergence class becomes visible and must be pinned.
   status: OPEN
   depends_on: [i31b-b1]
   kind: leaf

@@ -554,22 +554,22 @@ sc_loop:
                 ; quote toggle?
                 cp      CH_QUOTE
                 jr      nz, sc_notquote
-                ; toggle unless in[i-1]=='\' (i>0)
-                ld      hl, (SC_I)
+                ; Toggle inStr unless the preceding byte is '\'. Go tests
+                ; s[i-1] on the string it is building (blocks already spliced
+                ; out), so the faithful predecessor here is the LAST EMITTED
+                ; byte (STRIP_BUF[SC_OUT-1]), not the raw input's in[i-1] —
+                ; which differ exactly when a /* */ block was removed just
+                ; before the quote.
+                ld      hl, (SC_OUT)
+                ld      de, STRIP_BUF
+                or      a
+                sbc     hl, de
                 ld      a, h
                 or      l
-                jr      z, sc_toggle            ; i==0 -> toggle
+                jr      z, sc_toggle            ; nothing emitted -> toggle
+                ld      hl, (SC_OUT)
                 dec     hl
-                ld      (SC_TMP), hl            ; i-1
-                push    hl
-                ld      hl, (SC_I)
-                ld      (SC_I), hl              ; keep i
-                pop     hl
-                ; read in[i-1]
-                ld      bc, (SC_TMP)
-                ld      hl, (SC_IN)
-                add     hl, bc
-                ld      a, (hl)
+                ld      a, (hl)                 ; last emitted byte
                 cp      CH_BSLASH
                 jr      z, sc_emit_cur          ; escaped quote: not a toggle
 sc_toggle:
@@ -1250,7 +1250,6 @@ SC_OUT:           defs 2
 SC_I:             defs 2
 SC_INSTR:         defs 1
 SC_UNCL:          defs 1
-SC_TMP:           defs 2
 
 PREP_ERR:         defs 1
 

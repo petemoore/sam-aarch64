@@ -109,6 +109,12 @@ var prepCases = []struct {
 	{"set-block-comment-midvalue", ".set FOO, 0x1/*c*/0\n.if FOO\nyes\n.endif\n", "x.s"},
 	{"set-slashslash-nospace", ".set FOO, 1//x\n.if FOO\nyes\n.endif\n", "x.s"},
 	{"if-symbol-from-nonliteral-false", ".set FOO, BAR\n.if FOO\nyes\n.else\nno\n.endif\n", "x.s"},
+	// Exercises stripTrailingComment's escaped-quote check across a spliced-out
+	// /* */ block (the escape-adjacency case): both sides agree the .set is not
+	// captured. In Brick 1 the strip result only feeds isBareIdent/parseIntLiteral,
+	// so the outcome is identical regardless; it becomes observable once Bricks
+	// b2/b3 emit strip results (macro args / include paths).
+	{"set-escape-block-quote", ".set FOO, \\/*c*/\"//x\n.if FOO\nyes\n.else\nno\n.endif\n", "x.s"},
 
 	// .if / .else / .endif truthiness and nesting.
 	{"if-truthy", ".set U, 1\n.if U\n  emitted\n.else\n  not_emitted\n.endif\n", "x.s"},
