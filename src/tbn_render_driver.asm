@@ -48,9 +48,9 @@ PAGED_CALL_SP_SAVE:     equ     TRAMPOLINE_DST + &D1    ; = &7ED1
 TRAMP_SAFE_SP:          equ     TRAMPOLINE_DST + 256    ; = &7F00
 paged_call:             equ     PAGED_CALL_DST
 
-; Reader header-table pass gate.  The fixture's header tables are empty, so the
-; seed path (symbol_insert / local_def_append) is never reached; PASS_MODE is
-; held at a non-PASS_PASS1 value so the reader parses-only.
+; Reader header-table pass gate.  PASS_MODE = PASS_PASS1 makes reader_init seed
+; the header label/local tables via the store callbacks (symbol_insert /
+; local_def_append below) so the renderer can place them by PC.
 PASS_PASS1:             equ     1
 
 
@@ -156,14 +156,14 @@ fail:
 
 
 ; ===========================================================================
-; Reader symbols that the standalone build must resolve.  The fixture's header
-; label/local tables are empty, so the seed calls below are never executed —
-; they resolve to a fail trap should a future fixture reach them unexpectedly.
+; Reader header-table seed callbacks.  reader_init calls these once per header
+; row (on pass 1); the renderer's store routines record {offset, name_id} /
+; {offset, digit} for the PC-driven flush (render_flush).
 ; ===========================================================================
-symbol_insert:          jp      fail
-local_def_append:       jp      fail
+symbol_insert:          jp      render_store_label
+local_def_append:       jp      render_store_local
 
-PASS_MODE:              defb    0       ; != PASS_PASS1 → reader parses-only
+PASS_MODE:              defb    PASS_PASS1      ; seed the header tables
 symbol_value_buf:       defs    4       ; label-offset accumulator (zeroed by reader)
 local_label_pc_buf:     defs    4       ; local-offset accumulator (zeroed by reader)
 
@@ -180,4 +180,5 @@ IN_END_OFFSET:          defw    0
 ; ===========================================================================
                 include "reader.asm"
                 include "tbn_render.asm"
+                include "tbn_render_editor.asm"
                 include "paged_bodies.asm"

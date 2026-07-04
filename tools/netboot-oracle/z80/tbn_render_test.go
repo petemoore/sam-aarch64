@@ -19,9 +19,102 @@ import (
 
 	z80h "github.com/petemoore/sam-aarch64/tools/netboot-oracle/z80"
 	format "github.com/petemoore/sam-aarch64/tools/sam-aarch64-format"
+	assemble "github.com/petemoore/sam-aarch64/tools/sam-aarch64/assemble"
+	frontend "github.com/petemoore/sam-aarch64/tools/sam-aarch64/frontend"
 	render "github.com/petemoore/sam-aarch64/tools/sam-aarch64/render"
 	"github.com/petemoore/sam-aarch64/tools/sampage"
 )
+
+// renderTBNOnZ80 boots build/tbn_render_driver.bin over the staged `.tbn` and
+// returns the bytes render_run wrote to render_out.  Shared by the slice tests.
+func renderTBNOnZ80(t *testing.T, tbn []byte) []byte {
+	t.Helper()
+	for _, path := range []string{tbnRenderDriverBin, tbnRenderDriverMap, tbnRenderDisasmBin} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("required binary not built (%s); run `make tbn-render-driver-z80`", path)
+		}
+	}
+
+	driverBin, err := os.ReadFile(tbnRenderDriverBin)
+	if err != nil {
+		t.Fatalf("read driver: %v", err)
+	}
+	disasmBin, err := os.ReadFile(tbnRenderDisasmBin)
+	if err != nil {
+		t.Fatalf("read disasm: %v", err)
+	}
+
+	// Fresh machine: section C = driver page, section D = its neighbour.
+	mac := z80h.New()
+	pager := mac.Pager()
+	pager.HMPR = tbnRenderDriverPage
+
+	firstPage := driverBin
+	var secondPage []byte
+	if len(driverBin) > sampage.PageSize {
+		firstPage = driverBin[:sampage.PageSize]
+		secondPage = driverBin[sampage.PageSize:]
+	}
+	copy(pager.RAM[tbnRenderDriverPage][:], firstPage)
+	if len(secondPage) > 0 {
+		copy(pager.RAM[tbnRenderDriverPage+1][:], secondPage)
+	}
+	copy(pager.RAM[tbnRenderDisasmPage][:], disasmBin) // disasm.bin in page 15
+	copy(pager.RAM[tbnRenderInPage][:], tbn)           // `.tbn` at offset 0 of the IN page
+
+	if err := mac.LoadSymbols(tbnRenderDriverMap); err != nil {
+		t.Fatalf("LoadSymbols: %v", err)
+	}
+
+	res, callErr := mac.CallEntry("render_run", z80h.Entry{})
+	if callErr != nil {
+		t.Fatalf("render_run: %v", callErr)
+	}
+	if !res.Halted {
+		t.Fatalf("render_run did not return cleanly (PC=&%04X)", res.PC)
+	}
+
+	outLenAddr, err := mac.Sym("render_out_len")
+	if err != nil {
+		t.Fatalf("render_out_len symbol: %v", err)
+	}
+	gotLen := int(binary.LittleEndian.Uint16(mac.Read(outLenAddr, 2)))
+
+	outAddr, err := mac.Sym("render_out")
+	if err != nil {
+		t.Fatalf("render_out symbol: %v", err)
+	}
+	return mac.Read(outAddr, gotLen)
+}
+
+// assertRenderMatch compares the Z80 render output against the Go authority,
+// printing the first byte divergence for debugging.
+func assertRenderMatch(t *testing.T, got, want []byte) {
+	t.Helper()
+	if bytes.Equal(got, want) {
+		return
+	}
+	t.Errorf("render mismatch: Z80 %d bytes %X, host %d bytes %X", len(got), got, len(want), want)
+	maxShow := len(got)
+	if len(want) < maxShow {
+		maxShow = len(want)
+	}
+	for i := 0; i < maxShow; i++ {
+		if got[i] != want[i] {
+			lo := i - 8
+			if lo < 0 {
+				lo = 0
+			}
+			hi := i + 16
+			if hi > maxShow {
+				hi = maxShow
+			}
+			t.Errorf("first diff at byte %d: got[%d:%d]=%X want[%d:%d]=%X",
+				i, lo, hi, got[lo:hi], lo, hi, want[lo:hi])
+			break
+		}
+	}
+}
 
 const (
 	tbnRenderDriverBin = "../../../build/tbn_render_driver.bin"
@@ -136,4 +229,35 @@ func TestTbnRenderNop(t *testing.T) {
 			}
 		}
 	}
+}
+
+// TestTbnRenderGlobalLabelRet is slice 2's parity proof.  A compact `.tbn`
+// built from `.global _start` / `_start:` / `ret` exercises the editor-region
+// name table + `.global` flags and the header-table label flush placed by PC:
+// it must render to exactly "  .global _start\n_start:\n  ret\n", byte-identical
+// to render.Emit.  Building via the frontend gives a realistic editor region
+// and header tables (mirrors compact_ir_b8d_test.go's fixture pipeline).
+func TestTbnRenderGlobalLabelRet(t *testing.T) {
+	src := []byte(".global _start\n_start:\n  ret\n")
+	f, err := frontend.Translate(src, "s2.s")
+	if err != nil {
+		t.Fatalf("frontend.Translate: %v", err)
+	}
+	p1, err := assemble.Pass1(f)
+	if err != nil {
+		t.Fatalf("assemble.Pass1: %v", err)
+	}
+	tbn, err := assemble.CompactTBNBytes(f, p1)
+	if err != nil {
+		t.Fatalf("assemble.CompactTBNBytes: %v", err)
+	}
+
+	// The Go authority's rendering is the expected output.
+	want, err := render.Emit(tbn)
+	if err != nil {
+		t.Fatalf("render.Emit: %v", err)
+	}
+
+	got := renderTBNOnZ80(t, tbn)
+	assertRenderMatch(t, got, want)
 }

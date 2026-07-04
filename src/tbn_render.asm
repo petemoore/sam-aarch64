@@ -10,9 +10,11 @@
 ; on-disk overlay `.tbn` the only record kinds are INSN_RUN (0x09), LIT_DATA
 ; (0x08) and DIRECTIVE (0x04); INST/COMMENT/LABEL_DEF never appear on disk.
 ;
-; SLICE 1 (i365a): only the INSN_RUN mode-0 (bare literal words) arm is wired.
-; DIRECTIVE / LIT_DATA / the editor-region sidecar / mode-1 patch overlays are
-; later slices — an unexpected kind falls through to `fail`.
+; The INSN_RUN mode-0 (bare literal words) arm is wired, together with the
+; editor-region name table + `.global` flags (tbn_render_editor.asm) and the
+; header-table label/local flush placed by PC.  DIRECTIVE / LIT_DATA / the
+; comment sidecar / mode-1 patch overlays are later slices — an unexpected
+; record kind falls through to `fail`.
 ;
 ; Output: canonical GNU-as text is appended byte-by-byte to render_out; its
 ; length lands in render_out_len (both section-C, HMPR-stable — the driver's
@@ -22,14 +24,15 @@
 ; -----------------------------------------------------------------------
 ; render_emit — top-level entry.  Mirrors render.EmitFile (emit.go:66).
 ;
-; Resets the output buffer and the prevWasStatement flag, positions the
-; reader at the first record (reader_init), walks the record stream, then
-; closes a trailing open statement with a final newline.
+; Resets the output buffer, the prevWasStatement flag and the header-def
+; cursors/PC, seeds the header tables (reader_init, via the store callbacks),
+; reads the editor region (name table + `.global` flags), emits the `.global`
+; lines, walks the record stream, then closes a trailing open statement with a
+; final newline.
 ;
-; For the on-disk `.tbn` there are no globals / header definitions / sidecar
-; rows (they live in the editor region the assembler never reads), so the
-; PC-tracking and flush machinery of the Go authority is inert here and is
-; not ported for slice 1.
+; PC tracking places header-table label/local definitions before the statement
+; whose offset-from-origin they name; render_flush drains them at each element
+; boundary (emit.go:74-122, overlay.go:36-48).
 ;
 ; Input:  the reader cursor (IN_POS_*) points at the staged `.tbn`.
 ; Output: render_out / render_out_len populated.
@@ -40,10 +43,16 @@ render_emit:
                 xor     a
                 ld      (render_prev_stmt), a
 
-                call    reader_init
+                call    render_reset_state      ; header-def cursors + PC
+                call    reader_init             ; seeds header tables via the
+                                                ;   store callbacks, bounds IN_END
+                call    render_read_editor      ; name table + .global flags
+                call    render_globals          ; emit "  .global NAME\n" lines
                 call    render_walk
 
-; Final: `if prevWasStatement { out.WriteByte('\n') }` (emit.go:235).
+; Final: `flush()` then `if prevWasStatement { out.WriteByte('\n') }`
+; (emit.go:226,235).  The trailing flush places an end-of-stream label.
+                call    render_flush
                 ld      a, (render_prev_stmt)
                 or      a
                 ret     z
@@ -94,6 +103,10 @@ render_insn_run_next:
                 ld      (render_rir_src), hl
                 ld      (render_rir_rem), bc
 
+; flush any header-table label/local whose offset == the current PC before the
+; statement — a label embedded mid-run (emitInsnRun overlay.go:38, flush()).
+                call    render_flush
+
 ; open the statement line: `if prevWasStatement '\n'` then the two-space
 ; indent (emitInsnRun overlay.go:39-42).
                 call    render_open_stmt
@@ -115,6 +128,9 @@ render_insn_run_next:
 
                 ld      a, 1
                 ld      (render_prev_stmt), a   ; prevWasStatement = true
+
+; advance the PC by one element (4 bytes) — emitInsnRun overlay.go:47.
+                call    render_pc_advance4
 
 ; advance to the next element: src += 4, rem -= 4.
                 ld      hl, (render_rir_src)
@@ -232,9 +248,259 @@ render_out_append:
 
 
 ; -----------------------------------------------------------------------
+; render_reset_state — zero the header-def cursors/counts and the PC before a
+; render (reader_init's seed callbacks then fill render_labels/render_locals).
+; Clobbers: A, HL.
+; -----------------------------------------------------------------------
+render_reset_state:
+                ld      hl, 0
+                ld      (render_label_count), hl
+                ld      (render_label_cursor), hl
+                ld      (render_local_count), hl
+                ld      (render_local_cursor), hl
+                ld      hl, render_labels
+                ld      (render_label_next), hl
+                ld      hl, render_locals
+                ld      (render_local_next), hl
+                xor     a
+                ld      (render_pc + 0), a
+                ld      (render_pc + 1), a
+                ld      (render_pc + 2), a
+                ld      (render_pc + 3), a
+                ret
+
+
+; -----------------------------------------------------------------------
+; render_store_label — reader header-table label seed callback (the driver's
+; symbol_insert dispatches here).  Appends a {offset, name_id} row.
+;
+; Mirrors newHeaderDefs's label ingest (pc.go:49-51): the reader has already
+; accumulated the row's byte offset in symbol_value_buf and passes name_id.
+;
+; Input:  HL = name_id; symbol_value_buf = 4-byte LE offset from origin.
+; Output: render_labels[render_label_count++] = {offset, name_id}.
+; Clobbers: A, BC, DE, HL (the reader permits symbol_insert to clobber all).
+; -----------------------------------------------------------------------
+render_store_label:
+                ld      (render_tmp_id), hl         ; save name_id
+                ld      hl, (render_label_next)
+                ex      de, hl                      ; DE = slot
+                ld      hl, symbol_value_buf
+                ld      bc, 4
+                ldir                                ; copy offset; DE = slot+4
+                ld      hl, (render_tmp_id)
+                ex      de, hl                      ; HL = slot+4, DE = name_id
+                ld      (hl), e
+                inc     hl
+                ld      (hl), d
+                inc     hl                          ; HL = next slot (slot+6)
+                ld      (render_label_next), hl
+                ld      hl, (render_label_count)
+                inc     hl
+                ld      (render_label_count), hl
+                ret
+
+
+; -----------------------------------------------------------------------
+; render_store_local — reader header-table local seed callback (the driver's
+; local_def_append dispatches here).  Appends a {offset, digit} row.
+;
+; Mirrors newHeaderDefs's local ingest (pc.go:52-53).
+;
+; Input:  A = digit; local_label_pc_buf = 4-byte LE offset from origin.
+; Output: render_locals[render_local_count++] = {offset, digit}.
+; Clobbers: A, BC, DE, HL.
+; -----------------------------------------------------------------------
+render_store_local:
+                ld      (render_tmp_digit), a
+                ld      hl, (render_local_next)
+                ex      de, hl                      ; DE = slot
+                ld      hl, local_label_pc_buf
+                ld      bc, 4
+                ldir                                ; copy offset; DE = slot+4
+                ld      a, (render_tmp_digit)
+                ld      (de), a
+                inc     de                          ; DE = next slot (slot+5)
+                ld      (render_local_next), de
+                ld      hl, (render_local_count)
+                inc     hl
+                ld      (render_local_count), hl
+                ret
+
+
+; -----------------------------------------------------------------------
+; render_pc_advance4 — PC += 4 (32-bit LE).  emitInsnRun overlay.go:47.
+; Clobbers: A?, BC, HL.
+; -----------------------------------------------------------------------
+render_pc_advance4:
+                ld      hl, (render_pc)
+                ld      bc, 4
+                add     hl, bc
+                ld      (render_pc), hl
+                ret     nc
+                ld      hl, (render_pc + 2)
+                inc     hl
+                ld      (render_pc + 2), hl
+                ret
+
+
+; -----------------------------------------------------------------------
+; render_flush — emit every header definition whose offset == the current PC.
+; Labels drain before locals at a shared offset (newHeaderDefs's stable order,
+; pc.go:55-66); within a kind the reader's ascending-offset order is used.
+; Mirrors flush() → hd.flushAt(pc, emitDef) (emit.go:122, pc.go:78-83).  The
+; comment sidecar is not consumed this slice, so flushComments is a no-op here.
+; Clobbers: A, BC, DE, HL.
+; -----------------------------------------------------------------------
+render_flush:
+render_flush_labels:
+                ld      hl, (render_label_cursor)
+                ld      de, (render_label_count)
+                or      a
+                sbc     hl, de
+                jr      nc, render_flush_locals     ; cursor >= count → labels done
+                call    render_label_slot_addr      ; HL = &render_labels[cursor]
+                call    render_offset_eq_pc         ; Z=1 iff row.offset == PC
+                jr      nz, render_flush_locals     ; sorted — stop at first miss
+                call    render_emit_label
+                ld      hl, (render_label_cursor)
+                inc     hl
+                ld      (render_label_cursor), hl
+                jr      render_flush_labels
+render_flush_locals:
+                ld      hl, (render_local_cursor)
+                ld      de, (render_local_count)
+                or      a
+                sbc     hl, de
+                ret     nc                          ; cursor >= count → done
+                call    render_local_slot_addr
+                call    render_offset_eq_pc
+                ret     nz
+                call    render_emit_local
+                ld      hl, (render_local_cursor)
+                inc     hl
+                ld      (render_local_cursor), hl
+                jr      render_flush_locals
+
+
+; render_label_slot_addr — HL = render_labels + render_label_cursor*6.
+render_label_slot_addr:
+                ld      hl, (render_label_cursor)
+                ld      d, h
+                ld      e, l                        ; DE = cursor
+                add     hl, hl                      ; 2*cursor
+                add     hl, de                      ; 3*cursor
+                add     hl, hl                      ; 6*cursor
+                ld      de, render_labels
+                add     hl, de
+                ret
+
+; render_local_slot_addr — HL = render_locals + render_local_cursor*5.
+render_local_slot_addr:
+                ld      hl, (render_local_cursor)
+                ld      d, h
+                ld      e, l                        ; DE = cursor
+                add     hl, hl                      ; 2*cursor
+                add     hl, hl                      ; 4*cursor
+                add     hl, de                      ; 5*cursor
+                ld      de, render_locals
+                add     hl, de
+                ret
+
+; render_offset_eq_pc — Z=1 iff the 4-byte LE offset at (HL) equals render_pc.
+; Preserves HL (the caller reads the row after).  Clobbers: A, B, DE.
+render_offset_eq_pc:
+                push    hl
+                ld      de, render_pc
+                ld      b, 4
+render_oep_loop:
+                ld      a, (de)
+                cp      (hl)
+                jr      nz, render_oep_ne
+                inc     hl
+                inc     de
+                djnz    render_oep_loop
+                pop     hl
+                xor     a                           ; Z=1 (equal)
+                ret
+render_oep_ne:
+                pop     hl
+                ld      a, 1
+                or      a                           ; Z=0 (not equal)
+                ret
+
+
+; -----------------------------------------------------------------------
+; render_emit_label / render_emit_local — emitDef (emit.go:97-107): a leading
+; newline if a statement is open, then "NAME:" (label) or "N:" (local digit),
+; then prevWasStatement = true.
+;
+; Input:  HL = row slot ({offset u32}{name_id u16} or {offset u32}{digit u8}).
+; Clobbers: A, BC, DE, HL.
+; -----------------------------------------------------------------------
+render_emit_label:
+                push    hl                          ; save slot across the '\n'
+                ld      a, (render_prev_stmt)
+                or      a
+                jr      z, render_el_no_nl
+                ld      a, 10
+                call    render_out_append
+render_el_no_nl:
+                pop     hl
+                ld      de, 4
+                add     hl, de                      ; HL = &name_id
+                ld      e, (hl)
+                inc     hl
+                ld      d, (hl)                     ; DE = name_id
+                call    render_name_of              ; HL = name string ptr
+                call    render_copy_cstr
+                ld      a, ":"
+                call    render_out_append
+                ld      a, 1
+                ld      (render_prev_stmt), a
+                ret
+
+render_emit_local:
+                push    hl
+                ld      a, (render_prev_stmt)
+                or      a
+                jr      z, render_elo_no_nl
+                ld      a, 10
+                call    render_out_append
+render_elo_no_nl:
+                pop     hl
+                ld      de, 4
+                add     hl, de
+                ld      a, (hl)                     ; A = digit (0..9)
+                add     a, "0"
+                call    render_out_append
+                ld      a, ":"
+                call    render_out_append
+                ld      a, 1
+                ld      (render_prev_stmt), a
+                ret
+
+
+; -----------------------------------------------------------------------
 ; Render state + output buffer (section C — read by the driver's harness
 ; after render_run returns).
 ; -----------------------------------------------------------------------
+RENDER_MAX_LABELS:      equ     64
+RENDER_MAX_LOCALS:      equ     64
+
+render_label_count:     defw    0       ; header label rows stored
+render_label_cursor:    defw    0       ; flush cursor into render_labels
+render_label_next:      defw    0       ; append cursor into render_labels
+render_local_count:     defw    0
+render_local_cursor:    defw    0
+render_local_next:      defw    0
+render_tmp_id:          defw    0       ; name_id scratch (store callback)
+render_tmp_digit:       defb    0       ; digit scratch (store callback)
+render_pc:              defb    0, 0, 0, 0      ; running offset from origin (LE)
+
+render_labels:          defs    RENDER_MAX_LABELS * 6   ; [offset u32][name_id u16]
+render_locals:          defs    RENDER_MAX_LOCALS * 5   ; [offset u32][digit u8]
+
 render_prev_stmt:       defb    0       ; prevWasStatement flag (emit.go)
 render_rir_src:         defw    0       ; INSN_RUN element source cursor
 render_rir_rem:         defw    0       ; INSN_RUN remaining element bytes
