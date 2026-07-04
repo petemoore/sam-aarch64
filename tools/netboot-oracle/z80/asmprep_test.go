@@ -354,6 +354,88 @@ func TestAsmprepBrick2aStorage(t *testing.T) {
 	}
 }
 
+// prepCasesB2b are the brick-2b fixtures: macro INVOCATIONS. Each expands via
+// \param substitution + recursive re-preprocessing, so the expanded text AND
+// the mid-stream `# <line> "<file>"` directives must match frontend.Preprocess
+// byte-for-byte. These mirror the macro cases in
+// tools/sam-aarch64/frontend/preprocess_test.go.
+var prepCasesB2b = []struct {
+	name string
+	src  string
+	path string
+}{
+	// Simple positional substitution (preprocess_test SimpleMacro).
+	{"simple", ".macro _strb val, addr\n  mov     w0, \\val & 0xff\n  adrp    x1, \\addr\n  add     x1, x1, :lo12:\\addr\n  strb    w0, [x1]\n.endm\nmain:\n  _strb 0x34, BORDCR\n", "x.s"},
+	// Longest-param-first: \address must not be eaten as \a + "ddress".
+	{"longest-arg-first", ".macro foo a, address\n  mov \\a, \\address\n.endm\nfoo x1, MY_LABEL\n", "x.s"},
+	// The reverse declaration order still resolves \a correctly.
+	{"shorter-arg-first", ".macro foo address, a\n  mov \\a, \\address\n.endm\nfoo MY_LABEL, x1\n", "x.s"},
+	// Token-paste inside an identifier.
+	{"token-paste", ".macro logarm reg\n  adrp    x0, msg_\\reg\n  add     x0, x0, :lo12:msg_\\reg\n.endm\nlogarm NZCV\n", "x.s"},
+	// Substitution inside a string literal + a label.
+	{"subst-in-string", ".macro msgreg regname\nmsg_\\regname:\n.asciz \"\\regname: \"\n.endm\nmsgreg NZCV\n", "x.s"},
+	// A no-arg macro.
+	{"no-args", ".macro nop_macro\n  ret\n.endm\nfoo:\n  nop_macro\n  after\n", "x.s"},
+	// An empty-body macro (two directives, no body).
+	{"empty-body-invoke", ".macro empt\n.endm\nbefore\nempt\nafter\n", "x.s"},
+	// splitMacroArgs: a comma inside parens is not a separator.
+	{"paren-args", ".macro _setmsk mask, address\n  orr w0, w0, \\mask\n  x \\address\n.endm\n_setmsk (1<<3), TV_FLAG\n", "x.s"},
+	// splitMacroArgs: a comma inside a string is not a separator.
+	{"string-comma-arg", ".macro emit s\n.asciz \"\\s\"\n.endm\nemit \"a, b, c\"\n", "x.s"},
+	// Two-level recursive expansion (preprocess_test RecursiveMacro).
+	{"recursive", ".macro _setmsk mask, address\n  ldrb    w0, [x28, \\address-sysvars]\n  orr     w0, w0, \\mask\n  strb    w0, [x28, \\address-sysvars]\n.endm\n.macro _setbit bit, address\n  _setmsk (1<<\\bit), \\address\n.endm\n_setbit 0, TV_FLAG\n", "x.s"},
+	// .if inside a macro body, evaluated after expansion against the caller .set.
+	{"if-in-macro-truthy", ".set UART_DEBUG, 1\n.macro log char\n.if UART_DEBUG\n  mov x0, #\\char\n.endif\n.endm\nlog 'x'\n", "x.s"},
+	{"if-in-macro-falsy", ".set UART_DEBUG, 0\n.macro log char\n.if UART_DEBUG\n  mov x0, #\\char\n.endif\n.endm\nlog 'x'\nafter\n", "x.s"},
+	// A trailing comment on the invocation line is stripped before arg-split.
+	{"invoke-trailing-comment", ".macro mv a, b\n  mov \\a, \\b\n.endm\n  mv x0, x1 // do it\n", "x.s"},
+	// \\ is a literal backslash pair (not the start of a substitution).
+	{"backslash-literal", ".macro bs a\n  db \\a, \\\\n\n.endm\nbs 5\n", "x.s"},
+	// An unrecognised \x keeps the backslash and rescans from x.
+	{"unknown-escape", ".macro ue a\n  \\z \\a\n.endm\nue 7\n", "x.s"},
+	// Macro invoked inside an active .if.
+	{"invoke-inside-if", ".set ON, 1\n.macro m a\n  use \\a\n.endm\n.if ON\n  m 42\n.endif\n", "x.s"},
+	// Redefinition: the newest definition wins (Go map-overwrite semantics).
+	{"redefine-last-wins", ".macro dup a\n  first \\a\n.endm\n.macro dup a\n  second \\a\n.endm\ndup 9\n", "x.s"},
+	// stripTrailingComment's escaped-quote-after-block check, now OBSERVABLE via a
+	// macro arg (the strip result flows into output). Escape-adjacency form.
+	{"arg-escape-block-quote", ".macro m a\n[\\a]\n.endm\nm \\/*c*/\\\"//x\n", "x.s"},
+	// The divergence form: a spliced-out /* */ block leaves the byte before the
+	// quote as '/', but the LAST EMITTED byte is '\\' — so the quote is escaped
+	// (no toggle) only if the strip uses the emitted predecessor. A raw-in[i-1]
+	// implementation would diverge here.
+	{"arg-block-escape-quote-divergent", ".macro m a\n[\\a]\n.endm\nm \\/* */\\\"//x\n", "x.s"},
+
+	// Error cases — Go returns an error, Z80 sets PREP_ERR.
+	{"err-too-few-args", ".macro two a, b\n  x \\a \\b\n.endm\ntwo 1\n", "x.s"},
+	{"err-too-many-args", ".macro one a\n  x \\a\n.endm\none 1, 2\n", "x.s"},
+	{"err-direct-cycle", ".macro loop a\n  loop \\a\n.endm\nloop 1\n", "x.s"},
+	{"err-indirect-cycle", ".macro a x\n  b \\x\n.endm\n.macro b x\n  a \\x\n.endm\na 1\n", "x.s"},
+}
+
+func TestAsmprepBrick2bInvoke(t *testing.T) {
+	for _, tc := range prepCasesB2b {
+		t.Run(tc.name, func(t *testing.T) {
+			want, wantErr := frontend.Preprocess([]byte(tc.src), tc.path, frontend.PreprocessOptions{})
+			m := loadAsmprep(t)
+			got, gotErr := prepZ80(t, m, []byte(tc.src), tc.path)
+
+			if wantErr != nil {
+				if !gotErr {
+					t.Fatalf("expected error (Go: %v), prep_run succeeded; got=%q", wantErr, got)
+				}
+				return
+			}
+			if gotErr {
+				t.Fatalf("prep_run reported error, Go succeeded; want=%q", want)
+			}
+			if !bytes.Equal(got, want) {
+				t.Fatalf("output mismatch:\n got=%q\nwant=%q", got, want)
+			}
+		})
+	}
+}
+
 // TestAsmprepBrick1Random fuzzes prep_run against the Go authority over many
 // randomly-generated balanced .set/.if programs. Deterministic seed so a
 // failure reproduces.
@@ -363,6 +445,87 @@ func TestAsmprepBrick1Random(t *testing.T) {
 		var b strings.Builder
 		// A handful of top-level .set to populate the table, then a block.
 		genProg(r, &b, 0)
+		src := b.String()
+		want, wantErr := frontend.Preprocess([]byte(src), "r.s", frontend.PreprocessOptions{})
+
+		m := loadAsmprep(t)
+		got, gotErr := prepZ80(t, m, []byte(src), "r.s")
+
+		if wantErr != nil {
+			if !gotErr {
+				t.Fatalf("case %d: expected error (Go: %v), prep_run succeeded\nsrc=%q\ngot=%q", i, wantErr, src, got)
+			}
+			continue
+		}
+		if gotErr {
+			t.Fatalf("case %d: prep_run errored, Go succeeded\nsrc=%q\nwant=%q", i, src, want)
+		}
+		if !bytes.Equal(got, want) {
+			t.Fatalf("case %d mismatch:\nsrc=%q\n got=%q\nwant=%q", i, src, got, want)
+		}
+	}
+}
+
+// genMacroProg emits a random program that DEFINES a few macros with known
+// arities and then INVOKES them, interleaved with .set/.if blocks and plain
+// lines. Bodies substitute their params in several ways (token-paste, in-string,
+// bare); one macro's body invokes a lower-indexed macro to exercise recursive
+// re-preprocessing. Args are drawn from tokens with no top-level commas and no
+// leading '.'/backslash/macro-name, so a substituted body never turns into a
+// surprise directive or cycle — the arity always matches, so prep_run and
+// frontend.Preprocess agree byte-for-byte (directives included).
+func genMacroProg(r *rand.Rand, b *strings.Builder) {
+	// m0: 1 param; m1: 2 params; m2: 0 params. m1's body invokes m0 (safe:
+	// m0 does not call back, so no cycle).
+	b.WriteString(".macro m0 a\n  adrp x0, msg_\\a\n  mov x1, \\a\n.endm\n")
+	b.WriteString(".macro m1 a, b\n  m0 \\a\n  op \\b, \\a\n.endm\n")
+	b.WriteString(".macro m2\n  barrier\n.endm\n")
+	args := []string{"x0", "x1", "1", "0x10", "(1<<2)", "LBL", "\"hi\"", "42"}
+	arg := func() string { return args[r.Intn(len(args))] }
+	n := 3 + r.Intn(6)
+	for i := 0; i < n; i++ {
+		switch r.Intn(6) {
+		case 0:
+			b.WriteString("  m0 ")
+			b.WriteString(arg())
+			b.WriteByte('\n')
+		case 1:
+			b.WriteString("  m1 ")
+			b.WriteString(arg())
+			b.WriteString(", ")
+			b.WriteString(arg())
+			b.WriteByte('\n')
+		case 2:
+			b.WriteString("  m2\n")
+		case 3:
+			b.WriteString(".set K")
+			b.WriteByte(byte('0' + r.Intn(3)))
+			b.WriteString(", ")
+			b.WriteString([]string{"0", "1", "0x10"}[r.Intn(3)])
+			b.WriteByte('\n')
+		case 4:
+			// A .if guarding an invocation, using a K symbol.
+			b.WriteString(".if K")
+			b.WriteByte(byte('0' + r.Intn(3)))
+			b.WriteByte('\n')
+			b.WriteString("  m0 ")
+			b.WriteString(arg())
+			b.WriteByte('\n')
+			b.WriteString(".endif\n")
+		default:
+			b.WriteString([]string{"plain", "  label:", "\t.text", "x // c"}[r.Intn(4)])
+			b.WriteByte('\n')
+		}
+	}
+}
+
+// TestAsmprepBrick2bRandom fuzzes macro invocation/expansion against the Go
+// authority. Deterministic seed so a failure reproduces.
+func TestAsmprepBrick2bRandom(t *testing.T) {
+	r := rand.New(rand.NewSource(0x2b2b))
+	for i := 0; i < 600; i++ {
+		var b strings.Builder
+		genMacroProg(r, &b)
 		src := b.String()
 		want, wantErr := frontend.Preprocess([]byte(src), "r.s", frontend.PreprocessOptions{})
 
