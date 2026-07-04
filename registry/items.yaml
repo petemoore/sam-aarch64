@@ -6367,6 +6367,8 @@
   title: Serve release.src + release.img over TFTP from the demo (network-verifiable end-to-end proof)
   description: |
     Serve BOTH produced files over TFTP so a host fetches them and confirms the run really happened + produced the files (Pete's self-confirmation). TFTP serve is hw-proven (i96 first-light; i95b-b1 integrated ARP+DHCP+TFTP server booted from record 187, ~16.8KB/s, option-60 PXEClient gate). Integrate the existing server to serve the two files by name (advertise release.src / release.img). Driver invokes it as the final step. Refs: i95b-b1 server, make netboot-serve.
+    
+    SCOPE (investigated 2026-07-04): the serve capability EXISTS + is hardware-proven (i95b-b1). netboot_server.asm boots a Trinity record, does the B-DOS store walk (nb_fill_store) indexing EVERY file on the record, and serves each by TFTP name (resolve_src) — long names via the NBMANIFEST map (i346; buildManifest in tools/build-disk/main.go:785, -netboot-extra flag). So i365c = compose the demo's NBMANIFEST mapping the short SAM store-names RELEASESRC->release.src + RELEASEIMG->release.img, and gate that the server serves both under the long names from a record holding those two files. This is TIGHTLY COUPLED to i365d (the driver composes the disk with the NBMANIFEST + writes the two files at runtime + invokes the server) — recommend completing i365c AND i365d in ONE demo PR (a PR may complete several cohesive items). The independently-gateable core: a harness test (serve_record_vessel_test.go / netboot_server_faithful_test.go pattern) booting the server over a record with release.src+release.img+NBMANIFEST and asserting both serve under the long names.
   status: OPEN
   kind: leaf
   owner: agent
