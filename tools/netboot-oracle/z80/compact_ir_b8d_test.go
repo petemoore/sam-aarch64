@@ -48,6 +48,7 @@ import (
 	"github.com/petemoore/sam-aarch64/tools/sampage"
 	assemble "github.com/petemoore/sam-aarch64/tools/sam-aarch64/assemble"
 	frontend "github.com/petemoore/sam-aarch64/tools/sam-aarch64/frontend"
+	format "github.com/petemoore/sam-aarch64/tools/sam-aarch64-format"
 )
 
 const (
@@ -342,4 +343,54 @@ func TestChainPagedB8dSmoke(t *testing.T) {
 		t.Fatalf("read fixture %s: %v", pagedFixtureSrc, err)
 	}
 	checkB8DFixture(t, b8dBin, enctabData, parserImage, sysregData, pagedFixtureName, src)
+}
+
+// TestPatchLenEscapeFixtureTriggersEscape guards that tests/core/inst_patch_len_escape.s
+// still produces a patch expression >= 15 bytes — i.e. it actually exercises the
+// packed patch-header length-escape (expr_len nibble 15 -> real u8) that the b8d
+// corpus test byte-compares against the Z80 emit path (compact_emit.asm
+// cemit_ai_hdr_esc). Without this guard a future encoder change could silently
+// shrink the expression below the escape threshold: TestChainPagedB8dCorpus would
+// keep passing while quietly losing the only coverage of the emit escape branch
+// (the exact "only proof is code review" gap i353 closes).
+func TestPatchLenEscapeFixtureTriggersEscape(t *testing.T) {
+	const fixture = "../../../tests/core/sources/inst_patch_len_escape.s"
+	src, err := os.ReadFile(fixture)
+	if err != nil {
+		t.Fatalf("read %s: %v", fixture, err)
+	}
+	f, err := frontend.Translate(src, "inst_patch_len_escape.s")
+	if err != nil {
+		t.Fatalf("Translate: %v", err)
+	}
+	p1, err := assemble.Pass1(f)
+	if err != nil {
+		t.Fatalf("Pass1: %v", err)
+	}
+	tbn, err := assemble.CompactTBNBytes(f, p1)
+	if err != nil {
+		t.Fatalf("CompactTBNBytes: %v", err)
+	}
+	rf, err := format.ReadFile(tbn)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	maxExpr := 0
+	for _, r := range rf.Records {
+		if r.Kind != format.KindInsnRun {
+			continue
+		}
+		for _, el := range r.Elements {
+			for _, p := range el.Patches {
+				if len(p.Expr) > maxExpr {
+					maxExpr = len(p.Expr)
+				}
+			}
+		}
+	}
+	if maxExpr < 15 {
+		t.Fatalf("longest patch expr is %d bytes (< 15): the fixture no longer triggers the "+
+			"packed-header length-escape — adjust it (a longer symbol-difference expression) "+
+			"so it keeps pinning the emit escape branch", maxExpr)
+	}
 }
