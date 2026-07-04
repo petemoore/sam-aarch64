@@ -528,7 +528,7 @@ netboot-http: $(BUILD)/netboot_http.bin $(BUILD)/netboot_http.map
 # use.
 $(BUILD)/netboot_http_boot.bin $(BUILD)/netboot_http_boot.map: src/netboot/http_main.asm $(asm_deps/src/netboot/http_main.asm)
 	@mkdir -p $(BUILD)
-	pyz80 -D NETBOOT_STREAM=1 -D NETBOOT_REAL_LISTREAD=1 -D NETBOOT_WANT_RECORD_WRITE=1 \
+	pyz80 -D NETBOOT_STREAM=1 -D NETBOOT_REAL_LISTREAD=1 -D NETBOOT_WANT_RECORD_WRITE=1 -D NETBOOT_WANT_CLAIM=1 \
 	    -D HT_SERVER_IP_A=$(HT_SERVER_IP_A) -D HT_SERVER_IP_B=$(HT_SERVER_IP_B) \
 	    -D HT_SERVER_IP_C=$(HT_SERVER_IP_C) -D HT_SERVER_IP_D=$(HT_SERVER_IP_D) \
 	    -D HT_SERVER_PORT=$(HT_SERVER_PORT) \
