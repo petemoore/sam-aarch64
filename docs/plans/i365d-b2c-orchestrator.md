@@ -283,25 +283,39 @@ needs. The chain HLOADs `asmdemo` from linearSec 102 AFTER render clobbered it, 
 there); the "assembler" is that text executed as code → it wanders and HALTs. NOT
 the SD (that read fine); the "body collision" flagged early in this doc.
 
-**THE FIX (next session):** render must write RELEASESRC to FREE sectors AFTER all
-existing files, not from the fixed base 40. Two options:
-1. **Dynamic base (render-first, keeps the current render→assemble chain):** make
-   `RDS_DATA_BASE` a variable; before `render_run`, scan the record directory (render
-   already has `bd_record_read_hw`) for the max end-sector across all CODE entries and
-   set the base to `max_end+1` (here 913). Touches the write cursor, the dir-entry
-   first-sector (track/sector), and `rds_fill_bitmap`'s bit offset (bit0 currently =
-   linearSec 40). b2a still works (its test now reconstructs by name); re-verify it +
-   the sink/probe tests. This is also correct for a real shared card (never overwrite
-   other files). Preferred — bounded, keeps the working chain.
-2. **Assemble-FIRST (bigger restructure):** boot the assembler, HSAVE RELEASEIMG
-   (B-DOS allocates it at ~913+, clear of RELEASESRC's 40..859), then chain to render
-   which reads the still-intact IN, renders, and writes RELEASESRC last (clobbering
-   IN/asmdemo is now harmless). Sidesteps BOTH the body collision AND the DOS-page
-   clobber (render is last, DI;HALTs — no B-DOS op after), but needs the chain tail in
-   `assembler.asm` (assembler→render) instead of render→assembler. More work.
+**THE FIX — ASSEMBLE-FIRST is REQUIRED (render-first is architecturally wrong for
+b2c).** A "dynamic base" (write RELEASESRC after all files) DOES NOT FIT: record =
+1600 sectors; the files (dir 40 + IN 729 + bdos/AUTO/asmdemo/disasm/payloads ~144)
+occupy ~913, and RELEASESRC (820) + RELEASEIMG (43) need 863 more → ~1776 > 1600.
+**RELEASESRC MUST REUSE the consumed IN sectors** (base 40 overlapping IN's 128..856)
+— that is the only way it fits. But IN is read by BOTH render AND the assembler, so
+whoever reads IN LAST must read it BEFORE render overwrites it. render-first has
+render overwrite IN before the assembler reads it → the collision. **Only ordering
+fixes it: assemble-FIRST.**
 
-Do Option 1. Once RELEASESRC lands clear of asmdemo/IN, the chain HLOADs the REAL
-assembler → it assembles → HSAVEs RELEASEIMG → `ret`s onto CHAIN_DONE → Phase A green.
+Assemble-first (the required restructure):
+- AUTO boot file = the **assembler** (asmdemo). Overlays on the record: the render
+  vessel; payloads (disasm for both, enctab/sd13/zx013 for the assembler); one IN.
+- The assembler boots, reads IN + payloads (record intact), assembles, HSAVEs
+  RELEASEIMG. B-DOS allocates it in free space (~linearSec 913+, above RELEASESRC's
+  40..859 → no collision).
+- Then it **chains to the render overlay** (the FIX-3 HMPR-restore handoff, but the
+  tail lives in `assembler.asm` now: after `save_out_file`/`print_status_string`,
+  HLOAD the render vessel to `&8000` and jp instead of `ret`). render comes up,
+  HLOADs disasm, reads IN (STILL INTACT — the assembler only HSAVEd RELEASEIMG at
+  913+, never touched IN), renders RELEASESRC, and writes it to base 40 (reusing IN's
+  now-spent sectors), then DI;HALTs. No B-DOS op after render, so render's IN-reblock
+  DOS-page clobber is harmless → **FIX 1 (IN=4..26) becomes UNNECESSARY** (render can
+  go back to 8..30; keep it gated-off or revert). FIX 2 (free-slot dir writer, so the
+  serve phase finds both files) and FIX 3 (HMPR restore in the handoff) CARRY OVER.
+- Final record: RELEASESRC (40..859, reusing IN) + RELEASEIMG (913+) + dir + bdos —
+  fits, no collision. Both reconstruct by name.
+
+Carry-over from render-first work: FIX 2 (dir writer) + FIX 3 (HMPR handoff) + the
+loader-stub mechanism + the build-disk composition pattern all reused. What flips:
+the AUTO file (assembler, not render), the chain direction (assembler→render), and
+the chain tail moves to `assembler.asm` (DEMO_CHAIN there). Re-verify Phase A gate:
+boot → assemble (HSAVE RELEASEIMG) → render (write RELEASESRC) → both reconstruct.
 
 --- superseded SD-coexistence localization (the read that "confirmed" it was normal;
 the real cause is the body collision above) ---
