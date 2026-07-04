@@ -6167,8 +6167,29 @@
   description: |
     i357/#847 landed store_format_record (free-record pre-format before HRECORD/HSAVE) but ONLY in the smoke build (32741/32768). Two residuals: (1) BUDGET — the ~512 B raw-CMD24 record-write cluster (NETBOOT_WANT_RECORD_WRITE) does not fit the debug (marker) build or the full 6-file netboot_http_boot in the 32 KB boot window, so the marker-instrumented free-record re-shoot (i70b diagnosis path) and the full firmware fetch's store leaf still lack the fix (they wedge on a free record). Needs a byte-budget lift: leaner cluster, smaller/paged manifest, or a section-D overlay for the write code. (2) CLAIM — http_main omits bdos_claim_record (the record-LIST name write, +~200 B), so a second file's store_begin (bdos_find_free_record) RE-PICKS the same record (selection mismatch: find_free tests the list-entry blank, our format sets only the +232 dir stamp), overwriting the first file. Single-file smoke is unaffected; multi-file fetch (the full build) needs the claim OR a bdos_find_free_record that also rejects a dir-stamped record. Both are only reachable once the budget is lifted (the full build is the multi-file one). Not blocking i70b (its re-shoot uses the plain smoke build's border-colour outcome).
   status: OPEN
+  kind: umbrella
+  owner: agent
+
+- id: i360a
+  title: "Budget lift: trim dead legacy-accumulate path so the record-write cluster fits the debug + full http boot builds"
+  description: |
+    Gate the legacy whole-body accumulate path (CONN_DATA 4KB buffer + http_parse_response + conn_accumulate's CONN_DATA branch) under if defined(NETBOOT_STREAM)==0 — kept in the host-test/default builds that use it, dropped from the streaming bootable, reclaiming ~4.26KB of the &8000-&FFFF window. With that headroom, enable NETBOOT_WANT_RECORD_WRITE (i357 free-record pre-format) in the full (netboot_http_boot: 33053->28780) and debug (overran->28930) recipes. Also guard store_format_record to decline when FW_BASE_RECORD==0 (no card / floppy decline) so it doesn't spin on raw CMD24 in the card-less host provision harness; the real-card path stays covered by http_main_faithful_store_test. PR #851.
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 851, role: completing}
+  parent: i360
+
+- id: i360b
+  title: "http store: claim each stored record so multi-file fetch advances (no re-pick)"
+  description: |
+    Residual 2 of i360. http_main omits bdos_claim_record (NETBOOT_WANT_CLAIM, the record-LIST name write), so a second file's store_begin/bdos_find_free_record RE-PICKS the same record (find_free tests the list-entry blank; store_format_record sets only the +232 dir stamp), overwriting file 1. Call bdos_claim_record after each file's store so find_free advances. Base single-record-file claim is standalone (host-verifiable); a multi-record file must claim EVERY record it spans, reconciled with i70c's record-spanning design. bd_list_write_hw shares bd_cmd24_write_core with the already-pulled write path (~25B) + the bdos_seam claim machinery (~200B); the i360a CONN_DATA trim leaves ~3.7KB headroom. depends_on i70b (needs the store path hardware-proven).
+  status: OPEN
+  depends_on: [i70b]
+  kind: leaf
+  owner: agent
+  parent: i360
 
 - id: i361
   title: "Local incremental build: TestBootRecordAssemblerRecordVessel fails on stale build/ (enctab.enc vs vessel out of sync); CI-green"

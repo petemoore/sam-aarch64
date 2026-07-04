@@ -699,6 +699,19 @@ if defined(NETBOOT_WANT_RECORD_WRITE)
 ; ===========================================================================
 SFR_DIR_SECTORS:  equ 40                        ; tracks 0-3 (10 sectors/track) = the directory region
 store_format_record:
+                ; Decline when there is no real SD record to format. A free SD record
+                ; is 1-based; FW_BASE_RECORD == 0 is store_begin's no-card path
+                ; (BD_RECORDS == 0 at boot -> the record-0/floppy graceful decline).
+                ; The raw CMD24 writes below would spin forever waiting on an absent
+                ; card (bd_record_write_hw drives the SPI bus directly). This guard is
+                ; also what lets the flat host provision/bodysink harness — which
+                ; attaches no SD model — drive storage_sink_leaf without wedging; the
+                ; real-card format path (a free record >= 1) is emulation-covered by
+                ; http_main_faithful_store_test.
+                ld      hl, (FW_BASE_RECORD)
+                ld      a, h
+                or      l
+                ret     z
 if defined(NETBOOT_DEBUG)
                 ld      a, DBG_HTTP_FILE_START
                 call    dbg_marker
@@ -749,10 +762,13 @@ endif
 ; pulls the raw-CMD24 record-DATA write path (bd_cmd24_write_core /
 ; bd_record_write_hw + its i295 band guard) so store_format_record can pre-format
 ; a free record's directory before HRECORD/HSAVE. It does NOT pull bd_list_write_hw
-; or the bdos_seam claim machinery (NETBOOT_WANT_CLAIM, a further ~200 B) — the
-; record SELECT and the file body still go via real B-DOS RST 8 hooks (HRECORD /
-; HSAVE, hardware-proven by i93b), and omitting the claim keeps the binary inside
-; the 32 KB boot budget.
+; or the bdos_seam claim machinery (NETBOOT_WANT_CLAIM) — the record SELECT and the
+; file body go via real B-DOS RST 8 hooks (HRECORD / HSAVE, hardware-proven by
+; i93b). The claim (write the record's LIST name so bdos_find_free_record advances
+; to the NEXT free record between files, rather than re-picking the just-formatted
+; one) is deferred to i360b: multi-file spanning must claim EVERY record a file
+; occupies, which is reconciled with the i70c record-spanning design. The i360
+; CONN_DATA trim already leaves ~3.7 KB of headroom for it when i360b lands.
 ; ===========================================================================
                 include "sd_csd.asm"
 
