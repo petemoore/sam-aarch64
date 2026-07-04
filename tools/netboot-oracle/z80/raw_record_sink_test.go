@@ -24,14 +24,21 @@ import (
 )
 
 // rrsScratch is a free flat-harness RAM window for staging chunk bytes before
-// each raw_record_sink_leaf call: above the binary tail (&C2EB for the serve
-// boot binary, which now carries sdc_init_ladder / bd_list_* at &BFFA–&C2EB
-// after adding NETBOOT_REAL_LISTREAD) and clear of the harness stack (&6FFE)
-// and HALT trap (&7000). Window is &D000..&EFFF (8 KB); chunks are staged in
-// slices no larger than rrsSliceMax.
+// each raw_record_sink_leaf call (the leaf reads the stream via HL=rrsScratch).
+// It sits in LOW RAM (&1000..&2FFF), BELOW the org-&8000 binary — deliberately,
+// so it is structurally immune to the collision class i313 root-caused: a
+// STAGING-enlarged or large-overlay build grows the binary's code UP from &8000
+// (e.g. raw_record_sink's flush/finish/csd routines past &D000), and an *upper*
+// staging window (the old &D000..&EFFF) then overlaps the very code the test
+// overwrites with staged bytes → the CPU runs data as code (the wild jump / the
+// "no T-state timing" garbage decode that i313 mis-attributed to a koron bug;
+// same class as i231b-b4g). A low window cannot be reached by up-growing code.
+// Clear of the RST hooks (&0000-&0038), the harness stack (SP=&6FFE, grows down)
+// and the HALT trap (&7000); 8 KB fits below the binary where the &7000..&7FFF
+// gap (4 KB) could not. Chunks are staged in slices no larger than rrsSliceMax.
 const (
-	rrsScratch  = 0xD000
-	rrsSliceMax = 0x2000 // 8 KB — within &D000..&EFFF
+	rrsScratch  = 0x1000
+	rrsSliceMax = 0x2000 // 8 KB — within &1000..&2FFF
 )
 
 // rrsSeq returns n bytes with a position-dependent pattern (matching the Go
