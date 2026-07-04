@@ -6685,7 +6685,7 @@
   title: "SAM-runnable paged prep image + driver harness (asmprep in a paged window, PP_PREP i2-pool buffers, b8d two-image) — shared by i31b-b3b's exercise and i31b-b4"
   description: |
     Emerged prerequisite (i31b-b3b 'add the edge if a concrete prerequisite emerges'). asmprep.asm runs org &8000 flat (32 KB, sections C+D) in the standalone oracle; the real trampoline-HLOAD lands files in section C, colliding with prep's own code/data there. Per spec §5/§6.4 the on-SAM prep must run in a paged window (b8d two-image pattern) with big buffers (PREP_OUT 8192, PREP_SRC 4096, PREP_FILES, SUBST_ARENA, MACRO_STRPOOL, ...) sourced from the i2 pool under a new PP_PREP tag, leaving C/D free for the trampoline. Deliver: a -D ASMPREP_PAGED_BUFS build that relocates asmprep buffers into an LMPR two-page window (pattern: asmparse_paged / ASMPARSE_PAGED_BUFS, Makefile:1583+), a prep_paged_driver.asm (pattern: parse_paged_driver/chain_paged_driver), and a test running prep_run on the SAM under the SAM-fidelity harness + SimCoupe with the memory reader (proving paged prep runs). Spec assigns the paged image to b4; extracted here to de-circularise (b4 depends on b3 incl b3b, so b3b's exercise cannot depend on b4). Depends only on the asmprep module being feature-complete (b1/b2a/b2b/b3a, all DONE).
-  status: OPEN
+  status: IN_PROGRESS
   kind: leaf
   owner: agent
 
