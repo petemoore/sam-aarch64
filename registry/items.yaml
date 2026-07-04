@@ -5680,7 +5680,7 @@
   description: |
     Second brick for i304. Base = reference/bdos/bdos15a.asm (i304a: byte-exact, symbolicated with l_XXXX address-labels where l_XXXX == the ANALYSIS region-diff table's a&XXXX, so that table maps directly onto the source). Apply the documented 1.5t (Trinity fork) changes region-by-region (per ~/sam-archive/bdos/analysis: region-diffs.txt + bdos15t-beta6.annotated.dis): Atom device layer -> SD/SPI driver, CHS->32-bit linear seek, SD init ladder, CSD/records math, record-base poke, hot-swap RESTORE, banner/DIR/message text, DEVICE command removed. Iterate assemble->diff until byte-identical to the 11044-byte extracted/bdos15t-beta6.bin. Graft Edwin's routine NAMES from bdos15a.src.txt onto the l_XXXX labels of routines you touch (human-verified per routine; do not auto-graft). NOTE: 1.5t is Colin's proprietary binary (out-of-repo, ~/sam-archive, SKIP_PRIVATE_TESTS-gated) -- the reconstructed SOURCE is ours; the byte-match gate must NOT commit Colin's bytes: resolve the reference bin from ~/sam-archive like csd_decode_colin_test.go. Deliverable: reference/bdos/bdos15t src (pyz80) + private-gated byte-identity target.
   status: OPEN
-  depends_on: [i304a]
+  depends_on: [i304a, q79]
   kind: leaf
   owner: agent
   parent: i304
