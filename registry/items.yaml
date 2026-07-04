@@ -6155,3 +6155,19 @@
   kind: leaf
   owner: agent
   parent: i359
+
+- id: i360
+  title: "http store leaf: fit the record-write cluster + record-list claim into the debug/full 6-file http builds, and claim the record so multi-file fetch doesn't re-pick"
+  description: |
+    i357/#847 landed store_format_record (free-record pre-format before HRECORD/HSAVE) but ONLY in the smoke build (32741/32768). Two residuals: (1) BUDGET — the ~512 B raw-CMD24 record-write cluster (NETBOOT_WANT_RECORD_WRITE) does not fit the debug (marker) build or the full 6-file netboot_http_boot in the 32 KB boot window, so the marker-instrumented free-record re-shoot (i70b diagnosis path) and the full firmware fetch's store leaf still lack the fix (they wedge on a free record). Needs a byte-budget lift: leaner cluster, smaller/paged manifest, or a section-D overlay for the write code. (2) CLAIM — http_main omits bdos_claim_record (the record-LIST name write, +~200 B), so a second file's store_begin (bdos_find_free_record) RE-PICKS the same record (selection mismatch: find_free tests the list-entry blank, our format sets only the +232 dir stamp), overwriting the first file. Single-file smoke is unaffected; multi-file fetch (the full build) needs the claim OR a bdos_find_free_record that also rejects a dir-stamped record. Both are only reachable once the budget is lifted (the full build is the multi-file one). Not blocking i70b (its re-shoot uses the plain smoke build's border-colour outcome).
+  status: OPEN
+  kind: leaf
+  owner: agent
+
+- id: i361
+  title: "Local incremental build: TestBootRecordAssemblerRecordVessel fails on stale build/ (enctab.enc vs vessel out of sync); CI-green"
+  description: |
+    On the Pi host, TestBootRecordAssemblerRecordVessel (the i319b-b2 gate) fails locally: 'enctab.enc page 4 bytes differ ... got &40 want &45 — the boot's HLOAD from the record did not deliver it'. It FAILS on clean origin/main (proven by a stash test during i357) and is UNRELATED to any source change — a stale/inconsistent local build/ dir. CI is green (the netboot-oracle job clean-builds), so this is local-only, i352-class. Partial diagnosis (i357 session): make enctab regenerated build/enctab.enc (it was itself stale); make assembler said 'nothing to do'; make disk-record rebuilt build/test_record.mgt but the vessel STILL delivered the old enctab bytes — so the vessel's embedded enctab did not track a regenerated build/enctab.enc. Likely an incremental-build dependency gap: the assembler/vessel pipeline does not mark itself stale when enctab.enc changes. NEXT: confirm whether a clean rebuild clears it (=> pure cruft, document the clean-rebuild fix), or whether a Makefile prereq is genuinely missing (=> add the dep). Low priority; saves the next local session the re-diagnosis this cost.
+  status: OPEN
+  kind: leaf
+  owner: agent
