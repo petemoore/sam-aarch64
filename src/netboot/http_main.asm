@@ -559,13 +559,47 @@ endif
 ; it against the pinned hash (conn_verify_final sets CONN_HASH_MATCH). The fetched
 ; bytes are already persisted (storage_sink_leaf HSAVE'd each window); this only
 ; finalises the verify verdict. Acting on a mismatch — reject / retry / surface it
-; — is the picker UX (i100c). Clobbers A, BC, DE, HL, IX.
+; — is the picker UX (i100c).
+;
+; Under NETBOOT_WANT_CLAIM (i360b), it then CLAIMS the record — writes its central
+; record-LIST name entry via bdos_claim_record — so the NEXT file's store_begin ->
+; bdos_find_free_record advances to the next free record instead of re-picking this
+; one (find_free tests the list entry blank, which store_format_record's +232 dir
+; stamp does not touch). The claimed name is the base record's content-addressed
+; <hash6>000 (matching the window-0 HSAVE filename). This claims only FW_BASE_RECORD,
+; correct for a single-record file; a multi-record file must claim every record it
+; spans — the i70c record-spanning reconciliation (see the sd_csd include note).
+; Clobbers A, BC, DE, HL, IX.
 store_end:
 if defined(NETBOOT_DEBUG)
                 ld      a, DBG_HTTP_FILE_VERIFY
                 call    dbg_marker
 endif
+if defined(NETBOOT_WANT_CLAIM)
+                call    conn_verify_final       ; finalise the verify verdict first
+                ; --- claim FW_BASE_RECORD so the next file's find_free advances ---
+                ; Decline when there is no real SD record (FW_BASE_RECORD == 0 is
+                ; store_begin's no-card / floppy-decline path): bdos_claim_record does
+                ; a raw CMD24 list-sector write that would spin on an absent card, and
+                ; the card-less host harness must reach here without wedging. Same
+                ; guard as store_format_record.
+                ld      hl, (FW_BASE_RECORD)
+                ld      a, h
+                or      l
+                ret     z
+                ld      (BD_FREE_RECORD), hl    ; bdos_claim_record claims BD_FREE_RECORD
+                ; base-record name = <hash6>000 (content-addressed from the pinned
+                ; digest, index 0) — the same name storage_sink_leaf's window 0 gave
+                ; the HSAVE'd disk image, so the record-LIST name matches its content.
+                ld      hl, CONN_PINNED_HASH
+                ld      bc, 0
+                call    fw_span_record_name     ; FW_SPAN_NAME = <hash6>000
+                ld      hl, FW_SPAN_NAME
+                ld      (BD_CLAIM_NAME_PTR), hl
+                jp      bdos_claim_record       ; write the list entry; returns to caller
+else
                 jp      conn_verify_final
+endif
 
 ; storage_sink_leaf(HL = window ptr, BC = window length) — the per-window store
 ; leaf the streaming flush reaches (through the body-skip filter). It (1) hashes
@@ -761,14 +795,20 @@ endif
 ; the sd_push/i319a hardware-proven mechanism. NETBOOT_WANT_RECORD_WRITE (i357):
 ; pulls the raw-CMD24 record-DATA write path (bd_cmd24_write_core /
 ; bd_record_write_hw + its i295 band guard) so store_format_record can pre-format
-; a free record's directory before HRECORD/HSAVE. It does NOT pull bd_list_write_hw
-; or the bdos_seam claim machinery (NETBOOT_WANT_CLAIM) — the record SELECT and the
-; file body go via real B-DOS RST 8 hooks (HRECORD / HSAVE, hardware-proven by
-; i93b). The claim (write the record's LIST name so bdos_find_free_record advances
-; to the NEXT free record between files, rather than re-picking the just-formatted
-; one) is deferred to i360b: multi-file spanning must claim EVERY record a file
-; occupies, which is reconciled with the i70c record-spanning design. The i360
-; CONN_DATA trim already leaves ~3.7 KB of headroom for it when i360b lands.
+; a free record's directory before HRECORD/HSAVE. The record SELECT and the file
+; body go via real B-DOS RST 8 hooks (HRECORD / HSAVE, hardware-proven by i93b).
+;
+; NETBOOT_WANT_CLAIM (i360b, set for the full multi-file netboot_http_boot build):
+; pulls bd_list_write_hw + the bdos_seam claim machinery (bdos_claim_record /
+; bdos_build_claim_entry) so store_end writes each stored record's central LIST name
+; entry. That makes the NEXT file's bdos_find_free_record advance to the next free
+; record instead of re-picking the just-formatted one (find_free tests the list-entry
+; blank, which store_format_record's +232 dir stamp does not touch). NETBOOT_WANT_CLAIM
+; implies the record-DATA write path (sd_csd.asm shares bd_cmd24_write_core between the
+; list-write and record-write, so it is assembled once). It claims only FW_BASE_RECORD
+; per file — correct for a single-record file; a multi-record file must claim every
+; record it spans, part of the i70c record-spanning reconciliation. The claim is NOT
+; set in the smoke/debug builds (single-file, no re-pick).
 ; ===========================================================================
                 include "sd_csd.asm"
 
