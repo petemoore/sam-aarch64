@@ -391,6 +391,41 @@ func TestTbnRenderOverlayImmMem(t *testing.T) {
 	assertRenderMatch(t, got, want)
 }
 
+// TestTbnRenderCommentSidecar is slice 7's parity proof: a source with
+// standalone `//` comments, a TRAILING comment on an instruction, a multi-line
+// block comment, and blank-line runs produces a populated editor-region
+// comment/blank-run sidecar. The renderer must interleave those rows by output
+// PC — draining them before the header-table label flush at each byte-emitting
+// boundary — reproducing render.Emit exactly. The tricky cases: a trailing
+// comment (placement 1) appends to the still-open statement line as ` //…`, a
+// blank run closes an open statement with its own `\n` before emitting the
+// blanks, and a block comment's body splits on `\n` into one `//` line each.
+func TestTbnRenderCommentSidecar(t *testing.T) {
+	src := []byte("// licence header line 1\n" +
+		"// licence header line 2\n" +
+		"\n" +
+		".global _start\n" +
+		"\n" +
+		"_start:\n" +
+		"  nop                 // trailing on nop\n" +
+		"  // standalone before ret\n" +
+		"  ret\n" +
+		"\n" +
+		"/* a block\n" +
+		"   comment */\n" +
+		"\n" +
+		"  .word 0x1234        // trailing on data\n")
+	tbn := buildCompactTBN(t, src, "s7.s")
+
+	want, err := render.Emit(tbn)
+	if err != nil {
+		t.Fatalf("render.Emit: %v", err)
+	}
+
+	got := renderTBNOnZ80(t, tbn)
+	assertRenderMatch(t, got, want)
+}
+
 // buildCompactTBN builds a compact `.tbn` from source via the frontend +
 // assembler (the same pipeline compact_ir_b8d_test.go uses), so the fixture
 // carries a realistic editor region + header tables.

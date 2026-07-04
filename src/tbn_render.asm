@@ -51,8 +51,19 @@ render_emit:
                 call    render_walk
 
 ; Final: `flush()` then `if prevWasStatement { out.WriteByte('\n') }`
-; (emit.go:226,235).  The trailing flush places an end-of-stream label.
+; (emit.go:226,235).  The trailing flush places an end-of-stream label and drains
+; any end-of-stream comment / blank run.
                 call    render_flush
+
+; Safety: every sidecar row must have been placed by the PC walk (emit.go:231-234).
+; A stranded row (cursor < count) is a PC-accounting bug or corrupt sidecar — a
+; loud HALT here beats silently dropping a comment.
+                ld      hl, (render_sidecar_cursor)
+                ld      de, (render_sidecar_count)
+                or      a
+                sbc     hl, de
+                jp      c, fail                 ; cursor < count → rows unplaced
+
                 ld      a, (render_prev_stmt)
                 or      a
                 ret     z
@@ -988,14 +999,18 @@ render_pc_advance4:
 
 
 ; -----------------------------------------------------------------------
-; render_flush — emit every header definition whose offset == the current PC.
-; Labels drain before locals at a shared offset (newHeaderDefs's stable order,
-; pc.go:55-66); within a kind the reader's ascending-offset order is used.
-; Mirrors flush() → hd.flushAt(pc, emitDef) (emit.go:122, pc.go:78-83).  The
-; comment sidecar is not consumed this slice, so flushComments is a no-op here.
+; render_flush — drain the comment/blank-run sidecar at the current PC, then
+; emit every header definition whose offset == PC.  Mirrors flush() (emit.go:122)
+; = flushComments() then hd.flushAt(pc, emitDef).  At a shared PC the sidecar
+; rows emit BEFORE the labels: a trailing comment belongs to the just-rendered
+; statement (its line is still open); a standalone comment / blank run precedes
+; the next label.  Labels drain before locals at a shared offset (newHeaderDefs's
+; stable order, pc.go:55-66); within a kind the reader's ascending-offset order
+; is used.
 ; Clobbers: A, BC, DE, HL.
 ; -----------------------------------------------------------------------
 render_flush:
+                call    render_flush_comments
 render_flush_labels:
                 ld      hl, (render_label_cursor)
                 ld      de, (render_label_count)
@@ -1071,6 +1086,257 @@ render_oep_ne:
                 ld      a, 1
                 or      a                           ; Z=0 (not equal)
                 ret
+
+
+; -----------------------------------------------------------------------
+; render_flush_comments — drain sidecar rows whose anchor <= the current PC,
+; in stored (source) order.  Mirrors cc.flushAt(pc, emitComment, emitBlank)
+; (pc.go:119-129).  The "<= pc" (not "== pc") matches the Go: a row is anchored
+; to a statement-boundary PC the walk hits, and draining at-or-before strands
+; nothing if PC accounting ever drifts.
+; Clobbers: A, BC, DE, HL.
+; -----------------------------------------------------------------------
+render_flush_comments:
+                ld      hl, (render_sidecar_cursor)
+                ld      de, (render_sidecar_count)
+                or      a
+                sbc     hl, de
+                ret     nc                          ; cursor >= count → done
+                call    render_sc_row_addr          ; HL = &render_sidecar_rows[cursor]
+                call    render_sc_anchor_le_pc      ; C set iff anchor > pc (stop)
+                ret     c
+                call    render_sc_emit_row
+                ld      hl, (render_sidecar_cursor)
+                inc     hl
+                ld      (render_sidecar_cursor), hl
+                jr      render_flush_comments
+
+
+; render_sc_row_addr — HL = render_sidecar_rows + render_sidecar_cursor*10.
+render_sc_row_addr:
+                ld      hl, (render_sidecar_cursor)
+                ld      d, h
+                ld      e, l                        ; DE = cursor
+                add     hl, hl                      ; 2*cursor
+                add     hl, de                      ; 3*cursor
+                add     hl, hl                      ; 6*cursor
+                add     hl, de                      ; 7*cursor
+                add     hl, de                      ; 8*cursor
+                add     hl, de                      ; 9*cursor
+                add     hl, de                      ; 10*cursor
+                ld      de, render_sidecar_rows
+                add     hl, de
+                ret
+
+
+; render_sc_anchor_le_pc — CARRY set iff row.anchor > render_pc (drain stops);
+; CARRY clear iff anchor <= pc (emit).  Computes pc - anchor as an unsigned
+; 32-bit subtract, LSB first; the final borrow is the comparison result.  INC
+; HL/DE and LD do not disturb the carry chain.  Preserves HL (the row ptr).
+; Input:  HL = &row (anchor at +0).
+render_sc_anchor_le_pc:
+                push    hl
+                ld      de, render_pc
+                ld      a, (de)
+                sub     (hl)                        ; pc[0] - anchor[0]
+                inc     hl
+                inc     de
+                ld      a, (de)
+                sbc     a, (hl)                     ; pc[1] - anchor[1] - borrow
+                inc     hl
+                inc     de
+                ld      a, (de)
+                sbc     a, (hl)                     ; pc[2] - anchor[2] - borrow
+                inc     hl
+                inc     de
+                ld      a, (de)
+                sbc     a, (hl)                     ; pc[3] - anchor[3] - borrow
+                pop     hl
+                ret                                 ; C = borrow = (pc < anchor)
+
+
+; render_sc_emit_row — dispatch one sidecar row on its kind.  emitComment
+; (emit.go:111-113) / emitBlank (emit.go:114-116).  Input: HL = &row.
+render_sc_emit_row:
+                push    hl
+                ld      de, SC_OFF_KIND
+                add     hl, de
+                ld      a, (hl)
+                pop     hl
+                cp      SIDECAR_BLANK
+                jp      z, render_sc_emit_blank
+                ; fall through to render_sc_emit_comment
+
+
+; -----------------------------------------------------------------------
+; render_sc_emit_comment — emitCommentBody (emit.go:24-39): render a comment
+; body as one-or-more "//"-prefixed lines.  Split the body on '\n'; strip a
+; trailing '\r' from each line.  Placement 1 (trailing) appends the FIRST line
+; to the open statement as " //line\n"; every other line, and any standalone
+; comment, takes its own "//line\n" (closing an open statement with '\n' first).
+; prevWasStatement becomes false.
+;
+; Input:  HL = &row (placement +5, len +6, body ptr +8).
+; -----------------------------------------------------------------------
+render_sc_emit_comment:
+                push    hl
+                ld      de, SC_OFF_PLACE
+                add     hl, de
+                ld      a, (hl)
+                ld      (render_cb_placement), a
+                pop     hl
+                push    hl
+                ld      de, SC_OFF_BODY
+                add     hl, de
+                ld      e, (hl)
+                inc     hl
+                ld      d, (hl)                     ; DE = body ptr
+                ld      (render_cb_start), de
+                pop     hl
+                ld      de, SC_OFF_LEN
+                add     hl, de
+                ld      e, (hl)
+                inc     hl
+                ld      d, (hl)                     ; DE = body length
+                ld      hl, (render_cb_start)
+                add     hl, de
+                ld      (render_cb_end), hl         ; end = body ptr + length
+                ld      a, 1
+                ld      (render_cb_first), a
+
+; --- segment loop: split the body on '\n' (strings.Split semantics) ---------
+render_cb_seg_loop:
+                ld      hl, (render_cb_start)
+                ld      (render_cb_scan), hl
+render_cb_scan_loop:
+                ld      hl, (render_cb_scan)
+                ld      de, (render_cb_end)
+                or      a
+                sbc     hl, de
+                jr      nc, render_cb_scan_end      ; scan >= end → no '\n'
+                ld      hl, (render_cb_scan)
+                ld      a, (hl)
+                cp      10                          ; '\n'
+                jr      z, render_cb_scan_found
+                inc     hl
+                ld      (render_cb_scan), hl
+                jr      render_cb_scan_loop
+render_cb_scan_end:
+; final segment = [start, end); emit, then break (no more '\n').
+                ld      hl, (render_cb_end)
+                ld      (render_cb_seg_end), hl
+                jp      render_cb_emit_segment      ; tail (no continuation)
+render_cb_scan_found:
+; segment = [start, scan); emit, then continue past the '\n'.
+                ld      hl, (render_cb_scan)
+                ld      (render_cb_seg_end), hl
+                call    render_cb_emit_segment
+                ld      hl, (render_cb_scan)
+                inc     hl                          ; skip the '\n'
+                ld      (render_cb_start), hl
+                jr      render_cb_seg_loop
+
+
+; render_cb_emit_segment — emit one split-line: strip a trailing '\r', then the
+; placement/first-line logic of emitCommentBody's loop body.
+render_cb_emit_segment:
+; seg length = seg_end - start.
+                ld      hl, (render_cb_seg_end)
+                ld      de, (render_cb_start)
+                or      a
+                sbc     hl, de                      ; HL = raw segment length
+                ld      a, h
+                or      l
+                jr      z, render_cb_len_done       ; empty segment
+; strip a trailing '\r' (TrimSuffix line "\r").
+                push    hl
+                ld      hl, (render_cb_seg_end)
+                dec     hl
+                ld      a, (hl)
+                cp      13                          ; '\r'
+                pop     hl
+                jr      nz, render_cb_len_done
+                dec     hl                          ; drop the '\r'
+render_cb_len_done:
+                ld      (render_cb_seg_len), hl
+
+; placement 1 + first line + open statement → append trailing " //line\n".
+                ld      a, (render_cb_first)
+                or      a
+                jr      z, render_cb_standalone
+                ld      a, (render_cb_placement)
+                cp      1
+                jr      nz, render_cb_standalone
+                ld      a, (render_prev_stmt)
+                or      a
+                jr      z, render_cb_standalone
+                ld      a, " "
+                call    render_out_append
+                call    render_cb_emit_slashline
+                jr      render_cb_seg_done
+render_cb_standalone:
+; standalone / continuation line: close an open statement, then "//line\n".
+                ld      a, (render_prev_stmt)
+                or      a
+                jr      z, render_cb_no_nl
+                ld      a, 10
+                call    render_out_append
+render_cb_no_nl:
+                call    render_cb_emit_slashline
+render_cb_seg_done:
+                xor     a
+                ld      (render_prev_stmt), a       ; prevWasStatement = false
+                ld      (render_cb_first), a        ; subsequent lines are not first
+                ret
+
+
+; render_cb_emit_slashline — append "//", the segment bytes
+; [render_cb_start, +render_cb_seg_len), then '\n'.
+render_cb_emit_slashline:
+                ld      a, "/"
+                call    render_out_append
+                ld      a, "/"
+                call    render_out_append
+                ld      hl, (render_cb_start)
+                ld      bc, (render_cb_seg_len)
+                call    render_out_put_bytes
+                ld      a, 10
+                jp      render_out_append
+
+
+; -----------------------------------------------------------------------
+; render_sc_emit_blank — emitBlankRun (emit.go:45-53): if a statement is open,
+; close it with '\n' (that newline is the statement's own line, not a blank),
+; then emit render_cb (run length) blank lines.  prevWasStatement becomes false.
+;
+; Input:  HL = &row (run length at +6).
+; -----------------------------------------------------------------------
+render_sc_emit_blank:
+                ld      de, SC_OFF_LEN
+                add     hl, de
+                ld      e, (hl)
+                inc     hl
+                ld      d, (hl)                     ; DE = run length (u16)
+                push    de
+                ld      a, (render_prev_stmt)
+                or      a
+                jr      z, rseb_no_close
+                ld      a, 10
+                call    render_out_append
+                xor     a
+                ld      (render_prev_stmt), a
+rseb_no_close:
+                pop     de
+rseb_loop:
+                ld      a, d
+                or      e
+                ret     z
+                ld      a, 10
+                push    de
+                call    render_out_append
+                pop     de
+                dec     de
+                jr      rseb_loop
 
 
 ; -----------------------------------------------------------------------
@@ -1465,12 +1731,16 @@ render_directive:
 
 ; Flush labels/locals before the directive EXCEPT `.org` (emit.go:165-171): a
 ; label coincident with the leading `.org` must render AFTER it (origin
-; semantics).  No comment sidecar this slice, so `.org` simply skips the flush.
+; semantics).  Comments are origin-neutral, so `.org` still drains them first
+; (flushComments); only the label flush is held (emit.go:169-171).
                 ld      a, (render_dir_id)
                 cp      DIR_ORG
-                jr      z, render_dir_noflush
+                jr      z, render_dir_org_flush
                 call    render_flush
-render_dir_noflush:
+                jr      render_dir_afterflush
+render_dir_org_flush:
+                call    render_flush_comments
+render_dir_afterflush:
                 call    render_open_stmt            ; newline-if-prev + "  "
 
                 ld      a, (render_dir_id)
@@ -3332,6 +3602,15 @@ render_ld_nameptr:      defw    0       ; directive name string ptr
 render_ld_idx:          defb    0       ; element index (litDataPerLine wrap)
 render_ld_width:        defb    0       ; element width in bytes (1/2/4/8)
 render_ld_seen:         defb    0       ; hex leading-zero suppression flag
+
+; SLICE 7 — comment-body (emitCommentBody) split-line scratch.
+render_cb_placement:    defb    0       ; current comment placement (0/1)
+render_cb_first:        defb    0       ; is this the first split line (i==0)?
+render_cb_start:        defw    0       ; current segment start ptr (body buffer)
+render_cb_end:          defw    0       ; body end ptr (start + length)
+render_cb_scan:         defw    0       ; '\n' scan cursor
+render_cb_seg_end:      defw    0       ; current segment end (exclusive)
+render_cb_seg_len:      defw    0       ; current segment length (post-'\r'-strip)
 
 render_out_len:         defw    0       ; bytes written to render_out
 render_out:             defs    512     ; rendered source text
