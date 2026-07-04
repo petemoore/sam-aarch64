@@ -112,7 +112,7 @@ ci-registry: registry-gen
 # koron-go/z80 harness (tools/netboot-oracle/z80) and byte-compares its emitted
 # packet against the same golden vectors the Go authority is checked against.
 # Needs pyz80 (the dev container), unlike the pure-Go ci-netboot-oracle.
-.PHONY: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-build-tcp-segment netboot-sha256 netboot-hmac-sha256 netboot-hkdf netboot-hkdf-expand-label netboot-chacha20 netboot-poly1305 netboot-x25519-field netboot-aead netboot-tls-keyschedule netboot-tls-record netboot-tls-transcript netboot-tls-client-hello netboot-tls-server-flight netboot-tls-client netboot-tls-main netboot-encdrv netboot-dhcp-loop netboot-tcp-conn netboot-tcp-conn-stream netboot-http-get netboot-fw-source netboot-body-sink netboot-tls-reasm netboot-fw-span netboot-http netboot-http-boot netboot-http-disk netboot-http-smoke-boot netboot-http-smoke-disk netboot-http-boot-debug netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke netboot-smoke-disk netboot-server netboot-server-disk netboot-serve-boot netboot-serve-boot-debug netboot-serve-trinload netboot-trinpush-test netboot-dumper netboot-csd-probe netboot-sd-push netboot-boot-record netboot-delete-record netboot-list-records netboot-hook-roundtrip netboot-render-disk-probe netboot-render-disk-boot netboot-render-disk-boot-record netboot-samboot-config netboot-trinity-identity netboot-trinload netboot-sd-csd netboot-sd-listread netboot-z80-routines asmlex-z80 asmparse-z80 asmparse-paged-z80 parse-paged-driver-z80 chain-paged-driver-z80 tbn-render-driver-z80 pass1-ir-z80 compact-ir-z80 compact-ser-z80 editmodel-z80 pagepool-z80 spill-z80 viewport-z80 ci-netboot-z80
+.PHONY: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-build-tcp-segment netboot-sha256 netboot-hmac-sha256 netboot-hkdf netboot-hkdf-expand-label netboot-chacha20 netboot-poly1305 netboot-x25519-field netboot-aead netboot-tls-keyschedule netboot-tls-record netboot-tls-transcript netboot-tls-client-hello netboot-tls-server-flight netboot-tls-client netboot-tls-main netboot-encdrv netboot-dhcp-loop netboot-tcp-conn netboot-tcp-conn-stream netboot-http-get netboot-fw-source netboot-body-sink netboot-tls-reasm netboot-fw-span netboot-http netboot-http-boot netboot-http-disk netboot-http-smoke-boot netboot-http-smoke-disk netboot-http-boot-debug netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke netboot-smoke-disk netboot-server netboot-server-disk netboot-serve-boot netboot-serve-boot-debug netboot-serve-trinload netboot-trinpush-test netboot-dumper netboot-csd-probe netboot-sd-push netboot-boot-record netboot-delete-record netboot-list-records netboot-hook-roundtrip netboot-render-disk-probe netboot-render-disk-boot netboot-render-disk-boot-record netboot-assemble-disk-boot-record netboot-samboot-config netboot-trinity-identity netboot-trinload netboot-sd-csd netboot-sd-listread netboot-z80-routines asmlex-z80 asmparse-z80 asmparse-paged-z80 parse-paged-driver-z80 chain-paged-driver-z80 tbn-render-driver-z80 pass1-ir-z80 compact-ir-z80 compact-ser-z80 editmodel-z80 pagepool-z80 spill-z80 viewport-z80 ci-netboot-z80
 $(BUILD)/netboot_build_udp_frame.bin $(BUILD)/netboot_build_udp_frame.map: src/netboot/build_udp_frame.asm $(asm_deps/src/netboot/build_udp_frame.asm)
 	@mkdir -p $(BUILD)
 	pyz80 -D NETBOOT_STANDALONE=1 --obj=$(BUILD)/netboot_build_udp_frame.bin \
@@ -1312,6 +1312,24 @@ $(BUILD)/render_disk_boot_record.mgt: $(BUILD)/render_disk_boot.bin release-unst
 
 netboot-render-disk-boot-record: $(BUILD)/render_disk_boot_record.mgt
 
+# netboot-assemble-disk-boot-record (i365d-b2b) — compose the b2b demo record .mgt:
+# assembler-demo.bin (DEMO_ASM) as the AUTOasm CODE-auto vessel + release-unstripped.tbn
+# (DOS 'IN', prefix-loaded by load_in_file into pages 7..12) + the prod HLOAD-by-name
+# payloads (enctab.enc, sd13, d15, zx013), via build-disk -code-auto -variant prod (the
+# i207 boot-payload completeness guard). Unlike b2a (render), release.img is <64 KB so
+# the vessel HSAVEs it directly through real B-DOS — no raw-sector sink needed. The
+# faithful gate (assemble_disk_boot_faithful_test.go) seeds a scratch record from this
+# .mgt, boots it, and byte-matches the HSAVEd RELEASEIMG to build/release-unstripped.img.
+$(BUILD)/assemble_disk_boot_record.mgt: $(BUILD)/assembler-demo.bin $(BUILD)/enctab.enc release-unstripped-tbn $(BUILD)/sysreg_data.bin $(BUILD)/disasm.bin $(BUILD)/zx0.bin $(BUILD)/build-disk
+	$(BUILD)/build-disk -variant prod -code-auto \
+	    -sysreg-data $(BUILD)/sysreg_data.bin \
+	    -disasm $(BUILD)/disasm.bin \
+	    -zx0 $(BUILD)/zx0.bin \
+	    $(BUILD)/assembler-demo.bin $(BUILD)/enctab.enc $(BUILD)/release-unstripped.tbn \
+	    $(BUILD)/assemble_disk_boot_record.mgt
+
+netboot-assemble-disk-boot-record: $(BUILD)/assemble_disk_boot_record.mgt
+
 # netboot-samboot-config (i176) — the SAMBOOT BIOS config reader: a leaf routine
 # (samboot_read_config) that reads the editable default-boot-record config from a
 # named Trinity EEPROM chunk ("SAMBOOT Config  ") and returns the auto-boot
@@ -1631,7 +1649,7 @@ netboot-z80-routines: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-bu
 # SKIP_PRIVATE_TESTS-gated, and CI (no private data) can't build it.
 NETBOOT_PRIVATE_ARTIFACTS := $(if $(wildcard src/netboot/bootloader_chunk1_data.asm),netboot-eeprom-flash-chunk1)
 .PHONY: netboot-z80-artifacts
-netboot-z80-artifacts: netboot-z80-routines netboot-http-boot-debug netboot-http-smoke-boot editmodel-z80 editmodel-paged-z80 pagepool-z80 spill-z80 viewport-z80 asmlex-z80 asmparse-z80 asmparse-paged-z80 parse-paged-driver-z80 chain-paged-driver-z80 b8d-chain-paged-driver-z80 pass1-ir-z80 compact-ir-z80 compact-ser-z80 sysreg-data netboot-serve-record netboot-server-record netboot-server-largefile-record netboot-server-largefile-manifest-record disk-record tbn-render-driver-z80 netboot-render-disk-probe netboot-render-disk-boot-record release-unstripped-tbn $(NETBOOT_PRIVATE_ARTIFACTS)
+netboot-z80-artifacts: netboot-z80-routines netboot-http-boot-debug netboot-http-smoke-boot editmodel-z80 editmodel-paged-z80 pagepool-z80 spill-z80 viewport-z80 asmlex-z80 asmparse-z80 asmparse-paged-z80 parse-paged-driver-z80 chain-paged-driver-z80 b8d-chain-paged-driver-z80 pass1-ir-z80 compact-ir-z80 compact-ser-z80 sysreg-data netboot-serve-record netboot-server-record netboot-server-largefile-record netboot-server-largefile-manifest-record disk-record tbn-render-driver-z80 netboot-render-disk-probe netboot-render-disk-boot-record netboot-assemble-disk-boot-record release-unstripped-tbn $(NETBOOT_PRIVATE_ARTIFACTS)
 
 ci-netboot-z80: netboot-z80-artifacts
 	cd tools/sampage && go test ./...
@@ -1919,9 +1937,9 @@ $(BUILD)/assembler-prod.bin: src/assembler.asm $(asm_deps/src/assembler.asm)
 # HSAVEs the assembled image under the self-describing name "RELEASEIMG"
 # instead of "OUT".  Everything else — the full boot init, payload loads,
 # two-pass assemble, and HSAVE geometry — is identical to prod.
-$(BUILD)/assembler-demo.bin: src/assembler.asm $(asm_deps/src/assembler.asm)
+$(BUILD)/assembler-demo.bin $(BUILD)/assembler-demo.map: src/assembler.asm $(asm_deps/src/assembler.asm)
 	@mkdir -p $(BUILD)
-	pyz80 -D DEMO_ASM=1 --obj=$(BUILD)/assembler-demo.bin src/assembler.asm
+	pyz80 -D DEMO_ASM=1 --mapfile=$(BUILD)/assembler-demo.map --obj=$(BUILD)/assembler-demo.bin src/assembler.asm
 	@./tools/check-code-budget.sh $(BUILD)/assembler-demo.bin demo
 
 # Encode self-test variant (i234).  Imports enc_fix_payload.sym for
