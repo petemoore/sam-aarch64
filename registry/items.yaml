@@ -6192,10 +6192,11 @@
     - {num: 823, role: completing}
 
 - id: i347
-  title: netboot_serve (i332 vessel) shares the EI'd-loop / ROM-IM1-chain exposure on unbounded serve runs
+  title: "Mitigate ENC-EI frame-hook contention on the HSAVE-mid-loop serve/fetch loops (naive IM2-at-&FD00 port proven UNSAFE)"
   description: |
-    Found during i95b-b1 stage 2: the vendored ENC driver EIs on every exit, so a record-booted serve program running its loop indefinitely gets ROM IM1 frame interrupts + the B-DOS frame hook against a frozen boot context, with shared-&DC SD/ENC traffic - netboot_server (i95b-b1) now arms an IM 2 takeover after its last B-DOS hook to own the vector for the serve phase; netboot_serve (the i332 TFTP-record vessel, record 145) has NO such takeover and its faithful tests only drive short windows, so the exposure is theoretical-but-real for long-lived serves on hardware. Assess and, if confirmed, port the IM 2 takeover pattern from netboot_server.asm to netboot_serve.asm. NOTE (2026-07-03 i70 pre-flight): http_main (the i70 fetcher) has the SAME exposure — di once at entry, no IM2 takeover, EI d by every ENC-driver exit and RST-8 HSAVE — and its full-manifest fetch runs 10-18+ min, more acute than the serve vessels; the i70c full fetch is gated on assessing this (seconds-long i70b smoke is low-risk).
+    ASSESSED 2026-07-05 (this was 'assess and IF CONFIRMED port'): the exposure is CONFIRMED real, but the netboot_server IM2-takeover pattern does NOT port safely to http_main / netboot_serve. Their loops do a mid-loop B-DOS HSAVE (http: storage_sink_leaf; serve: WRQ-record write) which REPAGES section D and SHADOWS the &FD00 IM2 vector table; a frame interrupt firing mid-hook reads a corrupt vector and WILD-JUMPS. VERIFIED: with arm_im2_takeover in http_main, TestHTTPMainFaithfulStoreLeafValidRecord + FreeRecord wild-jump to &04FD; with the arm removed (isolation-tested), they pass. netboot_server (the reference) is safe ONLY because its serve loop reads (RRQ arena / raw-CMD17 large-file), never invoking a section-D-repaging B-DOS hook mid-loop. So the pattern is safe for read-serve loops, unsafe for write/HSAVE-mid loops. The IM2 code + a shared im2_takeover.asm were written + reverted this session (clean; nothing merged). SCOPE REDEFINED (was: port the pattern): implement a REPAGING-SAFE mitigation once q81 picks the approach (repaging-safe table location via B-DOS 1.5t HSAVE-paging analysis / DI-management / accept-as-theoretical). The i70c full fetch remains the acute case whose IM2 pre-flight this assessed. Gated on q81.
   status: OPEN
+  depends_on: [q81]
   kind: leaf
   owner: agent
 
