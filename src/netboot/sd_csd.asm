@@ -332,10 +332,10 @@ if defined(NETBOOT_REAL_LISTREAD)
 ; 512-byte list sector off the SD card via a raw CMD17 single-block read on the
 ; Trinity SPI ports, into BD_LIST_BUF.
 ;
-; In:  BD_LIST_SECTOR  1 byte  1-based list-sector number N (card-absolute LBA N:
+; In:  BD_LIST_SECTOR  2 bytes  1-based list-sector number N (card-absolute LBA N:
 ;                              sector 0 is the boot block, sectors 1..base-1 hold
 ;                              the record list — trinity-record-detection-design.md
-;                              §4.1). The seam only ever passes a 1-byte value.
+;                              §4.1). 16-bit (i326): records past 8160 stay reachable.
 ; Out: BD_LIST_BUF   512 bytes  the list sector. CY set on read failure (no data
 ;                              token); the caller treats a failed read as "no free
 ;                              record" the same way a 0 BD_RECORDS does.
@@ -354,13 +354,12 @@ if defined(NETBOOT_REAL_LISTREAD)
 ; (CLAUDE.md §5): the real-Trinity SPI run is the final gate (i141's hardware half).
 ; ===========================================================================
 bd_list_read_hw:
-                ; Build the 32-bit LBA (LE) from the 1-byte list-sector number, apply
+                ; Build the 32-bit LBA (LE) from the 16-bit list-sector number, apply
                 ; the SDv1 byte-shift, then hand off to the shared CMD17 read tail.
-                ld      a, (BD_LIST_SECTOR)
-                ld      (bd_list_lba), a
+                ld      hl, (BD_LIST_SECTOR)    ; 16-bit list-sector number (i326)
+                ld      (bd_list_lba), hl       ; low 2 LBA bytes
                 xor     a
-                ld      (bd_list_lba + 1), a
-                ld      (bd_list_lba + 2), a
+                ld      (bd_list_lba + 2), a    ; high 2 LBA bytes = 0 (list < 2^16 sectors)
                 ld      (bd_list_lba + 3), a
                 call    bd_lba_apply_v1_shift   ; SDv1: bd_list_lba <<= 9; v2/SDHC: no-op
                 ld      hl, BD_LIST_BUF
@@ -592,9 +591,9 @@ if defined(NETBOOT_WANT_CLAIM)
 ; (CMD17, above) exactly: same init ladder, same LBA computation, same
 ; select/deselect bracket. Only the data phase differs (OUT instead of IN).
 ;
-; In:  BD_LIST_SECTOR  1 byte  1-based list-sector number N (same addressing
+; In:  BD_LIST_SECTOR  2 bytes  1-based list-sector number N (same addressing
 ;                              as the CMD17 read — card-absolute LBA N for
-;                              SDHC, N<<9 for SDv1).
+;                              SDHC, N<<9 for SDv1). 16-bit (i326).
 ;      BD_LIST_BUF   512 bytes  the list sector to write back (a modified copy
 ;                              from bdos_claim_record's read-modify-write).
 ; Out: (none — success or failure both return to caller; failure is silent:
@@ -624,11 +623,10 @@ if defined(NETBOOT_WANT_CLAIM)
 ; ===========================================================================
 bd_list_write_hw:
                 ; Build the 32-bit LBA from BD_LIST_SECTOR (same computation as the read).
-                ld      a, (BD_LIST_SECTOR)
-                ld      (bd_list_lba), a
+                ld      hl, (BD_LIST_SECTOR)    ; 16-bit list-sector number (i326)
+                ld      (bd_list_lba), hl       ; low 2 LBA bytes
                 xor     a
-                ld      (bd_list_lba + 1), a
-                ld      (bd_list_lba + 2), a
+                ld      (bd_list_lba + 2), a    ; high 2 LBA bytes = 0 (list < 2^16 sectors)
                 ld      (bd_list_lba + 3), a
                 call    bd_lba_apply_v1_shift   ; SDv1: bd_list_lba <<= 9; v2/SDHC: no-op
                 ; Source is the 512-byte list buffer; reuse the shared CMD24 core.

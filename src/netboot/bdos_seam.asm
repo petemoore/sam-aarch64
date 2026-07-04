@@ -486,7 +486,7 @@ bdos_read_sector:
 ; bdos_read_list_sector — read one 512-byte list sector from the card (card-
 ; absolute, not record-clamped).
 ;
-; In:  BD_LIST_SECTOR  1 byte   1-based list-sector number (sectors 1..base-1
+; In:  BD_LIST_SECTOR  2 bytes  1-based list-sector number (sectors 1..base-1
 ;                               of the card hold the 16-byte record-list entries;
 ;                               docs/specs/trinity-record-detection-design.md §4.1)
 ; Out: BD_LIST_BUF   512 bytes  the list sector (32 × 16-byte entries)
@@ -536,11 +536,9 @@ bdos_read_list_sector:
 ;   listSector  = (recordIndex >> 5) + 1    (/ 32 then + 1)
 ;   byteOffset  = (recordIndex AND 31) << 4 (mod 32 then × 16, 9-bit result)
 ;
-; (n-1) fits in 16 bits; for any practical card size (a 1 GB card has ~1300
-; records so n-1 <= 1299 < 2^11) the >> 5 result fits in 8 bits. The 16-bit
-; shift is computed as: A = ((H & 7) << 3) | (L >> 5), which is correct for
-; any 16-bit value where the result of >> 5 fits in 8 bits (n-1 < 8192 for
-; all foreseeable card sizes).
+; (n-1) fits in 16 bits; listSector = (n-1) >> 5 + 1 is computed over the full
+; 16 bits (bdos_record_geometry) and stored 16-bit in BD_LIST_SECTOR, so records
+; past 8160 (list sector > 255) stay reachable on cards over ~6.7 GB (i326).
 ;
 ; byteOffset = (n-1 mod 32) * 16 fits in 9 bits (max 31*16 = 496 = 0x1F0),
 ; so it is held in BC as a 16-bit value: B = high byte (0 or 1), C = low byte.
@@ -567,7 +565,7 @@ bdos_record_entry:
 ; entry for a given record.
 ;
 ; In:  BD_ENTRY_REC  2 bytes  1-based record number n (>= 1)
-; Out: BD_LIST_SECTOR  1 byte   the 1-based list sector holding record n's entry
+; Out: BD_LIST_SECTOR  2 bytes  the 1-based list sector holding record n's entry
 ;      BC              16-bit   byteOffset of the entry within that list sector
 ; Clobbers: A, DE, HL.
 ;
@@ -598,24 +596,22 @@ bdos_record_geometry:
                 rlca                           ; C = (m AND 15) << 4 = low byte of byteOffset
                 ld      c, a                   ; BC = 16-bit byteOffset
 
-                ; listSector = (n-1) / 32 + 1
-                ; compute (n-1) >> 5 = ((H AND 7) << 3) OR (L >> 5)
-                ld      a, h
-                and     &07                    ; keep bits 10-8 of n-1 (H <= 5 for <=1300 records)
-                rlca
-                rlca
-                rlca                           ; shift to positions 5-3
-                ld      e, a                   ; save high contribution
-                ld      a, l
-                rrca
-                rrca
-                rrca
-                rrca
-                rrca                           ; L >> 5 via 5 right-rotates
-                and     &07                    ; keep low 3 bits (bits 7-5 of L → bits 2-0)
-                or      e                      ; A = (n-1) >> 5
-                inc     a                      ; listSector = (n-1)/32 + 1
-                ld      (BD_LIST_SECTOR), a
+                ; listSector = (n-1) / 32 + 1, computed over the FULL 16 bits so
+                ; records past 8160 (list sector > 255) stay reachable (i326). HL
+                ; still holds n-1 here — the byteOffset math above only READ L. A
+                ; 16-bit >> 5 is five srl-h/rr-l shifts; then +1 and store 16-bit.
+                srl     h
+                rr      l
+                srl     h
+                rr      l
+                srl     h
+                rr      l
+                srl     h
+                rr      l
+                srl     h
+                rr      l                      ; HL = (n-1) >> 5
+                inc     hl                     ; listSector = (n-1)/32 + 1
+                ld      (BD_LIST_SECTOR), hl
                 ret
 
 ; ---------------------------------------------------------------------------
@@ -744,7 +740,7 @@ bfhr_next:
 ; bdos_write_list_sector — write one 512-byte list sector back to the card (card-
 ; absolute, not record-clamped) — the WRITE sibling of bdos_read_list_sector.
 ;
-; In:  BD_LIST_SECTOR  1 byte    1-based list-sector number
+; In:  BD_LIST_SECTOR  2 bytes   1-based list-sector number (16-bit; i326)
 ;      BD_LIST_BUF   512 bytes   the list sector to write (a read-modified copy)
 ; Clobbers: A, DE, HL.
 ;
@@ -1264,7 +1260,7 @@ BD_REC_IS_BDOS:   defs 1                 ; bdos_inspect_record: 1 = "BDOS" stamp
 BD_REC_NAME:      defs 10                ; bdos_inspect_record: the record's disk label (+210)
 
 ; --- free-record detection (B3) -----------------------------------------------
-BD_LIST_SECTOR:   defs 1                 ; bdos_read_list_sector: 1-based list-sector number
+BD_LIST_SECTOR:   defs 2                 ; bdos_read_list_sector: 1-based list-sector number (16-bit; i326)
 BD_LIST_BUF:      defs 512              ; bdos_read_list_sector: the 512-byte list-sector data
 BD_RECORDS:       defs 2                 ; bdos_find_free_record: total record count (LE word)
 BD_FREE_RECORD:   defs 2                 ; bdos_find_free_record: first free record (1-based), or 0

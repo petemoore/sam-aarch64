@@ -170,17 +170,10 @@ list_records_main:
                 jr      z, lr_nlist_whole
                 inc     hl                     ; round the partial sector up
 lr_nlist_whole:
-                ; The list-read seam addresses sectors with ONE byte (BD_LIST_SECTOR,
-                ; bdos_seam.asm), so this tool serves list sectors 1..255 (records
-                ; 1..8160). Clamp nlist so a bigger card's higher sectors are REFUSED
-                ; ('E') by the range check rather than silently truncated to a wrong
-                ; low sector by the 8-bit store in lr_list_query. Widening the seam
-                ; to 16-bit is tracked separately (the whole toolkit shares the limit).
-                ld      a, h
-                or      a
-                jr      z, lr_nlist_ok
-                ld      hl, 255
-lr_nlist_ok:
+                ; The list-read seam is 16-bit (BD_LIST_SECTOR, bdos_seam.asm), so the
+                ; full ceil(BD_RECORDS/32) range is serveable — no 255-sector clamp; a
+                ; card's higher records (past 8160) are reachable (i326). The range
+                ; check in lr_list_query still bounds queries to 1..lr_nlist.
                 ld      (lr_nlist), hl
                 ld      a, "4"                 ; DBG: serving (inventory ready)
                 call    dbg_char
@@ -335,8 +328,7 @@ lr_list_query:
                 ld      a, d
                 sbc     a, h
                 jr      c, lr_list_bad         ; beyond the card's list: refuse
-                ld      a, l                   ; 1..151 fits the 1-byte seam input
-                ld      (BD_LIST_SECTOR), a
+                ld      (BD_LIST_SECTOR), hl   ; 16-bit list-sector number (i326)
                 call    bdos_read_list_sector  ; real CMD17 -> BD_LIST_BUF; CY on fail
                 jr      c, lr_list_bad
                 ld      a, "R"
