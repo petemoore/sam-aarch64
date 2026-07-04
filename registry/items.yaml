@@ -6376,9 +6376,11 @@
   title: "Large-file streaming serve-from-disk core (chain-follow + 510->512 re-block)"
   description: |
     DONE. The netboot server streams files larger than the 1518B RAM arena directly from the boot record's SD sectors: nb_walk_entry indexes large PLAIN CODE files (excludes the auto-exec server binary + system DOS) as disk-backed NB_DISK_TABLE descriptors {name, chain-head track/sector, 32-bit size}; send_next_data_disk follows the MGT sector chain (mgt_ts_to_record_linear converts side-major (track,sector)->record-linear, bd_record_read_hw CMD17), skips the 9-byte body header, and re-blocks 510-byte MGT data units into DISK_BLK_BUF via an O(n) incremental body-base cursor. csd_set_bd_records + a patchable NB_BOOT_RECORD wire the record number at boot. Gated byte-exact on the faithful rig (TestNetbootServerLargeFile, blksize 512 AND 1024; arena path regression-clean; zero SD writes). Serves under SHORT (<=10-char) names; long names are i365c-b2.
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 861, role: completing}
   parent: i365c
 
 - id: i365c-b2
