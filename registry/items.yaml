@@ -6467,6 +6467,8 @@
   depends_on: [i365d-b2a, i365d-b2b]
   kind: leaf
   owner: agent
+  prs:
+    - {num: 867, role: completing}
   parent: i365d-b2
 
 - id: i365e
