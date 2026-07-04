@@ -3796,7 +3796,7 @@
   description: |
     Hardware-gated completion of i182 (unverifiable in emulation). Boot the i182a fetch-and-boot disk on real SAM+Trinity, serve a stamped 819200-byte .mgt, confirm it streams into the scratch record (1600 HWSAD sectors), validates, and ALHK-boots it. Entangled with auto-boot/control-return autonomy (i132/i135). The full-size valid stream is the first full-scale fetch-and-boot (not driven through the bit-banged ENC in the host harness). Needs i182a's disk.
   status: OPEN
-  depends_on: [i182a, i272, i295]
+  depends_on: [i182a, i272, i295, q68]
   kind: leaf
   owner: agent
   parent: i182
