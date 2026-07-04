@@ -55,10 +55,11 @@
                 org     &8000
 
                 ; The boot entry (CALL 32768) must be the first instruction at
-                ; &8000. serve_main is defined later (under NETBOOT_HOSTTEST==0);
-                ; the host harness invokes routines by symbol and never CALLs
-                ; 32768, so this jp is bootable-only.
-                if defined(NETBOOT_HOSTTEST)==0
+                ; &8000. serve_main is defined later (under NETBOOT_REAL_LISTREAD,
+                ; the real serve bootable's flag); the host harness invokes
+                ; routines by symbol and never CALLs 32768, so this jp is
+                ; bootable-only.
+                if defined(NETBOOT_REAL_LISTREAD)
                 jp      serve_main
                 endif
                 endif
@@ -390,7 +391,7 @@ rrq_oack:
 ; free record") and does NOT arm the receiver — never touching a named record (the
 ; shared-resource invariant, memory/trinity_storage_shared_resource).
 ;
-; The claim + both finalizes live behind NETBOOT_HOSTTEST==0 (they need the
+; The claim + both finalizes live behind NETBOOT_REAL_LISTREAD (they need the
 ; bdos_seam.asm RST 8 hooks + raw_record_sink.asm, present only in the bootable
 ; build). The HOSTTEST build (the i121a/i121b wire tests) leaves WRQ_SINK_MODE clear
 ; and just accumulates into WRQ_STAGING, ACKing the final block (no store), unchanged.
@@ -453,7 +454,7 @@ wrq_not_done:
                 ; the per-class payload sink. No free record -> ERROR(3), no handshake. ---
                 xor     a
                 ld      (WRQ_SINK_MODE), a     ; default: flat accumulate (HOSTTEST path)
-                if (defined(NETBOOT_HOSTTEST)==0) * (defined(DUMPER)==0)
+                if defined(NETBOOT_REAL_LISTREAD)
                 ; classify: a "trinity-sam-disks/" prefix opts into the validated
                 ; disk-record class; any other name is the DEFAULT flat-file archive
                 ; (design §6.5; bdos_strip_disk_prefix is the bdos.Classify port).
@@ -562,7 +563,7 @@ wrq_arm_receiver:
                 ld      (WRQ_RECV_ACTIVE), a
                 ret
 
-                if (defined(NETBOOT_HOSTTEST)==0) * (defined(DUMPER)==0)
+                if defined(NETBOOT_REAL_LISTREAD)
 ; serve_rearm_enc — re-arm the ENC28J60 RX path after an SD transaction on the
 ; shared one-PIC Trinity controller (i244). The WRQ push drives SD I/O (the
 ; free-record finder's CMD17 list reads, the record select, the per-block HWSAD sink
@@ -867,7 +868,7 @@ wd_next_block:
                 ; 819200-byte disk image never sits whole in RAM). WRQ_SINK_MODE
                 ; selects; only the bootable build has the sink. Mirrors
                 ; netboot_client.asm cl_sink_payload.
-                if (defined(NETBOOT_HOSTTEST)==0) * (defined(DUMPER)==0)
+                if defined(NETBOOT_REAL_LISTREAD)
                 ld      a, (WRQ_SINK_MODE)
                 or      a
                 jr      nz, wd_sink_payload
@@ -923,7 +924,7 @@ wd_no_copy:
                 ld      (WRQ_STAGE_OFFSET), hl
                 jr      wd_after_payload
 
-                if (defined(NETBOOT_HOSTTEST)==0) * (defined(DUMPER)==0)
+                if defined(NETBOOT_REAL_LISTREAD)
 wd_sink_payload:
                 ; --- mode 1: stream the payload into the claimed record. The sink
                 ; re-blocks into sectors + HWSADs each full one and tracks the 32-bit
@@ -961,7 +962,7 @@ wd_after_payload:
                 ;     bytes into the claimed record, then ACK (i121c).
                 ; HOSTTEST has neither finalize (no bdos hooks): the i121b flat receive
                 ; just ACKs the short final block, unchanged.
-                if (defined(NETBOOT_HOSTTEST)==0) * (defined(DUMPER)==0)
+                if defined(NETBOOT_REAL_LISTREAD)
                 ld      a, (WRQ_SINK_MODE)
                 or      a
                 jp      nz, wd_finalize
@@ -984,7 +985,7 @@ wd_send_ack:
                 ; + this ACK's drv_write work. (DE holds the block to ACK; preserved
                 ; across the re-arm.) Bootable-only: the HOSTTEST flat-accumulate path
                 ; does no SD op, so it keeps its proven behaviour unchanged.
-                if (defined(NETBOOT_HOSTTEST)==0) * (defined(DUMPER)==0)
+                if defined(NETBOOT_REAL_LISTREAD)
                 push    de
                 call    serve_rearm_enc
                 pop     de
@@ -1001,7 +1002,7 @@ wd_send_ack:
                 ld      bc, 4                  ; ACK is 4 bytes
                 jp      srv_send_tbuf          ; wrap to the client + transmit
 
-                if (defined(NETBOOT_HOSTTEST)==0) * (defined(DUMPER)==0)
+                if defined(NETBOOT_REAL_LISTREAD)
 ; wd_finalize — the disk-record push commit (i121f): the short final block has
 ; arrived and the whole image is streamed into the HRECORD-selected record (each
 ; 512-byte sector written via the B-DOS HWSAD hook, raw_record_sink). Flush the
@@ -1497,7 +1498,7 @@ str_blksize:      defm "blksize"
                   defb 0
 str_tsize:        defm "tsize"
                   defb 0
-                if (defined(NETBOOT_HOSTTEST)==0) * (defined(DUMPER)==0)
+                if defined(NETBOOT_REAL_LISTREAD)
 err_nofree_msg:   defm "no free record"
                   defb 0
 err_badimage_msg: defm "invalid disk record"
@@ -1512,7 +1513,7 @@ err_toobig_msg:   defm "flat file too large"
 ; boot main + provision). CALL 32768 lands here on boot.
 ; ===========================================================================
                 ; `*` is logical AND for 0/1 conditions (pyz80's if has no `&&`/`and`).
-                if (defined(NETBOOT_HOSTTEST)==0) * (defined(DUMPER)==0)
+                if defined(NETBOOT_REAL_LISTREAD)
 
 ; serve_main — read the SAM's MAC + IP from the Trinity EEPROM "Trinity Network "
 ; chunk, fill CONFIG, set a fixed transfer TID, provision the baked-in demo files
@@ -1766,7 +1767,7 @@ demo_src_tmpl:
                   defb 0                        ; end-of-table sentinel
 demo_src_tmpl_end:
 
-                endif  ; !NETBOOT_HOSTTEST
+                endif  ; NETBOOT_REAL_LISTREAD
 
 ; ===========================================================================
 ; CONFIG + shared state. The harness writes CONFIG_* + STORE + SRC_TABLE directly;
@@ -1829,7 +1830,7 @@ WRQ_RECORD:       defs 1                 ; the claimed record number streamed in
 ;   1 = FlatFile    — the DEFAULT class (no prefix): flat-accumulate into
 ;       WRQ_STAGING and HSAVE into the claimed record on the final block
 ;       (wd_finalize_flat, WRQ_SINK_MODE=0). Mirrors serve.go wrqReceiver.flat.
-; Bootable-only (the classify + both finalizes live behind NETBOOT_HOSTTEST==0).
+; Bootable-only (the classify + both finalizes live behind NETBOOT_REAL_LISTREAD).
 WRQ_FLAT_MODE:    defs 1                 ; 1 = flat-file (HSAVE), 0 = disk-record push
 
 ; The pushed file flat-accumulates here (sink mode 0) for the FlatFile class (i121c).
@@ -1885,7 +1886,7 @@ SRC_TABLE:        defs 256
                 ; included for the same builds: only the bootable serve image streams
                 ; a push into a record. The HOSTTEST wire-test build and the dumper
                 ; (RRQ-only) leave these out, matching the sink-code guards above.
-                if (defined(NETBOOT_HOSTTEST)==0) * (defined(DUMPER)==0)
+                if defined(NETBOOT_REAL_LISTREAD)
                 include "eeprom.asm"
                 ; The serve unit is the only consumer of the WRQ record-claim path
                 ; (wd_finalize -> bdos_claim_record), so it asks bdos_seam.asm to
