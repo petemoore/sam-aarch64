@@ -5512,9 +5512,11 @@
   title: "Root-cause + fix the settle_probe hardware hang (unbounded ENC shared-&DC busy-polls) so the probe reports instead of hanging"
   description: |
     Emulation-first fix for the settle_probe hardware hang. ROOT CAUSE (authority-grounded: B-DOS 1.5t &A623 busy-polls &67CC right after its OUT &DC,&38): the &38 SD-init holds the shared &DC BUSY flag (bit 3) SET for the SD-init duration; the probe then transmits its SATR over the ENC (same &DC bus), and drv_write's per-byte &DC busy-polls were UNBOUNDED, so when the SD-init busy outlasts the leading (bounded, i280b) wait_ready the poll spins forever -> no frame egressed, trinload never resumed. DELIVERED: (1) emulator fidelity -- enc28j60.go models the &38->&DC-bit-3 busy hold (status-read-only, time-based, not IN-cleared; const sdInitBusyTStates), closing the gap where the model cleared bit 3 in one byte-time and hid the contention (rule 7); (2) bounded the unbounded TX-path &DC polls wr_buf_lp + rd_buf_lp + wait_sent with the i280b ENC_BUSY_LIMIT pattern (hard hang -> recoverable timeout; only bites on a wedged/over-long bus, healthy paths unchanged). TESTS (negative-control-verified): TestSDInitHoldsDCBusyAfterInit + TestWrBufMem/RdBufMemBoundedOnStuckBusy + TestWaitSentBoundedWhenTxNeverCompletes (leaf gates mirroring i280b's TestWaitReadyBoundedOnStuckBusy). NOTE: a time-bounded busy self-clears as the spin advances the T-state cursor, so emulation cannot reproduce a NON-terminating hang directly; the StuckBusy leaf gates prove the bounds. HARDWARE confirmation (does this fix the observed hang; the &38-contention vs the drv_wait_link/MII competing hypothesis) is b2's A/B shot with the fixed probe. Remaining unbounded MII polls -> i291b-b4.
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 857, role: completing}
   parent: i291b
 
 - id: i291b-b4
