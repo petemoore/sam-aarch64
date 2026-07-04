@@ -572,6 +572,11 @@ the **i188** redesign re-enables a safe ROM capture.
 so a host fetch confirms the whole thing on real silicon. Design:
 [`../specs/i365-demo-architecture.md`](../specs/i365-demo-architecture.md).
 
+**Full recreate + rerun + verify runbook: [`i365-demo-runbook.md`](i365-demo-runbook.md)**
+(where the code/build/`.mgt` live, how to recreate the disk, the emulation gate,
+the fastest rerun via the record already on the card, and byte-exact verification).
+The steps below are the hardware-shot summary.
+
 **The one non-obvious step — patch the record number in first.** Two of the
 vessel's overlays use raw absolute-LBA SD paths that must know the record they
 booted from: `render`'s `RDB_CFG_RECORD` (LE16 — the raw CMD17 read of `IN` and
