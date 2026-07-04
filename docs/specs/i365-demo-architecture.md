@@ -131,24 +131,67 @@ faithful tests run locally; public CI runs the mock + raw-CMD24-vs-SPI tests.
   MGT-chain/32-bit `send_next_data` + the NBMANIFEST long-name mapping (build-disk
   `buildManifest` / `-netboot-extra`, already built; `netboot_server_faithful_test.go`
   is the template).
-- **`i365d-b1` — render sink → chunked write + MGT directory-entry writer.** The
-  hard capability. Retarget `render_out_append` to `raw_record_sink` + `bd_record_write_hw`,
-  write the named contiguous MGT file, gate on the faithful rig (HGTHD/HLOAD
-  read-back).
-- **`i365d-b2` — the CODE-auto driver + compose the demo `.mgt`.** Orchestrate
-  render→save→assemble→save→serve with RST `&10` on-screen messages (pattern:
-  `src/netboot/mgt_screen_demo_standalone.asm`), calling `DEMO_ASM`'s `start:`
-  (saves caller SP, HSAVEs `RELEASEIMG`, `ret`s — keep the caller stack + return
-  frame OUTSIDE the assembler's `&C100`-down boot stack and its `&8000` image, per
-  the #859 review). Both render and assembler read ONE `release-unstripped.tbn`
-  (DOS file `IN`; the assembler loads only the prefix, `src/main_loop.asm:1560`).
-  Compose via build-disk `-code-auto` / `-netboot-code-auto` (`netboot-server-record`
-  is the closest template). A record boot REQUIRES a CODE-auto vessel (i332).
-  Hardware-confirm a record boot leaves its record selected for HSAVE; if not, the
-  driver does a one-time `HRECORD` of the boot record first.
+- **`i365d-b1` (#864, DONE) — render sink → chunked write + MGT directory-entry writer.**
+  The hard capability. `render_disk_sink.asm` re-blocks a byte stream into 510+2 MGT
+  sectors written contiguously from linearSec 40 via `bd_record_write_hw` (raw CMD24 +
+  i295 band guard) + a directory-entry writer; `render_out_append` dispatches through
+  `RENDER_SINK_VEC` (default = the `&E8` harness port). Faithful-gated HGTHD/HLOAD
+  read-back across every finish path + the 417374 B `release.src` size.
+- **`i365d-b2` — the CODE-auto driver + compose the demo `.mgt` (umbrella).** See
+  **Driver architecture** below: render, DEMO_ASM, and the server cannot be
+  co-resident, so the demo runs them **sequentially**, split into leaves:
+  - **`i365d-b2a` — render→disk bootable.** Load `release-unstripped.tbn` (DOS `IN`)
+    from the boot record into the render IN pages 8..30, point `RENDER_SINK_VEC` at
+    `render_disk_sink_byte`, `render_run` → `release.src` on the record. Gate:
+    HGTHD/HLOAD `RELEASESRC` == `render.Emit`.
+  - **`i365d-b2b` — assemble→disk bootable.** Compose `assembler-demo.bin` (DEMO_ASM
+    `start:` — saves caller SP, `ld sp,&C100`, HSAVEs `RELEASEIMG`, restores SP, `ret`;
+    keep the caller stack + return frame OUTSIDE the assembler's `&C100` stack and its
+    `&8000` image, #859) reading `IN`, with the assembler's HLOAD-by-name payloads on
+    the record. Gate: HGTHD/HLOAD `RELEASEIMG` byte-matches GNU.
+  - **`i365d-b2c` — overlay orchestrator + compose the demo `.mgt` (depends on b2a+b2b).**
+    Sequences the phases with RST `&10` messages (`mgt_screen_demo_standalone` idiom),
+    then serves both under long names via NBMANIFEST (`RELEASESRC→release.src`,
+    `RELEASEIMG→release.img`). Compose via build-disk `-netboot-code-auto`
+    (`netboot-server-record` template). Record stays HRECORD-selected through ALHK exec
+    (`netboot_server_faithful_test.go:19`; else a one-time driver `HRECORD`).
 - **`i365e` — store on a record + boot the real SAM + fetch both over TFTP.**
   sd-push (first-free, data-safe) → boot-record.py → host fetch; `release.img`
   byte-matches GNU, `release.src` = the rendered listing.
+
+## Driver architecture (i365d-b2) — sequential overlays, not a fused binary
+
+The three demo subsystems are each a near-/over-a-full `&8000`-window `org &8000`
+image and **cannot be co-resident**: `assembler-demo.bin` (13.1 KB, `&8000-&B341`
+section C + `&C100`-down boot stack + section-D scratch + off-axis pages 4-15),
+`tbn_render_driver.bin` (21.3 KB, `&8000-&D31E` = section C **and** D + off-axis
+pages 7-31), `netboot_server.bin` (19.2 KB, section C+D + IM2 `&FD00`, streams file
+bodies from disk so no off-axis data pages). All three claim section C at `&8000`;
+render+server each need C+D; render's off-axis 7-31 collides with the assembler's
+4-15. So a single fused CODE-auto image is impossible.
+
+The demo therefore runs the phases **in sequence, sharing only on-disk state** (the
+record's B-DOS selection + the generated files): render streams `release.src` to the
+record; DEMO_ASM HSAVEs `RELEASEIMG` to the record; the server serves both by reading
+their sectors. Each phase reloads from disk what it needs — nothing survives resident
+across phases except the on-disk files. The orchestrator (b2c) keeps its own code +
+stack + return frame in a page **no** subsystem's exec window occupies (the #859
+constraint generalized) and pages/CALLs each subsystem into the window in turn. The
+one shared input is a single `release-unstripped.tbn` (`IN`): render reads it whole,
+the assembler only the prefix (`main_loop.asm:1560`).
+
+| Phase | Exec window (`&8000-&FFFF`) | Off-axis pages | Free off-axis |
+|---|---|---|---|
+| Render (b2a) | 2 physical pages (C+D) | 7, 8-30, 31 | 4, 5, 6 |
+| Assemble (b2b) | section C code + section-D scratch/stack | 4, 5-12, 13, 14, 15 | 16-31 |
+| Serve (b2c) | 2 physical pages (C+D) + IM2 `&FD00` | none (streams from SD) | 4-31 |
+
+Precedents: the assembler record vessel (`-code-auto`, one `AUTOasm` file HLOADing
+sibling payloads like `d15` and running them via `paged_call`) is the overlay model;
+`render_disk_probe.asm` shows composing render-sink + B-DOS + SD in one `&8000` image;
+`netboot-server-record` is the serve-vessel template. A >16 KB two-page CODE-auto
+vessel is proven (the 20391 B `AUTOasm` boots green; the 18 KB `netboot_serve_record`
+booted on real hardware).
 
 ## Key file map
 
