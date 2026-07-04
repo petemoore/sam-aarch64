@@ -6442,7 +6442,7 @@
   title: "i365d demo: render→disk bootable — load release.tbn from the record + render → release.src (real driver + i365d-b1 sink)"
   description: |
     The render half as a standalone CODE-auto record vessel; the direct continuation of i365d-b1. A bootable (org &8000, composed via build-disk -netboot-code-auto AUTO*) that: HLOADs release-unstripped.tbn (DOS file IN) from the boot record into the render IN pages 8..30 (release.tbn spans 23 pages -- the standalone tbn_render_driver assumes the harness PRE-STAGES these, so the NEW piece is loading the 371KB file from disk across the pages), points RENDER_SINK_VEC at render_disk_sink_byte (i365d-b1), runs render_run to stream release.src to the boot record via the raw-CMD24 sink + MGT dir-entry writer, then idles/serves. Composes tbn_render+reader+disasm/paged_call + render_disk_sink + bdos_seam + sd_csd + the come-up (EEPROM/ENC/CSD; render_disk_probe.asm precedent). Record stays HRECORD-selected through ALHK exec (netboot_server_faithful_test.go:19). Gate (assembler_record_vessel_test.go pattern, FAITHFUL rig): boot -> render -> HGTHD('RELEASESRC')/HLOAD read back == render.Emit(release-unstripped.tbn). Architecture: sequential-overlay, render uses pages 7-31 so cannot co-reside with the assembler/server (docs/specs/i365-demo-architecture.md).
-  status: OPEN
+  status: DONE
   kind: leaf
   owner: agent
   parent: i365d-b2
