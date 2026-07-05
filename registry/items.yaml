@@ -5699,9 +5699,11 @@
   title: "Retire superseded create-record implementations + stale branches (post #773)"
   description: |
     After PR #773 lands, remove the competing create-record scaffolding. STALE BRANCHES: i295-create-record (the #771 worktree at ~/git/sam-aarch64-771recover), origin/i293-sd-push, origin/i290-owncmd24-elim, origin/i194-own-cmd24-record-write, origin/fix-disk-record-validation-size-only, local i293-bdos-direct-pivot. IN-TREE dedupe: two record-write paths coexist -- sd_push.asm (own-LBA create-record, canonical) vs the serve WRQ path (netboot_serve.asm + raw_record_sink.asm + the bdos_seam HWSAD/HRECORD seam); decide canonical + remove or clearly scope the other. THIS OWNS the dead HWSAD/HRECORD seam still LINKED-but-unreachable in sd_push.bin via the wide bdos_seam.asm include (i303 scoping, 2026-07-01): NO seam routine is deletable (each is live in serve/client/http or test-driven -- incl. sd_push_faithful_test.go driving bdos_write_record/bdos_select_record against sd_push.bin), so the options are (a) gate the HWSAD/HRECORD block out of sd_push.bin behind a flag serve/client/http set but sd_push does not [requires retiring sd_push_faithful_test.go's HWSAD FACT-3/4 assertions first], or (b) leave it linked-dead (harmless, fits 16KB) -- agent's call when worked. Also review sd_push_faithful_test.go if it still asserts the old HWSAD path.
-  status: OPEN
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 870, role: completing}
 
 - id: i306
   title: L14 (record 14) first ~388 sectors corrupted by the pre-fix buggy push -- restore if needed
