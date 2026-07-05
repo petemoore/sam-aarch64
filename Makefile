@@ -112,7 +112,7 @@ ci-registry: registry-gen
 # koron-go/z80 harness (tools/netboot-oracle/z80) and byte-compares its emitted
 # packet against the same golden vectors the Go authority is checked against.
 # Needs pyz80 (the dev container), unlike the pure-Go ci-netboot-oracle.
-.PHONY: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-build-tcp-segment netboot-sha256 netboot-hmac-sha256 netboot-hkdf netboot-hkdf-expand-label netboot-chacha20 netboot-poly1305 netboot-x25519-field netboot-aead netboot-tls-keyschedule netboot-tls-record netboot-tls-transcript netboot-tls-client-hello netboot-tls-server-flight netboot-tls-client netboot-tls-main netboot-encdrv netboot-dhcp-loop netboot-tcp-conn netboot-tcp-conn-stream netboot-http-get netboot-fw-source netboot-body-sink netboot-tls-reasm netboot-fw-span netboot-http netboot-http-boot netboot-http-disk netboot-http-smoke-boot netboot-http-smoke-disk netboot-http-boot-debug netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke netboot-smoke-disk netboot-server netboot-server-disk netboot-serve-boot netboot-serve-boot-debug netboot-serve-trinload netboot-trinpush-test netboot-dumper netboot-csd-probe netboot-sd-push netboot-boot-record netboot-delete-record netboot-list-records netboot-hook-roundtrip netboot-render-disk-probe netboot-render-disk-boot netboot-render-chain netboot-render-disk-boot-record netboot-assemble-disk-boot-record netboot-assemble-first-demo-record netboot-assemble-first-serve-record netboot-samboot-config netboot-trinity-identity netboot-trinload netboot-sd-csd netboot-sd-listread netboot-z80-routines asmlex-z80 asmparse-z80 asmprep-z80 prep-reader-z80 asmparse-paged-z80 parse-paged-driver-z80 chain-paged-driver-z80 tbn-render-driver-z80 pass1-ir-z80 compact-ir-z80 compact-ser-z80 editmodel-z80 pagepool-z80 spill-z80 viewport-z80 ci-netboot-z80
+.PHONY: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-build-tcp-segment netboot-sha256 netboot-hmac-sha256 netboot-hkdf netboot-hkdf-expand-label netboot-chacha20 netboot-poly1305 netboot-x25519-field netboot-aead netboot-tls-keyschedule netboot-tls-record netboot-tls-transcript netboot-tls-client-hello netboot-tls-server-flight netboot-tls-client netboot-tls-main netboot-encdrv netboot-dhcp-loop netboot-tcp-conn netboot-tcp-conn-stream netboot-http-get netboot-fw-source netboot-body-sink netboot-tls-reasm netboot-fw-span netboot-http netboot-http-boot netboot-http-disk netboot-http-smoke-boot netboot-http-smoke-disk netboot-http-boot-debug netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke netboot-smoke-disk netboot-server netboot-server-disk netboot-serve-boot netboot-serve-boot-debug netboot-serve-trinload netboot-trinpush-test netboot-dumper netboot-csd-probe netboot-sd-push netboot-boot-record netboot-delete-record netboot-list-records netboot-hook-roundtrip netboot-render-disk-probe netboot-render-disk-boot netboot-render-chain netboot-render-disk-boot-record netboot-assemble-disk-boot-record netboot-assemble-first-demo-record netboot-assemble-first-serve-record netboot-samboot-config netboot-trinity-identity netboot-trinload netboot-sd-csd netboot-sd-listread netboot-z80-routines asmlex-z80 asmparse-z80 asmprep-z80 prep-reader-z80 asmprep-paged-z80 prep-paged-driver-z80 asmparse-paged-z80 parse-paged-driver-z80 chain-paged-driver-z80 tbn-render-driver-z80 pass1-ir-z80 compact-ir-z80 compact-ser-z80 editmodel-z80 pagepool-z80 spill-z80 viewport-z80 ci-netboot-z80
 $(BUILD)/netboot_build_udp_frame.bin $(BUILD)/netboot_build_udp_frame.map: src/netboot/build_udp_frame.asm $(asm_deps/src/netboot/build_udp_frame.asm)
 	@mkdir -p $(BUILD)
 	pyz80 -D NETBOOT_STANDALONE=1 --obj=$(BUILD)/netboot_build_udp_frame.bin \
@@ -1600,6 +1600,33 @@ $(BUILD)/prep_reader_driver.bin $(BUILD)/prep_reader_driver.map: src/prep_reader
 
 prep-reader-z80: $(BUILD)/prep_reader_driver.bin $(BUILD)/prep_reader_driver.map
 
+# asmprep-paged-z80 — preprocessor window image for the paged prep harness
+# (i370). org &4000, ASMPREP_PAGED_BUFS=1: the big buffers (PREP_OUT/PREP_SRC/
+# PREP_FILES) relocate to equates in the section-A window (page 8), leaving code
+# + small buffers in section B (page 9). LMPR=&28: secA=page8 &0000, secB=page9
+# &4000. --exportfile generates build/asmprep_paged.sym for the driver importfile.
+$(BUILD)/asmprep_paged.bin $(BUILD)/asmprep_paged.map $(BUILD)/asmprep_paged.sym: src/asmprep.asm $(asm_deps/src/asmprep.asm)
+	@mkdir -p $(BUILD)
+	pyz80 -D ASMPREP_PAGED_BUFS=1 --obj=$(BUILD)/asmprep_paged.bin \
+	    --mapfile=$(BUILD)/asmprep_paged.map \
+	    --exportfile=$(BUILD)/asmprep_paged.sym \
+	    src/asmprep.asm
+
+asmprep-paged-z80: $(BUILD)/asmprep_paged.bin $(BUILD)/asmprep_paged.map $(BUILD)/asmprep_paged.sym
+
+# prep-paged-driver-z80 — main-image driver for the paged prep harness (i370).
+# org &8000, imports prep_run/PREP_ERR/PREP_OUT/PREP_SRC/PREP_FILES/... from the
+# paged prep sym. Entry prep_paged_run: save LMPR+SP, switch to LMPR=&28, call
+# prep_run (memory-reader default), snapshot PREP_ERR + output length, restore.
+$(BUILD)/prep_paged_driver.bin $(BUILD)/prep_paged_driver.map: src/prep_paged_driver.asm $(asm_deps/src/prep_paged_driver.asm) $(BUILD)/asmprep_paged.sym
+	@mkdir -p $(BUILD)
+	pyz80 --importfile=$(BUILD)/asmprep_paged.sym \
+	    --obj=$(BUILD)/prep_paged_driver.bin \
+	    --mapfile=$(BUILD)/prep_paged_driver.map \
+	    src/prep_paged_driver.asm
+
+prep-paged-driver-z80: $(BUILD)/prep_paged_driver.bin $(BUILD)/prep_paged_driver.map
+
 # pass1-ir-z80 — Z80 Pass1-over-IR walk, i48c-b8a (flat-memory). A standalone
 # flat harness containing ONLY the pass-1 machinery (the reused leaves
 # expr_eval/symbols/local_labels/litpool/ml + the new IR-walk); the IR record
@@ -1745,7 +1772,7 @@ netboot-z80-routines: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-bu
 # lands with the end-to-end .include exercise (i371).
 NETBOOT_PRIVATE_ARTIFACTS := $(if $(wildcard src/netboot/bootloader_chunk1_data.asm),netboot-eeprom-flash-chunk1)
 .PHONY: netboot-z80-artifacts
-netboot-z80-artifacts: netboot-z80-routines netboot-http-boot-debug netboot-http-smoke-boot editmodel-z80 editmodel-paged-z80 pagepool-z80 spill-z80 viewport-z80 asmlex-z80 asmparse-z80 asmprep-z80 prep-reader-z80 asmparse-paged-z80 parse-paged-driver-z80 chain-paged-driver-z80 b8d-chain-paged-driver-z80 pass1-ir-z80 compact-ir-z80 compact-ser-z80 sysreg-data netboot-serve-record netboot-server-record netboot-server-largefile-record netboot-server-largefile-manifest-record disk-record tbn-render-driver-z80 netboot-render-disk-probe netboot-render-disk-boot-record netboot-assemble-disk-boot-record netboot-assemble-first-demo-record netboot-assemble-first-serve-record release-unstripped-tbn $(NETBOOT_PRIVATE_ARTIFACTS)
+netboot-z80-artifacts: netboot-z80-routines netboot-http-boot-debug netboot-http-smoke-boot editmodel-z80 editmodel-paged-z80 pagepool-z80 spill-z80 viewport-z80 asmlex-z80 asmparse-z80 asmprep-z80 prep-reader-z80 asmprep-paged-z80 prep-paged-driver-z80 asmparse-paged-z80 parse-paged-driver-z80 chain-paged-driver-z80 b8d-chain-paged-driver-z80 pass1-ir-z80 compact-ir-z80 compact-ser-z80 sysreg-data netboot-serve-record netboot-server-record netboot-server-largefile-record netboot-server-largefile-manifest-record disk-record tbn-render-driver-z80 netboot-render-disk-probe netboot-render-disk-boot-record netboot-assemble-disk-boot-record netboot-assemble-first-demo-record netboot-assemble-first-serve-record release-unstripped-tbn $(NETBOOT_PRIVATE_ARTIFACTS)
 
 ci-netboot-z80: netboot-z80-artifacts
 	cd tools/sampage && go test ./...

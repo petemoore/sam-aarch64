@@ -59,6 +59,13 @@
 
                 if defined(PREP_STANDALONE)
                 org     &8000
+                else
+; Paged SAM build (i370): code + small buffers in section B (page 9), org &4000;
+; the big buffers relocate to the section-A window (page 8) — see the buffer
+; block below. Mirrors ASMPARSE_PAGED_BUFS.
+                if defined(ASMPREP_PAGED_BUFS)
+                org     &4000
+                endif
                 endif
 
 ; ---------------------------------------------------------------------------
@@ -3059,8 +3066,17 @@ CAND_BUF:         defs 256        ; a resolved candidate path being tried
 
 PREP_PATH:        defs 128        ; caller writes a NUL-terminated path
 PREP_OUT_CAP:     equ 8192
+                  if defined(ASMPREP_PAGED_BUFS)
+; Paged build (i370): the big three buffers tile the section-A window (page 8) —
+; exactly 16 KB (8 K + 4 K + 4 K) — leaving code + small buffers in section B.
+; These are oracle-fixture sizes; the full spectrum4 corpus needs the i2 PP_PREP
+; pool (deferred to b4).
+PREP_OUT:         equ &0000       ; page-8 window (section A); 8 KB, ends &2000
+PREP_SRC:         equ &2000       ; page-8 window; 4 KB, ends &3000
+                  else
 PREP_OUT:         defs 8192       ; expanded output
 PREP_SRC:         defs 4096       ; caller writes source; BC = length
+                  endif
 
 ; Include-file provider input (memory-backed harness reader). PREP_FILES holds
 ; PREP_NFILES entries, each [name_len:1][name][content_len:2][content]; the SAM
@@ -3071,4 +3087,8 @@ PREP_SRC:         defs 4096       ; caller writes source; BC = length
 PREP_NFILES:      defs 1
 PREP_NINCDIRS:    defs 1
 PREP_INCDIRS:     defs 256
+                  if defined(ASMPREP_PAGED_BUFS)
+PREP_FILES:       equ &3000       ; page-8 window (section A); 4 KB, ends &4000
+                  else
 PREP_FILES:       defs 4096
+                  endif
