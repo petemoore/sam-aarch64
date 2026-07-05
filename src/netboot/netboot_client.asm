@@ -26,8 +26,9 @@
 ;
 ; On completion the bootable client_main writes the staged bytes to Trinity storage
 ; via the B-DOS seam: bdos_fill_save_uifa + bdos_save_hook (HSAVE). The HSAVE hook
-; dispatch is behind NETBOOT_HOSTTEST (NOT host-verifiable — no ROM/DOS/RST 8 in
-; the harness); the field arithmetic (bdos_fill_save_uifa) IS host-verified (i93).
+; dispatch is NOT host-verifiable (no ROM/DOS/RST 8 in the harness), so the harness
+; drives the other routines by symbol and does not exercise it; the field arithmetic
+; (bdos_fill_save_uifa) IS host-verified (i93).
 ;
 ; PROVENANCE: the phase machine is client.go::Client; the ARP-for-server + RRQ-send
 ; front is clientfront.go (ported from tftp_client_front.asm); the DATA/ACK receive
@@ -46,18 +47,16 @@
                 org     &8000
 
                 ; The boot entry (CALL 32768) must be the first instruction at
-                ; &8000. client_main / client_fetch_boot are defined later (under
-                ; NETBOOT_HOSTTEST==0); the host harness invokes routines by symbol
-                ; and never CALLs 32768, so this jp is bootable-only. NETBOOT_FETCH_BOOT
+                ; &8000. client_main / client_fetch_boot are defined later; the host
+                ; harness invokes routines by symbol and never CALLs 32768, so this
+                ; jp is bootable-only. NETBOOT_FETCH_BOOT
                 ; selects the i122c PXE-style fetch-and-boot entry (fetch -> stream into a
                 ; scratch record -> validate -> ALHK-boot) instead of the default
                 ; client_main fetch-then-HSAVE-with-picker write-out (i182a).
-                if defined(NETBOOT_HOSTTEST)==0
                 if defined(NETBOOT_FETCH_BOOT)
                 jp      client_fetch_boot
                 else
                 jp      client_main
-                endif
                 endif
 
 ; ===========================================================================
@@ -417,11 +416,9 @@ cl_accept_block:
                 ; CLIENT_SINK_MODE selects the payload route; only the boot build
                 ; has the sink. Mode 1 streams 512-byte sectors as they arrive so a
                 ; full 819200-byte disk image never sits whole in RAM.
-                if defined(NETBOOT_HOSTTEST)==0
                 ld      a, (CLIENT_SINK_MODE)
                 or      a
                 jr      nz, cl_sink_payload
-                endif
 
                 ; --- mode 0: accumulate the payload into STAGING at the offset ---
                 ld      hl, (LAST_DATA_LEN)
@@ -445,7 +442,6 @@ cl_no_copy:
                 ld      (STAGE_OFFSET), hl
                 jr      cl_after_payload
 
-                if defined(NETBOOT_HOSTTEST)==0
 cl_sink_payload:
                 ; --- mode 1: stream the payload into the selected record. The sink
                 ; re-blocks into sectors + HWSADs each full one, and tracks the
@@ -455,7 +451,6 @@ cl_sink_payload:
                 ld      hl, RXBUF + RX_UDP_PAYLOAD + 4
                 ld      bc, (LAST_DATA_LEN)
                 call    raw_record_sink_leaf
-                endif
 cl_after_payload:
                 ; acked = block (assemble big-endian -> store little-endian).
                 ld      a, (RXBUF + RX_UDP_PAYLOAD + 2)
@@ -748,10 +743,10 @@ err_unknown_tid_msg: defm "unknown transfer ID"
                      defb 0
 
 ; ===========================================================================
-; Real-hardware bootable entry (excluded from the host harness build, which has
-; no EEPROM / real silicon / B-DOS store). CALL 32768 lands here on boot.
+; Real-hardware bootable entry: CALL 32768 lands here on boot. The host harness
+; (netboot_client_test.go) drives the client's routines by symbol against this
+; same boot binary, so nothing here is build-gated.
 ; ===========================================================================
-                if defined(NETBOOT_HOSTTEST)==0
 
 ; client_main — read the SAM's MAC + IP from the Trinity EEPROM, fill CLIENT_*, set
 ; SERVER_IP + the file to fetch (a fixed default), init the ENC28J60, broadcast the
@@ -1043,8 +1038,6 @@ cl_filename:      defm "recovery.mgt"
                   defb 0
 cl_filename_end:
 
-                endif  ; !NETBOOT_HOSTTEST
-
 ; ===========================================================================
 ; CONFIG + transfer state. The harness writes CLIENT_*/SERVER_IP/RRQ_FILENAME/
 ; CLIENT_BLKSIZE directly; on the bootable build client_main fills them.
@@ -1081,22 +1074,6 @@ TPKT:             defs 64                ; the ACK/ERROR packet buffer
 
 RRQ_FILENAME:     defs 128              ; the NUL-terminated filename to fetch
 RXBUF:            defs 1518
-; STAGING holds the accumulated file bytes. Its size differs by build target —
-; the accumulation logic is identical, only the buffer capacity changes:
-;   - The host harness (NETBOOT_HOSTTEST) is a flat 64 KB Z80, so it gets a
-;     generous buffer that comfortably holds the multi-block test file
-;     (netboot_client_test.go stages 2 full 1428-byte blocks + a tail).
-;   - The bootable build keeps this buffer small (2 KB). Section D (&C000-&FFFF)
-;     is RAM at boot (LOAD CODE 32768 deposits there; ROM1 off at run — proven by
-;     the section-D loadability probe, see docs/notes/sam-paging.md), and the image
-;     does spill into it for the i145b CSD overlay; but a full 16 KB staging buffer
-;     would still bloat the boot image needlessly. Real large-file staging belongs
-;     in paged RAM (i119); the boot fit-check guards the &10000 ceiling.
-                if defined(NETBOOT_HOSTTEST)
-STAGING:          defs 16384
-                else
-STAGING:          defs 2048
-                endif
 
 ; ===========================================================================
 ; The host-verified packet builders/parsers + the storage seam, composed into
@@ -1111,7 +1088,6 @@ STAGING:          defs 2048
                 include "encdrv.asm"
                 include "enc_link.asm"         ; drv_wait_link (PHY link-up, i127)
                 include "key_read_test.asm"    ; i138: keyboard sysvar poll (KYIP2 inlined)
-                if defined(NETBOOT_HOSTTEST)==0
                 include "bdos_picker.asm"      ; i119d: record-selection UX (B4)
                 include "eeprom.asm"
                 include "raw_record_sink.asm"  ; i122b: streaming disk-image -> raw record (HWSAD)
@@ -1120,4 +1096,14 @@ STAGING:          defs 2048
                 ; places the boot image's tail above &BFFF into section D (RAM at
                 ; boot). Verified standalone by csd_to_bd_records_test.go.
                 include "sd_csd.asm"
-                endif
+
+; ===========================================================================
+; STAGING holds the accumulated file bytes (mode 0). Placed AFTER all CODE (the
+; includes above) so its capacity grows into high section-D DATA RAM without
+; relocating any code: &C000-&FFFF is RAM at boot (LOAD CODE 32768 deposits there,
+; ROM1 off at run — the section-D loadability probe, docs/notes/sam-paging.md). 16 KB
+; comfortably holds the multi-block file netboot_client_test.go streams in; the boot
+; fit-check guards the &10000 ceiling. Real large-file staging belongs in paged
+; RAM (i119); the streaming record sink (mode 1) never uses STAGING.
+; ===========================================================================
+STAGING:          defs 16384

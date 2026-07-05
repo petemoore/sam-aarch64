@@ -4441,7 +4441,7 @@
   title: Systemically eliminate NETBOOT_HOSTTEST==0 emulation carve-outs + CI guard against reintroduction (emulation-first enforcement)
   description: |
     Pete (2026-06-23), load-bearing + recurring: the 'if defined(NETBOOT_HOSTTEST)==0' pattern hides Z80 code from the emulation/host build so it ships to hardware UN-emulated — the exact CLAUDE.md §7 / feedback_emulation_first anti-pattern (the i82 client_main brick, the samboot_stripes stub). It keeps getting reintroduced (agents add new ones), so the fix must be SYSTEMIC, not per-stub. 34 sites across 13 src/netboot files (audit 2026-06-23). For each: determine what it gates + why the flat harness can't run it (ROM/RST 8/screen), then either (A) remove the gate (code runs safely in emulation as-is), (B) make the harness model what it needs, or (C) run that payload under SimCoupe (the ROM/screen-bearing CI gate). Plus a CI GUARD that FAILS the build if a NETBOOT_HOSTTEST==0 block is added beyond the shrinking allowlist (ratchet to zero), and crystal-clear CLAUDE.md §7 + memory wording so future agents never add one. First fix already landed: samboot_stripes (authoritative ROM port, no carve-out). Emulation-first: ANYTHING that runs on hardware is tested in emulation first, no exceptions.
-  status: OPEN
+  status: DONE
   kind: umbrella
   owner: agent
 
@@ -4460,7 +4460,7 @@
   title: Systematically eliminate the 34 existing NETBOOT_HOSTTEST==0 carve-outs (ratchet the i231a allowlist to zero)
   description: |
     The cleanup half of i231, enforced by the i231a ratchet guard. For each of the 34 sanctioned carve-out sites: determine what it gates + why the flat harness can't run it (ROM/RST 8/screen), then (A) remove the gate (runs safely in emulation as-is), (B) make the harness model what it needs, or (C) run that payload under SimCoupe (the ROM/screen CI gate); then ratchet the allowlist entry down. Large + subtle; split per file/cluster as taken on. Depends on i231a (the guard + allowlist exist first).
-  status: OPEN
+  status: DONE
   depends_on: [i231a]
   kind: umbrella
   owner: agent
@@ -4481,7 +4481,7 @@
   title: "Eliminate the harder carve-outs (post-i231b first pass), per file/cluster"
   description: |
     Umbrella for eliminating the carve-outs left after the i231b first pass, taken on per file/cluster (CLAUDE.md rule 7 / the i126 comprehensive-emulation north star). Children: i231b-b4a (smoke_test.asm, DONE) + i231b-b4b (the remaining 28 sites / 8 files).
-  status: OPEN
+  status: DONE
   kind: umbrella
   owner: agent
   parent: i231b
@@ -4567,9 +4567,11 @@
   title: "netboot_client.asm carve-outs eliminated (5 sites): collapse the flat HOSTTEST binary into the bootable; client_main/client_fetch_boot already harness-driven"
   description: |
     Eliminate the 5 NETBOOT_HOSTTEST==0 carve-outs in src/netboot/netboot_client.asm (boot entry :55; sink-mode selector :420; cl_sink_payload+raw_record_sink_leaf :448; the bootable body :754; the real-module includes bdos_picker/eeprom/raw_record_sink/sd_csd :1114). INVESTIGATED (see PR that recorded this): the naive collapse (delete the flat netboot_client.bin HOSTTEST build, retarget netboot_client_test.go at netboot_client_boot.bin, make the 5 blocks unconditional) does NOT land clean. Removing the carve-out directives ALONE is a boot-binary no-op (the ==0 blocks were already in the REAL_LISTREAD boot build; verified byte-identical). But retargeting the flat test REQUIRES enlarging STAGING: netboot_client_test.go streams up to 7240 bytes into STAGING via the client's own ldir (makeFile(cliBlksize*5+100), TestClientWindowedSession/GapRewind) — the flat build has STAGING=16384, the boot build 2048; a 2048 boot binary fails those tests (frame-builder code above STAGING gets overwritten). And enlarging STAGING in place relocates the SD routines above ~0xD000 into the [[i313]] harness high-address defect (boot tests then fail). Irreducible in-place conflict: flat needs STAGING>=7240; boot needs SD routines below ~0xCF00. TWO resolution paths: (A) LIGHTER — move the STAGING 'defs' to the END of the image (after all includes) so growing it extends into high DATA RAM without relocating any CODE; then STAGING=16384 works and the collapse proceeds (verify all boot tests + retargeted flat tests + the 32768 boot-fit-check). (B) fix i313 (the emulation-first path), then enlarge STAGING in place. Care points confirmed GREEN: the flat test never reaches the LISTREAD/csd_set_bd_records path (harness-hook vs REAL_LISTREAD CMD17 difference is moot); all 15 symbols it uses exist in netboot_client_boot.map (clean retarget). Makefile: delete the flat recipe + its .PHONY + netboot-z80-routines membership; netboot-client-disk already uses the boot bin. Fix netboot_client_test.go:49 stale 'make netboot-client' comment. Ledger 18->13 / 3->2 files. Recommend path A (no harness dep).
-  status: OPEN
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 872, role: completing}
   parent: i231b-b4
 
 - id: i231b-b4i

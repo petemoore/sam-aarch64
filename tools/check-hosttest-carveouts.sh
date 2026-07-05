@@ -106,8 +106,15 @@ for path in "${!allowed[@]}"; do
   fi
 done
 
+# Count files/sites in the key loop — ${#live[@]} would trip `set -u` when the
+# ledger is empty (a declared-but-unpopulated assoc array reads as unbound), which
+# is exactly the ratchet's end state (zero carve-outs, empty ledger).
 live_total=0
-for path in "${!live[@]}"; do live_total=$(( live_total + ${live["$path"]} )); done
+live_files=0
+for path in "${!live[@]}"; do
+  live_total=$(( live_total + ${live["$path"]} ))
+  live_files=$(( live_files + 1 ))
+done
 
 if [ "$fail" -ne 0 ]; then
   {
@@ -119,4 +126,4 @@ if [ "$fail" -ne 0 ]; then
   exit 1
 fi
 
-echo "check-hosttest-carveouts: OK — $live_total carve-out(s) across ${#live[@]} file(s), exactly matching the ratchet ledger."
+echo "check-hosttest-carveouts: OK — $live_total carve-out(s) across $live_files file(s), exactly matching the ratchet ledger."

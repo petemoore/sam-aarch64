@@ -27,8 +27,8 @@ import (
 )
 
 const (
-	cliBinPath = "../../../build/netboot_client.bin"
-	cliMapPath = "../../../build/netboot_client.map"
+	cliBinPath = "../../../build/netboot_client_boot.bin"
+	cliMapPath = "../../../build/netboot_client_boot.map"
 
 	cliBlksize  = 1428
 	cliOwnTID   = 30574
@@ -46,7 +46,7 @@ var (
 func loadClient(t *testing.T) *z80h.Machine {
 	t.Helper()
 	if _, err := os.Stat(cliBinPath); err != nil {
-		t.Fatalf("netboot_client binary not built (%s); run `make netboot-client`", cliBinPath)
+		t.Fatalf("netboot_client binary not built (%s); run `make netboot-client-boot`", cliBinPath)
 	}
 	mac, err := z80h.Load(cliBinPath, cliMapPath)
 	if err != nil {
