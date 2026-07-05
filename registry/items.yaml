@@ -533,7 +533,7 @@
   title: "Brick 3: .include + # line emission via pluggable reader vector"
   description: |
     Port preprocess.go handleInclude and the mid-stream '# line' emission. File access via a pluggable reader vector set at init (no conditional assembly): harness supplies a memory-backed provider, SAM build supplies real UIFA+HGTHD+trampoline-HLOAD (load_in_file pattern). Oracle extends asmprep_test.go with include-relative/search-path/missing/skipped-in-false-if cases. Real reader exercised under SimCoupe. Depends on i31b-b2.
-  status: OPEN
+  status: DONE
   depends_on: [i31b-b2]
   kind: umbrella
   owner: agent
@@ -551,13 +551,15 @@
   parent: i31b-b3
 
 - id: i31b-b3b
-  title: "Brick 3b: real SAM include reader (UIFA+HGTHD+trampoline-HLOAD) + SimCoupe exercise"
+  title: Real SAM include reader routine (prep_sam_reader) — name-map + UIFA+HGTHD+trampoline-HLOAD + not-found→CF=0 via temporary DOSER bracket
   description: |
-    Bind the b3a pluggable reader vector (READER_VEC) to the real SAM file loader — UIFA + HGTHD + trampoline-HLOAD, the load_in_file pattern (src/main_loop.asm) — and exercise the real-HLOAD include path under SimCoupe with real DOS (a disk image carrying include files). No HOSTTEST carve-outs: the vector is set at init so both the memory provider (b3a) and the real reader get emulator coverage. Likely shares the SAM-runnable asmprep harness with b4 (chain wiring); add the edge if a concrete prerequisite emerges. Depends on i31b-b3a.
-  status: OPEN
+    Port the .include reader vector (READER_VEC, src/asmprep.asm) from the b3a memory provider to the real SAM disk loader as a self-contained routine, proven in the SAM-fidelity harness (tools/z80-test-harness-go, which models HGTHD/HLOAD + DOSER) independent of the paged prep image. prep_sam_reader ABI matches prep_mem_reader (REQ_NAME_PTR/LEN in; CF=1 + READ_CONTENT_PTR/LEN on hit, CF=0 on miss). (1) map the resolved candidate name into a 15-byte UIFA name block (verbatim, <=10 chars, space-pad, 4-space ext — name-mapping default, q-followup); (2) install a temporary DOSER (&5BC0) bracket converting a not-found (A!=0) into a clean CF=0 return and restoring the prior vector (HGTHD longjmps to BASIC otherwise; hksp unavailable per i185); (3) fill_uifa+HGTHD geometry, trampoline-HLOAD (load_in_file pattern) into a target page, READ_CONTENT_PTR=&8000 window. Ships src/prep_reader_driver.asm + Makefile prep-reader-z80 + tools/z80-test-harness-go/prep_reader_test.go (hit + not-found, no silent skips). The end-to-end .include-under-SimCoupe exercise and the shared paged prep image are split out (depth-limit) into their own items. Plan: docs/plans/i31b-b3b-sam-include-reader.md. Spec: docs/specs/on-sam-preprocessor-design.md §6 brick 3.
+  status: DONE
   depends_on: [i31b-b3a]
   kind: leaf
   owner: agent
+  prs:
+    - {num: 880, role: completing}
   parent: i31b-b3
 
 - id: i31b-b4
@@ -565,7 +567,7 @@
   description: |
     Wire prep_run in front of b8d_chain_paged (own paged image, b8d two-image pattern; PP_PREP buffer tag in the i2 pool). New preprocessor-bearing corpus fixtures incl. a spectrum4 slice (tests/test_print_w0.s), gated: expanded text byte-equal to host -E, then end-to-end text->.tbn byte-equal to host CompactTBNBytes. SimCoupe pre-merge gate incl. real-HLOAD include path. PREREQUISITE from b3a scoping (i344-encoded): cross-file macro def-FILE provenance — a macroDef's expansion directive uses defPos.FILE, which b3a stores as the invocation-site CURRENT_FILE (correct only when a macro is defined and invoked in the SAME file). The corpus defines macros in shared includes and invokes them elsewhere, so b4 must add a def-file field to the MACRO_TAB record (interned in PATH_ARENA at define time) and emit it in tryExpandMacroInvocation's pre-directive. Also right-size the flat-harness pools (shrunk in b3a to fit the 32 KB org-&8000 window) appropriately for the paged image. Depends on i31b-b3.
   status: OPEN
-  depends_on: [i31b-b3]
+  depends_on: [i31b-b3, i370]
   kind: leaf
   owner: agent
   parent: i31b
@@ -6676,5 +6678,22 @@
   description: |
     i313's investigation audited the z80 test scratch buffers and found ~8 more hardcoded >=0x8000 staging constants beyond the fixed rrsScratch: claimNameScratch=&C000 + claimNameScratchReal=&D000 (bdos_claim_name_test.go), nbSrcOrg=&E000 (netboot_server_test.go), demoSrcOrgA=&C000 + demoSrcOrgB=&D000 (netboot_serve_test.go), spScratch=&F000 (spill_test.go), shaInputStage=&A000 (sha256_test.go), srcOrg=&C000 (tftp_server_loop_test.go). Each is a latent collision of the i313/i231b-b4g class: it only bites when the test's org-&8000 binary GROWS UP into that window. The full suite currently passes (none collide at present sizes), so this is PREVENTIVE hardening, not a live bug. NUANCE: some mirror an ASM equ, not a free test choice (e.g. csdProbeStage=&C000 mirrors 'STAGE equ &C000' in the asm — cannot be moved test-side without the asm). So relocate CASE-BY-CASE: the test-chosen ones to low RAM (like rrsScratch), leaving equ-mirrors as-is (or move the equ too if warranted). Low priority — do opportunistically or when a binary approaches its buffer.
   status: OPEN
+  kind: leaf
+  owner: agent
+
+- id: i370
+  title: "SAM-runnable paged prep image + driver harness (asmprep in a paged window, PP_PREP i2-pool buffers, b8d two-image) — shared by i31b-b3b's exercise and i31b-b4"
+  description: |
+    Emerged prerequisite (i31b-b3b 'add the edge if a concrete prerequisite emerges'). asmprep.asm runs org &8000 flat (32 KB, sections C+D) in the standalone oracle; the real trampoline-HLOAD lands files in section C, colliding with prep's own code/data there. Per spec §5/§6.4 the on-SAM prep must run in a paged window (b8d two-image pattern) with big buffers (PREP_OUT 8192, PREP_SRC 4096, PREP_FILES, SUBST_ARENA, MACRO_STRPOOL, ...) sourced from the i2 pool under a new PP_PREP tag, leaving C/D free for the trampoline. Deliver: a -D ASMPREP_PAGED_BUFS build that relocates asmprep buffers into an LMPR two-page window (pattern: asmparse_paged / ASMPARSE_PAGED_BUFS, Makefile:1583+), a prep_paged_driver.asm (pattern: parse_paged_driver/chain_paged_driver), and a test running prep_run on the SAM under the SAM-fidelity harness + SimCoupe with the memory reader (proving paged prep runs). Spec assigns the paged image to b4; extracted here to de-circularise (b4 depends on b3 incl b3b, so b3b's exercise cannot depend on b4). Depends only on the asmprep module being feature-complete (b1/b2a/b2b/b3a, all DONE).
+  status: OPEN
+  kind: leaf
+  owner: agent
+
+- id: i371
+  title: End-to-end real-HLOAD .include exercise under SimCoupé — bind READER_VEC=prep_sam_reader in the paged prep build + disk include-file wiring
+  description: |
+    The 'exercise the real-HLOAD include path under SimCoupe with real DOS (a disk image carrying include files)' half of the original i31b-b3b, split out under the id depth limit. Bind READER_VEC=prep_sam_reader (i31b-b3b) in the paged prep image (i370) so both the memory provider (b3a) and the real reader get emulator coverage — no HOSTTEST carve-outs (discipline rule 7 / i231). Add an include file to the test disk via build-disk (tools/build-disk/main.go AddCodeFile, pattern of the 'IN' file at main.go:508) behind a new flag + the Makefile disk target; register it as a NamedFile in the SAM-fidelity harness. Exercise a source with .include resolving to the on-disk file, asserting the expansion end-to-end under SimCoupe (the CI gate). Depends on i31b-b3b (reader routine) + i370 (paged prep harness).
+  status: OPEN
+  depends_on: [i31b-b3b, i370]
   kind: leaf
   owner: agent
