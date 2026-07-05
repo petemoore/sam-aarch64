@@ -1,9 +1,10 @@
-; asmprep.asm — on-SAM assembler-source preprocessor, i31b (Bricks 1 + 2a).
+; asmprep.asm — on-SAM assembler-source preprocessor, i31b (Bricks 1 + 2a + 2b).
 ;
 ; SAM-side Z80 port of the Go authority's preprocessor:
 ;   tools/sam-aarch64/frontend/preprocess.go  (Preprocess / processFile /
 ;   processLines / evalIfCondition / tryParseSet / parseIntLiteral /
-;   isBareIdent / stripTrailingComment / parseMacroHeader / collectMacroBody).
+;   isBareIdent / stripTrailingComment / parseMacroHeader / collectMacroBody /
+;   splitMacroArgs / buildSubstituter / tryExpandMacroInvocation).
 ;
 ; i31 is the on-SAM front-end preprocessor: a text->text pass that runs in
 ; front of the lexer (docs/specs/on-sam-preprocessor-design.md). It consumes
@@ -21,17 +22,32 @@
 ;     .endm-outside-.macro are errors); store the macroDef in MACRO_TAB. A
 ;     definition is consumed (emits nothing); an inactive-.if definition is
 ;     skipped but its body still consumed;
+;   - macro INVOCATION — a known macro name at line start expands: arg-split
+;     (paren/string-aware splitMacroArgs), arity check, recursion-cycle guard,
+;     \param substitution (longest-match, token-paste, inside-string, \\ literal
+;     — buildSubstituter), then the substituted body is RE-preprocessed by a
+;     reentrant prep_process_lines, with mid-stream `# <line> "<file>"`
+;     directives at the macro-def and post-call boundaries. Macro-table lookup
+;     is last-wins (newest record) so a redefined macro shadows the older one,
+;     matching Go's map-overwrite semantics;
 ;   - plain line pass-through; the source line counter (CUR_LINE) that records
 ;     each macro's defline.
-; Macro INVOCATION (splitMacroArgs / buildSubstituter / tryExpandMacroInvocation
-; + the reentrant processLines and mid-stream `# line` emission) is Brick 2b;
 ; .include is Brick 3; the b8d-chain wiring + corpus gate is Brick 4.
+;
+; ERROR MODEL: prep_run saves SP on entry; prep_fail restores it (a longjmp)
+; and returns to prep_run's caller. So `jp prep_fail` is correct from any call
+; depth — including inside the reentrant expansion recursion — which is why the
+; pool-overflow guards (MACRO_TAB / PARAM_IDX / BODY_IDX / MACRO_STRPOOL /
+; SET_TAB / SET_NAMES / ARG_IDX / SUBST_ARENA) jump straight to it rather than
+; threading a carry flag up every frame. Overflow is an explicit error, never
+; silent corruption (spec §3).
 ;
 ; PROVENANCE: algorithmic port of preprocess.go. VERIFICATION:
 ; tools/netboot-oracle/z80/asmprep_test.go drives prep_run under koron-go/z80
-; and byte-compares its output against frontend.Preprocess (conditional-assembly
-; + macro-definition fixtures), and validates the stored macroDef records
-; (name / params / body-count / defline) directly via exposed symbols.
+; and byte-compares its output against frontend.Preprocess (conditional-assembly,
+; macro-definition, and macro-invocation/expansion fixtures), and validates the
+; stored macroDef records (name / params / body-count / defline) directly via
+; exposed symbols.
 ;
 ; CALLING CONVENTION (flat standalone harness):
 ;   Entry:  prep_run, with BC = source byte length. The caller writes the raw
@@ -68,6 +84,7 @@ IF_MAX:           equ 64    ; max .if nesting depth (frames)
 ; prep_run — preprocess PREP_SRC (BC = length) into PREP_OUT.
 ; ===========================================================================
 prep_run:
+                ld      (PREP_SP_SAVE), sp      ; longjmp target for prep_fail
                 ld      (SRC_LEN), bc
 
                 ; SRC_PTR = PREP_SRC; SRC_END = PREP_SRC + len.
@@ -102,7 +119,15 @@ prep_run:
                 ld      hl, 1
                 ld      (CUR_LINE), hl
 
-                ; Frame stack: one active frame {active=1, taken=0, hadElse=0}.
+                ; Substitution arena (bump stack) and per-macro expanding flags.
+                ld      hl, SUBST_ARENA
+                ld      (SUBST_TOP), hl
+                call    prep_clear_expanding
+
+                ; Frame stack: one active frame {active=1, taken=0, hadElse=0};
+                ; base = 0 (the top-level stack starts at IF_STACK[0]).
+                xor     a
+                ld      (IF_BASE), a
                 ld      a, 1
                 ld      (IF_DEPTH), a
                 ld      hl, IF_STACK
@@ -113,23 +138,31 @@ prep_run:
                 ld      (hl), 0                 ; hadElse
 
                 ; Leading directive: # 1 "<path>"\n  (processFile).
-                ld      a, CH_HASH
-                call    prep_emit_byte
-                ld      a, CH_SPACE
-                call    prep_emit_byte
-                ld      a, &31                  ; '1'; processFile always emits line 1
-                call    prep_emit_byte
-                ld      a, CH_SPACE
-                call    prep_emit_byte
-                ld      a, CH_QUOTE
-                call    prep_emit_byte
-                call    prep_emit_path          ; PREP_PATH bytes up to NUL
-                ld      a, CH_QUOTE
-                call    prep_emit_byte
-                ld      a, CH_NL
-                call    prep_emit_byte
+                ld      hl, 1
+                call    prep_emit_line_directive
 
+                ; Preprocess the top-level source window.
+                call    prep_process_lines
+
+                ; Success: BC = number of expanded-output bytes.
+                ld      hl, (OUT_PTR)
+                ld      de, PREP_OUT
+                or      a
+                sbc     hl, de
+                ld      b, h
+                ld      c, l
+                ret
+
+; ===========================================================================
+; prep_process_lines — port of processLines: process every physical line in the
+; current SRC window ([SRC_PTR, SRC_END)) with the conditional-assembly frame
+; stack based at IF_BASE (frames [IF_BASE, IF_DEPTH)). The caller sets up the
+; window, CUR_LINE, IF_BASE and the initial frame. Returns when the window is
+; exhausted; a fatal error longjmps via prep_fail. Reentrant: macro expansion
+; re-enters it over the substituted body (see prep_try_expand).
+; ===========================================================================
 ; --- main line loop --------------------------------------------------------
+prep_process_lines:
 prep_loop:
                 ; Any input left?  (SRC_PTR < SRC_END)
                 ld      hl, (SRC_PTR)
@@ -137,7 +170,14 @@ prep_loop:
                 or      a
                 sbc     hl, de
                 jr      c, prep_haveline        ; SRC_PTR < SRC_END
-                jp      prep_done               ; no more input
+                ; Window exhausted: the current stack must be balanced —
+                ; (IF_DEPTH - IF_BASE) > 1 is an unterminated .if.
+                ld      a, (IF_DEPTH)
+                ld      hl, IF_BASE
+                sub     (hl)
+                cp      2
+                jp      nc, prep_fail           ; depth-base > 1 -> unterminated .if
+                ret                             ; window done -> return to caller
 
 prep_haveline:
                 call    prep_get_line           ; sets LINE_PTR/LINE_LEN, advances SRC_PTR
@@ -197,12 +237,15 @@ prep_chk_endm:
                 jp      z, prep_fail
                 ; fall through to default
 
-; --- default: pass-through / .set capture (only when active) ---------------
+; --- default: pass-through / .set capture / macro invocation (only active) --
 prep_default:
                 call    prep_active
-                jr      z, prep_after_line      ; inactive: skip the line
+                jp      z, prep_after_line      ; inactive: skip the line
 
                 call    prep_try_set            ; capture .set NAME, INT if valid
+                call    prep_try_expand         ; A=1 if consumed as a macro call
+                or      a
+                jp      nz, prep_after_line     ; expanded: don't emit the call line
                 call    prep_emit_line          ; emit the original physical line + \n
                 jp      prep_after_line
 
@@ -256,9 +299,9 @@ prep_if_active:
 
 ; --- .else -----------------------------------------------------------------
 prep_do_else:
-                ld      a, (IF_DEPTH)
+                call    prep_stack_size         ; A = IF_DEPTH - IF_BASE
                 cp      2
-                jp      c, prep_fail            ; .else outside .if (depth < 2)
+                jp      c, prep_fail            ; .else outside .if (size < 2)
                 ; top frame
                 call    prep_top_frame          ; HL -> top frame
                 inc     hl
@@ -269,11 +312,14 @@ prep_do_else:
                 ld      (hl), 1                 ; hadElse = 1
                 dec     hl
                 dec     hl                      ; HL -> active
-                ; parentActive = active over frames[0 .. depth-2]
-                ld      a, (IF_DEPTH)
-                dec     a
-                ld      b, a                    ; test depth-1 frames
-                call    prep_active_n           ; A=1 if all active
+                push    hl                      ; save top.active ptr
+                ; parentActive = active over frames[IF_BASE .. depth-2]
+                call    prep_stack_size
+                dec     a                       ; count = size-1
+                ld      b, a
+                call    prep_ifbase_ptr         ; HL -> IF_STACK + IF_BASE*3
+                call    prep_active_from        ; A=1 if all B frames active
+                pop     hl                      ; HL -> top.active
                 or      a
                 jr      z, prep_else_off        ; parent inactive -> top.active=0
                 ; parent active: flip iff !taken
@@ -292,30 +338,22 @@ prep_else_off:
 
 ; --- .endif ----------------------------------------------------------------
 prep_do_endif:
-                ld      a, (IF_DEPTH)
+                call    prep_stack_size         ; A = IF_DEPTH - IF_BASE
                 cp      2
                 jp      c, prep_fail            ; .endif outside .if
+                ld      a, (IF_DEPTH)
                 dec     a
                 ld      (IF_DEPTH), a
                 jp      prep_after_line
 
-; --- end of input ----------------------------------------------------------
-prep_done:
-                ld      a, (IF_DEPTH)
-                cp      2
-                jp      nc, prep_fail           ; unterminated .if (depth > 1)
-                ; success: BC = output length
-                ld      hl, (OUT_PTR)
-                ld      de, PREP_OUT
-                or      a
-                sbc     hl, de
-                ld      b, h
-                ld      c, l
-                ret
-
+; --- fatal error (longjmp) -------------------------------------------------
+; Restore SP to prep_run's entry frame and return BC=0 with PREP_ERR set. The
+; SP restore unwinds any nested prep_process_lines / prep_try_expand calls, so
+; `jp prep_fail` is a correct abort from any depth (matching Go's nil,err).
 prep_fail:
                 ld      a, 1
                 ld      (PREP_ERR), a
+                ld      sp, (PREP_SP_SAVE)
                 ld      bc, 0
                 ret
 
@@ -1040,10 +1078,19 @@ prep_set_store:
 ss_append:
                 ld      a, (SET_COUNT)
                 cp      SET_TAB_MAX
-                ret     nc                      ; table full: silently drop (defensive)
-                ; copy name into the arena
+                jp      nc, prep_fail           ; .set table overflow -> error
+                ; copy name into the arena (bounds-checked)
                 ld      hl, (SET_NAMES_PTR)
                 ld      (SS_NAMEOFF), hl        ; arena offset (absolute ptr)
+                ; overflow guard: SET_NAMES_PTR + len > SET_NAMES_END -> error
+                ld      bc, (PTS_NAME_LEN)
+                add     hl, bc                  ; HL = end of copy
+                ex      de, hl                  ; DE = end of copy
+                ld      hl, SET_NAMES_END
+                or      a
+                sbc     hl, de                  ; SET_NAMES_END - end; <0 -> overflow
+                jp      c, prep_fail
+                ld      hl, (SET_NAMES_PTR)
                 ld      de, (PTS_NAME_PTR)
                 ld      bc, (PTS_NAME_LEN)
                 ld      a, b
@@ -1190,18 +1237,40 @@ prep_push_frame:
                 ld      (IF_DEPTH), a
                 ret
 
-; prep_active — A=1 (NZ) if all IF_DEPTH frames are active, else A=0 (Z).
-prep_active:
+; prep_stack_size — A = IF_DEPTH - IF_BASE (the current stack's frame count).
+prep_stack_size:
                 ld      a, (IF_DEPTH)
-                ld      b, a
-                ; fall through to prep_active_n
+                ld      hl, IF_BASE
+                sub     (hl)
+                ret
 
-; prep_active_n — A=1 (NZ) if frames[0..B-1] all active, else A=0 (Z).
-prep_active_n:
+; prep_ifbase_ptr — HL -> IF_STACK + IF_BASE*3 (bottom frame of current stack).
+prep_ifbase_ptr:
+                ld      a, (IF_BASE)
+                ld      l, a
+                ld      h, 0
+                ld      d, h
+                ld      e, l
+                add     hl, hl                  ; *2
+                add     hl, de                  ; *3
+                ld      de, IF_STACK
+                add     hl, de
+                ret
+
+; prep_active — A=1 (NZ) if every frame in the current stack (frames
+; [IF_BASE, IF_DEPTH)) is active, else A=0 (Z).
+prep_active:
+                call    prep_stack_size         ; A = frame count
+                ld      b, a
+                call    prep_ifbase_ptr         ; HL -> first frame of current stack
+                ; fall through to prep_active_from
+
+; prep_active_from — A=1 (NZ) if the B frames starting at HL are all active,
+; else A=0 (Z).  B=0 is vacuously active.
+prep_active_from:
                 ld      a, b
                 or      a
                 jr      z, pan_yes              ; zero frames -> vacuously active
-                ld      hl, IF_STACK
 pan_loop:
                 ld      a, (hl)                 ; active byte
                 or      a
@@ -1435,6 +1504,16 @@ pmh_add_param:
                 ld      a, b
                 or      c
                 jr      z, pap_done              ; empty -> skip
+                ; STRPOOL overflow guard: STRPOOL_TOP + len > MACRO_STRPOOL_END.
+                push    hl
+                ld      hl, (STRPOOL_TOP)
+                add     hl, bc                   ; end of copy
+                ex      de, hl                   ; DE = end of copy
+                ld      hl, MACRO_STRPOOL_END
+                or      a
+                sbc     hl, de                   ; END - end; <0 -> overflow
+                jp      c, prep_fail
+                pop     hl
                 ld      de, (STRPOOL_TOP)
                 ld      (PAP_OFF), de
                 ld      (PAP_LEN), bc
@@ -1448,6 +1527,15 @@ pap_copy:
                 or      c
                 jr      nz, pap_copy
                 ld      (STRPOOL_TOP), de
+                ; PARAM_IDX overflow guard: PARAM_TOP + 4 > PARAM_IDX_END.
+                ld      hl, (PARAM_TOP)
+                ld      de, 4
+                add     hl, de
+                ex      de, hl                   ; DE = PARAM_TOP + 4
+                ld      hl, PARAM_IDX_END
+                or      a
+                sbc     hl, de                   ; END - (top+4); <0 -> overflow
+                jp      c, prep_fail
                 ; append (PAP_OFF, PAP_LEN) to PARAM_IDX
                 ld      hl, (PARAM_TOP)
                 ld      de, (PAP_OFF)
@@ -1512,6 +1600,15 @@ pcmb_body:
                 ld      a, (MAC_ACTIVE)
                 or      a
                 jr      z, pcmb_loop             ; inactive: consume without recording
+                ; BODY_IDX overflow guard: BODY_TOP + 4 > BODY_IDX_END.
+                ld      hl, (BODY_TOP)
+                ld      de, 4
+                add     hl, de
+                ex      de, hl                   ; DE = BODY_TOP + 4
+                ld      hl, BODY_IDX_END
+                or      a
+                sbc     hl, de                   ; END - (top+4); <0 -> overflow
+                jp      c, prep_fail
                 ld      hl, (BODY_TOP)
                 ld      de, (LINE_PTR)
                 ld      (hl), e
@@ -1539,7 +1636,7 @@ pcmb_done:
 prep_macro_store:
                 ld      a, (MACRO_COUNT)
                 cp      MACRO_MAX
-                ret     nc                       ; table full: drop (defensive)
+                jp      nc, prep_fail            ; macro table overflow -> error
                 ; record ptr = MACRO_TAB + count*12
                 ld      l, a
                 ld      h, 0
@@ -1587,6 +1684,755 @@ prep_macro_store:
                 ret
 
 ; ===========================================================================
+; Macro invocation — tryExpandMacroInvocation / splitMacroArgs / buildSubstituter.
+;
+; A default-case line whose first word (splitIndent → leading isIdentCont run)
+; names a known macro is expanded: split the args (paren/string-aware), arity-
+; check, guard against a recursion cycle, substitute \param in every body line,
+; and RE-preprocess the substituted text via a reentrant prep_process_lines.
+; Mid-stream `# <line> "<file>"` directives are emitted at the macro-definition
+; boundary (defline+1) and after the call (callline+1), byte-identical to host
+; emitLineDirective.  There is one file in this brick (PREP_PATH) — .include is
+; Brick 3 — so defPos.file and pos.file are both PREP_PATH.
+; ===========================================================================
+
+; prep_clear_expanding — zero the per-macro expanding flags.
+prep_clear_expanding:
+                ld      hl, MACRO_EXPANDING
+                ld      b, MACRO_MAX
+pce_loop:
+                ld      (hl), 0
+                inc     hl
+                djnz    pce_loop
+                ret
+
+; prep_emit_line_directive — emit `# <HL> "<PREP_PATH>"\n` (emitLineDirective).
+;   In: HL = line number (u16).
+prep_emit_line_directive:
+                push    hl
+                ld      a, CH_HASH
+                call    prep_emit_byte
+                ld      a, CH_SPACE
+                call    prep_emit_byte
+                pop     hl
+                call    prep_emit_u16_dec       ; decimal line number
+                ld      a, CH_SPACE
+                call    prep_emit_byte
+                ld      a, CH_QUOTE
+                call    prep_emit_byte
+                call    prep_emit_path          ; PREP_PATH bytes up to NUL
+                ld      a, CH_QUOTE
+                call    prep_emit_byte
+                ld      a, CH_NL
+                call    prep_emit_byte
+                ret
+
+; prep_emit_u16_dec — emit HL as decimal ASCII (no leading zeros; 0 -> "0").
+prep_emit_u16_dec:
+                xor     a
+                ld      (PED_STARTED), a
+                ld      de, 10000
+                call    ped_place
+                ld      de, 1000
+                call    ped_place
+                ld      de, 100
+                call    ped_place
+                ld      de, 10
+                call    ped_place
+                ; units digit: always emitted
+                ld      a, l
+                add     a, &30
+                call    prep_emit_byte
+                ret
+
+; ped_place — emit the (HL / DE) digit unless it is a leading zero; leave the
+; remainder in HL.  DE = the place value (10000/1000/100/10). B/DE preserved by
+; prep_emit_byte, so HL flows to the next place.
+ped_place:
+                ld      b, &30                  ; '0' + count
+ped_sub:
+                or      a
+                sbc     hl, de
+                jr      c, ped_sub_done
+                inc     b
+                jr      ped_sub
+ped_sub_done:
+                add     hl, de                  ; undo the final over-subtraction
+                ld      a, b
+                cp      &30
+                jr      nz, ped_emit            ; non-zero digit -> emit
+                ld      a, (PED_STARTED)
+                or      a
+                ret     z                       ; leading zero -> suppress
+                ld      a, &30
+                call    prep_emit_byte
+                ret
+ped_emit:
+                ld      a, 1
+                ld      (PED_STARTED), a
+                ld      a, b
+                call    prep_emit_byte
+                ret
+
+; prep_macro_recptr — HL = MACRO_TAB + A*12 (record ptr for record index A).
+prep_macro_recptr:
+                ld      l, a
+                ld      h, 0
+                add     hl, hl                  ; *2
+                add     hl, hl                  ; *4
+                ld      d, h
+                ld      e, l                    ; DE = *4
+                add     hl, hl                  ; *8
+                add     hl, de                  ; *12
+                ld      de, MACRO_TAB
+                add     hl, de
+                ret
+
+; prep_macro_find — find the NEWEST MACRO_TAB record whose name equals
+; TE_NAME_PTR/TE_NAME_LEN (last-wins: a redefined macro shadows the older, as
+; Go's map overwrite does).  Out: CF=1 with TE_REC/TE_K set if found, else CF=0.
+prep_macro_find:
+                ld      a, (MACRO_COUNT)
+                or      a
+                jr      z, pmf_no
+                ld      (TE_FIND_I), a          ; scan index = count, pre-decremented
+pmf_loop:
+                ld      a, (TE_FIND_I)
+                or      a
+                jr      z, pmf_no               ; scanned every record
+                dec     a
+                ld      (TE_FIND_I), a          ; current record index
+                call    prep_macro_recptr       ; HL -> record
+                ld      (TE_REC), hl            ; tentative
+                ld      e, (hl)
+                inc     hl
+                ld      d, (hl)
+                inc     hl                      ; DE = name_ptr
+                ld      a, (hl)                 ; A = name_len (1 byte)
+                ld      b, a
+                ld      hl, (TE_NAME_LEN)
+                ld      a, h
+                or      a
+                jr      nz, pmf_loop            ; wanted len >= 256 -> mismatch
+                ld      a, l
+                cp      b
+                jr      nz, pmf_loop            ; length mismatch
+                or      a
+                jr      z, pmf_hit              ; both zero-length (name is nonempty, defensive)
+                ld      hl, (TE_NAME_PTR)
+pmf_cmp:
+                ld      a, (de)
+                cp      (hl)
+                jr      nz, pmf_loop
+                inc     de
+                inc     hl
+                dec     b
+                jr      nz, pmf_cmp
+pmf_hit:
+                ld      a, (TE_FIND_I)
+                ld      (TE_K), a
+                scf
+                ret
+pmf_no:
+                or      a
+                ret
+
+; prep_try_expand — tryExpandMacroInvocation on the current line.
+;   Reads TRIM_PTR/TRIM_LEN (splitIndent result), LINE_*, CUR_LINE.
+;   Out: A=1 if the line was consumed as a macro call, A=0 if not a macro.
+;   Fatal errors (arity / recursion cycle / pool overflow) longjmp via prep_fail.
+prep_try_expand:
+                ; rest == "" -> not a macro.
+                ld      bc, (TRIM_LEN)
+                ld      a, b
+                or      c
+                jp      z, pte_no
+                ; name = leading isIdentCont run of rest.
+                ld      hl, (TRIM_PTR)
+                ld      (TE_NAME_PTR), hl
+                ld      bc, (TRIM_LEN)
+                call    prep_scan_ident         ; BC = name length
+                ld      a, b
+                or      c
+                jp      z, pte_no               ; first word is empty
+                ld      (TE_NAME_LEN), bc
+                ; look up macro (last-wins).
+                call    prep_macro_find
+                jp      nc, pte_no
+                ; extract record fields: nparams(+3), params_ptr(+4), nbody(+6),
+                ; body_ptr(+8), defline(+10).
+                ld      hl, (TE_REC)
+                ld      de, 3
+                add     hl, de
+                ld      a, (hl)
+                ld      (TE_NPARAMS), a
+                inc     hl                      ; -> params_ptr
+                ld      e, (hl)
+                inc     hl
+                ld      d, (hl)
+                inc     hl
+                ld      (TE_PARAMSPTR), de
+                ld      e, (hl)
+                inc     hl
+                ld      d, (hl)
+                inc     hl
+                ld      (TE_NBODY), de
+                ld      e, (hl)
+                inc     hl
+                ld      d, (hl)
+                inc     hl
+                ld      (TE_BODYPTR), de
+                ld      e, (hl)
+                inc     hl
+                ld      d, (hl)
+                ld      (TE_DEFLINE), de
+                ; argText = stripTrailingComment(TrimSpace(rest[namelen:])).
+                ld      hl, (TRIM_PTR)
+                ld      bc, (TE_NAME_LEN)
+                add     hl, bc                  ; rest + namelen
+                ex      de, hl                  ; DE = ptr
+                ld      hl, (TRIM_LEN)
+                or      a
+                sbc     hl, bc                  ; TRIM_LEN - namelen
+                ld      b, h
+                ld      c, l
+                ex      de, hl                  ; HL = ptr, BC = len
+                call    prep_trim_space
+                call    prep_strip_comment      ; HL=STRIP_BUF, BC=argText len
+                call    prep_split_args         ; -> ARG_IDX / ARG_COUNT
+                ; arity: ARG_COUNT == nparams?
+                ld      a, (ARG_COUNT)
+                ld      b, a
+                ld      a, (TE_NPARAMS)
+                cp      b
+                jp      nz, prep_fail           ; arg-count mismatch
+                ; recursion-cycle guard: MACRO_EXPANDING[TE_K] set?
+                ld      a, (TE_K)
+                ld      l, a
+                ld      h, 0
+                ld      de, MACRO_EXPANDING
+                add     hl, de
+                ld      a, (hl)
+                or      a
+                jp      nz, prep_fail           ; recursive expansion (cycle)
+                ld      (hl), 1                 ; mark expanding
+                ; emit `# <defline+1> "<path>"`.
+                ld      hl, (TE_DEFLINE)
+                inc     hl
+                call    prep_emit_line_directive
+                ; build the substituted body into the arena (bump stack).
+                ld      hl, (SUBST_TOP)
+                ld      (TE_WIN_START), hl      ; window start = arena base
+                call    prep_build_subst_body   ; advances SUBST_TOP to window end
+                ; --- save caller context, then set up the recursion window ---
+                ld      hl, (SRC_PTR)
+                push    hl
+                ld      hl, (SRC_END)
+                push    hl
+                ld      hl, (CUR_LINE)          ; call-site line
+                push    hl
+                ld      a, (IF_BASE)
+                ld      h, 0
+                ld      l, a
+                push    hl
+                ld      hl, (TE_WIN_START)      ; arena base (freed on return)
+                push    hl
+                ld      a, (TE_K)
+                ld      h, 0
+                ld      l, a
+                push    hl
+                ; new window = [TE_WIN_START, SUBST_TOP); CUR_LINE = defline+1.
+                ld      hl, (TE_WIN_START)
+                ld      (SRC_PTR), hl
+                ld      hl, (SUBST_TOP)
+                ld      (SRC_END), hl
+                ld      hl, (TE_DEFLINE)
+                inc     hl
+                ld      (CUR_LINE), hl
+                ; fresh frame stack based above the caller's frames.
+                ld      a, (IF_DEPTH)
+                ld      (IF_BASE), a
+                ld      b, 1                    ; active = 1
+                ld      c, 0                    ; taken = 0
+                call    prep_push_frame
+                ; re-preprocess the substituted body.
+                call    prep_process_lines
+                ; --- restore caller context ---
+                ld      a, (IF_BASE)
+                ld      (IF_DEPTH), a           ; pop the recursion's frames
+                pop     hl                      ; k
+                ld      a, l
+                ld      l, a
+                ld      h, 0
+                ld      de, MACRO_EXPANDING
+                add     hl, de
+                ld      (hl), 0                 ; unmark expanding
+                pop     hl                      ; arena base
+                ld      (SUBST_TOP), hl         ; free the arena region
+                pop     hl                      ; IF_BASE
+                ld      a, l
+                ld      (IF_BASE), a
+                pop     hl                      ; call-site line
+                ld      (CUR_LINE), hl
+                pop     hl                      ; SRC_END
+                ld      (SRC_END), hl
+                pop     hl                      ; SRC_PTR
+                ld      (SRC_PTR), hl
+                ; emit `# <callline+1> "<path>"`.
+                ld      hl, (CUR_LINE)
+                inc     hl
+                call    prep_emit_line_directive
+                ld      a, 1                    ; consumed
+                ret
+pte_no:
+                xor     a                       ; not a macro invocation
+                ret
+
+; ===========================================================================
+; prep_split_args — splitMacroArgs over the argText in STRIP_BUF.
+;   In:  HL=STRIP_BUF, BC=argText length.
+;   Out: ARG_IDX filled with {ptr:2,len:2} spans; ARG_COUNT set.  An empty
+;        argText yields zero args (matching Go's `if s=="" { return nil }`).
+; ===========================================================================
+prep_split_args:
+                ld      (SA_BASE), hl
+                ld      (SA_LEN), bc
+                xor     a
+                ld      (ARG_COUNT), a
+                ld      hl, ARG_IDX
+                ld      (ARG_TOP), hl
+                ld      a, b
+                or      c
+                ret     z                       ; empty -> 0 args
+                ld      hl, 0
+                ld      (SA_I), hl
+                ld      (SA_START), hl
+                xor     a
+                ld      (SA_DEPTH), a
+                ld      (SA_INSTR), a
+sa_loop:
+                ld      hl, (SA_I)
+                ld      bc, (SA_LEN)
+                or      a
+                sbc     hl, bc
+                jr      nc, sa_end              ; i >= len
+                call    sa_getc                 ; A = base[i]
+                cp      CH_QUOTE
+                jr      nz, sa_notq
+                ; quote: toggle inStr unless prev byte is '\' (escaped quote).
+                ld      hl, (SA_I)
+                ld      a, h
+                or      l
+                jr      z, sa_toggle            ; i==0 -> toggle
+                call    sa_getprev              ; A = base[i-1]
+                cp      CH_BSLASH
+                jr      z, sa_adv               ; escaped quote -> no toggle
+sa_toggle:
+                ld      a, (SA_INSTR)
+                xor     1
+                ld      (SA_INSTR), a
+                jr      sa_adv
+sa_notq:
+                ld      a, (SA_INSTR)
+                or      a
+                jr      nz, sa_adv              ; inside string -> skip specials
+                call    sa_getc
+                cp      &28                     ; '('
+                jr      nz, sa_notopen
+                ld      a, (SA_DEPTH)
+                inc     a
+                ld      (SA_DEPTH), a
+                jr      sa_adv
+sa_notopen:
+                cp      &29                     ; ')'
+                jr      nz, sa_notclose
+                ld      a, (SA_DEPTH)
+                or      a
+                jr      z, sa_adv               ; unbalanced ')' -> ignore (Go: depth>0)
+                dec     a
+                ld      (SA_DEPTH), a
+                jr      sa_adv
+sa_notclose:
+                cp      CH_COMMA
+                jr      nz, sa_adv
+                ld      a, (SA_DEPTH)
+                or      a
+                jr      nz, sa_adv              ; comma inside parens -> not a separator
+                ; separator at depth 0: emit arg [SA_START, SA_I).
+                call    sa_emit_arg
+                ld      hl, (SA_I)
+                inc     hl
+                ld      (SA_START), hl
+sa_adv:
+                ld      hl, (SA_I)
+                inc     hl
+                ld      (SA_I), hl
+                jr      sa_loop
+sa_end:
+                ; final arg [SA_START, SA_LEN); at loop exit SA_I == SA_LEN.
+                call    sa_emit_arg
+                ret
+
+; sa_getc — A = SA_BASE[SA_I].
+sa_getc:
+                ld      hl, (SA_BASE)
+                ld      bc, (SA_I)
+                add     hl, bc
+                ld      a, (hl)
+                ret
+
+; sa_getprev — A = SA_BASE[SA_I - 1].
+sa_getprev:
+                ld      hl, (SA_BASE)
+                ld      bc, (SA_I)
+                add     hl, bc
+                dec     hl
+                ld      a, (hl)
+                ret
+
+; sa_emit_arg — append TrimSpace(SA_BASE[SA_START..SA_I)) to ARG_IDX.
+sa_emit_arg:
+                ld      hl, (SA_BASE)
+                ld      bc, (SA_START)
+                add     hl, bc                  ; HL = segment start ptr
+                push    hl
+                ld      hl, (SA_I)
+                ld      bc, (SA_START)
+                or      a
+                sbc     hl, bc                  ; HL = segment length
+                ld      b, h
+                ld      c, l
+                pop     hl                      ; HL = segment start ptr
+                call    prep_trim_space         ; HL/BC = trimmed span
+                ; overflow guard: ARG_COUNT < ARG_MAX.
+                ld      a, (ARG_COUNT)
+                cp      ARG_MAX
+                jp      nc, prep_fail           ; too many args -> error
+                ld      de, (ARG_TOP)
+                ld      a, l
+                ld      (de), a
+                inc     de
+                ld      a, h
+                ld      (de), a
+                inc     de
+                ld      a, c
+                ld      (de), a
+                inc     de
+                ld      a, b
+                ld      (de), a
+                inc     de
+                ld      (ARG_TOP), de
+                ld      a, (ARG_COUNT)
+                inc     a
+                ld      (ARG_COUNT), a
+                ret
+
+; ===========================================================================
+; prep_build_subst_body — substitute \param in each body line and write the
+; result (each line + '\n') into the substitution arena.  Reads TE_BODYPTR /
+; TE_NBODY (spans into PREP_SRC) plus the params/args for the substituter.
+; ===========================================================================
+prep_build_subst_body:
+                ld      hl, (TE_NBODY)
+                ld      (BSB_REMAIN), hl
+                ld      hl, (TE_BODYPTR)
+                ld      (BSB_BODYP), hl
+bsb_loop:
+                ld      hl, (BSB_REMAIN)
+                ld      a, h
+                or      l
+                ret     z                       ; all body lines done
+                ; read body-line span {ptr:2, len:2}.
+                ld      hl, (BSB_BODYP)
+                ld      e, (hl)
+                inc     hl
+                ld      d, (hl)
+                inc     hl
+                ld      (BSB_LPTR), de
+                ld      e, (hl)
+                inc     hl
+                ld      d, (hl)
+                inc     hl
+                ld      (BSB_LLEN), de
+                ld      (BSB_BODYP), hl
+                call    prep_substitute_line    ; emit substituted line to arena
+                ld      a, CH_NL
+                call    prep_subst_emit         ; line terminator
+                ld      hl, (BSB_REMAIN)
+                dec     hl
+                ld      (BSB_REMAIN), hl
+                jr      bsb_loop
+
+; ===========================================================================
+; prep_substitute_line — buildSubstituter applied to BSB_LPTR/BSB_LLEN, writing
+; to the arena.  \\ is a literal backslash pair; \param (longest match, followed
+; by a non-isIdentCont byte or EOL) is replaced by its argument, inside idents
+; and strings alike; an unrecognised \x keeps the backslash and rescans from x.
+; ===========================================================================
+prep_substitute_line:
+                ld      hl, 0
+                ld      (SL_I), hl
+sl_loop:
+                ld      hl, (SL_I)
+                ld      bc, (BSB_LLEN)
+                or      a
+                sbc     hl, bc
+                ret     nc                      ; i >= len -> done
+                call    sl_getc                 ; A = line[i]
+                cp      CH_BSLASH
+                jr      nz, sl_plain
+                ; backslash: need i+1 < len, else emit '\' literally.
+                ld      hl, (SL_I)
+                inc     hl
+                ld      bc, (BSB_LLEN)
+                or      a
+                sbc     hl, bc
+                jr      nc, sl_backslash_lit
+                call    sl_getnext              ; A = line[i+1]
+                cp      CH_BSLASH
+                jr      nz, sl_try_param
+                ; "\\": emit both, advance 2.
+                ld      a, CH_BSLASH
+                call    prep_subst_emit
+                ld      a, CH_BSLASH
+                call    prep_subst_emit
+                ld      hl, (SL_I)
+                inc     hl
+                inc     hl
+                ld      (SL_I), hl
+                jr      sl_loop
+sl_try_param:
+                call    sl_match_param          ; CF=1 -> SL_MATCH_J/SL_MATCH_LEN
+                jr      nc, sl_backslash_lit
+                call    sl_emit_arg_j           ; emit arg[SL_MATCH_J]
+                ld      hl, (SL_I)
+                inc     hl                      ; skip '\'
+                ld      bc, (SL_MATCH_LEN)
+                add     hl, bc                  ; skip the param name
+                ld      (SL_I), hl
+                jr      sl_loop
+sl_backslash_lit:
+                ld      a, CH_BSLASH
+                call    prep_subst_emit
+                ld      hl, (SL_I)
+                inc     hl
+                ld      (SL_I), hl
+                jr      sl_loop
+sl_plain:
+                call    sl_getc
+                call    prep_subst_emit
+                ld      hl, (SL_I)
+                inc     hl
+                ld      (SL_I), hl
+                jr      sl_loop
+
+; sl_getc — A = BSB_LPTR[SL_I].
+sl_getc:
+                ld      hl, (BSB_LPTR)
+                ld      bc, (SL_I)
+                add     hl, bc
+                ld      a, (hl)
+                ret
+
+; sl_getnext — A = BSB_LPTR[SL_I + 1].
+sl_getnext:
+                ld      hl, (BSB_LPTR)
+                ld      bc, (SL_I)
+                add     hl, bc
+                inc     hl
+                ld      a, (hl)
+                ret
+
+; sl_match_param — does a \param match at line[SL_I]?  Scans all params, keeping
+; the LONGEST whose name equals line[i+1 .. i+1+plen) and whose terminator
+; (line[i+1+plen] or EOL) is a non-isIdentCont byte.  (Given the terminator
+; check, at most one param can match at a position; longest-first is belt-and-
+; braces for the \address-vs-\addr case.)
+;   Out: CF=1 with SL_MATCH_J (index) + SL_MATCH_LEN (plen) if matched, else CF=0.
+sl_match_param:
+                ld      hl, 0
+                ld      (SL_BEST_LEN), hl       ; best plen = 0 (none yet)
+                ld      a, (TE_NPARAMS)
+                or      a
+                jr      z, smp_none
+                ld      (SMP_NREM), a
+                ld      hl, (TE_PARAMSPTR)
+                ld      (SMP_PP), hl
+                xor     a
+                ld      (SMP_J), a
+smp_loop:
+                ld      a, (SMP_NREM)
+                or      a
+                jr      z, smp_done
+                ; read param span {ptr:2, len:2}.
+                ld      hl, (SMP_PP)
+                ld      e, (hl)
+                inc     hl
+                ld      d, (hl)
+                inc     hl
+                ld      (SMP_PPTR), de
+                ld      e, (hl)
+                inc     hl
+                ld      d, (hl)
+                inc     hl
+                ld      (SMP_PLEN), de
+                ld      (SMP_PP), hl
+                call    smp_check               ; CF=1 if param matches here
+                jr      nc, smp_next
+                ; matched: keep it if plen > best.
+                ld      hl, (SMP_PLEN)
+                ld      de, (SL_BEST_LEN)
+                or      a
+                sbc     hl, de                  ; plen - best
+                jr      c, smp_next             ; plen < best
+                jr      z, smp_next             ; plen == best -> keep earlier
+                ld      hl, (SMP_PLEN)
+                ld      (SL_BEST_LEN), hl
+                ld      a, (SMP_J)
+                ld      (SL_MATCH_J), a
+smp_next:
+                ld      a, (SMP_J)
+                inc     a
+                ld      (SMP_J), a
+                ld      a, (SMP_NREM)
+                dec     a
+                ld      (SMP_NREM), a
+                jr      smp_loop
+smp_done:
+                ld      hl, (SL_BEST_LEN)
+                ld      a, h
+                or      l
+                jr      z, smp_none
+                ld      (SL_MATCH_LEN), hl
+                scf
+                ret
+smp_none:
+                or      a
+                ret
+
+; smp_check — CF=1 iff param (SMP_PPTR, SMP_PLEN) equals line[i+1 .. i+1+plen)
+; AND the following byte (or EOL) is a non-isIdentCont terminator.
+smp_check:
+                ld      hl, (SL_I)
+                inc     hl                      ; i+1
+                ld      bc, (SMP_PLEN)
+                add     hl, bc                  ; end = i+1+plen
+                ld      (SMP_END), hl
+                ld      de, (BSB_LLEN)
+                or      a
+                sbc     hl, de                  ; end - len
+                jr      z, smp_chk_eol          ; end == len -> EOL terminator
+                jr      nc, smp_no              ; end > len -> too long
+                ; end < len: compare bytes, then check the terminator byte.
+                call    smp_cmpbytes
+                jr      nc, smp_no
+                ld      hl, (BSB_LPTR)
+                ld      bc, (SMP_END)
+                add     hl, bc
+                ld      a, (hl)                 ; line[end]
+                call    prep_is_ident_cont
+                jr      c, smp_no               ; ident-cont -> not a terminator
+                scf
+                ret
+smp_chk_eol:
+                call    smp_cmpbytes            ; CF from the byte compare
+                ret
+smp_no:
+                or      a
+                ret
+
+; smp_cmpbytes — CF=1 iff line[SL_I+1 ..] matches param (SMP_PPTR, SMP_PLEN).
+smp_cmpbytes:
+                ld      bc, (SMP_PLEN)
+                ld      a, b
+                or      c
+                jr      z, smp_cb_eq            ; zero-length param (defensive) -> equal
+                ld      hl, (BSB_LPTR)
+                ld      de, (SL_I)
+                add     hl, de
+                inc     hl                      ; &line[i+1]
+                ld      de, (SMP_PPTR)          ; &param[0]
+smp_cb_loop:
+                ld      a, (de)
+                cp      (hl)
+                jr      nz, smp_cb_ne
+                inc     hl
+                inc     de
+                dec     bc
+                ld      a, b
+                or      c
+                jr      nz, smp_cb_loop
+smp_cb_eq:
+                scf
+                ret
+smp_cb_ne:
+                or      a
+                ret
+
+; sl_emit_arg_j — emit arg[SL_MATCH_J] (span in ARG_IDX -> STRIP_BUF) to arena.
+sl_emit_arg_j:
+                ld      a, (SL_MATCH_J)
+                ld      l, a
+                ld      h, 0
+                add     hl, hl
+                add     hl, hl                  ; *4
+                ld      de, ARG_IDX
+                add     hl, de
+                ld      e, (hl)
+                inc     hl
+                ld      d, (hl)
+                inc     hl                      ; DE = arg ptr
+                ld      c, (hl)
+                inc     hl
+                ld      b, (hl)                 ; BC = arg len
+                ld      a, b
+                or      c
+                ret     z                       ; empty arg
+                ld      (SL_AE_PTR), de
+sl_ae_loop:
+                ld      de, (SL_AE_PTR)
+                ld      a, (de)
+                push    bc
+                call    prep_subst_emit
+                pop     bc
+                ld      hl, (SL_AE_PTR)
+                inc     hl
+                ld      (SL_AE_PTR), hl
+                dec     bc
+                ld      a, b
+                or      c
+                jr      nz, sl_ae_loop
+                ret
+
+; prep_subst_emit — write A to the substitution arena at SUBST_TOP (bounds-
+; checked), SUBST_TOP++.  Preserves BC/DE/HL.
+prep_subst_emit:
+                push    hl
+                push    de
+                push    bc
+                ld      hl, (SUBST_TOP)
+                ld      de, SUBST_ARENA_END
+                push    af
+                or      a
+                sbc     hl, de
+                jr      nc, sse_over            ; SUBST_TOP >= arena end
+                pop     af
+                ld      hl, (SUBST_TOP)
+                ld      (hl), a
+                inc     hl
+                ld      (SUBST_TOP), hl
+                pop     bc
+                pop     de
+                pop     hl
+                ret
+sse_over:
+                pop     af
+                pop     bc
+                pop     de
+                pop     hl
+                jp      prep_fail
+
+; ===========================================================================
 ; Pattern strings (NUL-terminated).
 ; ===========================================================================
 pat_dot_if:       defm ".if"
@@ -1615,6 +2461,9 @@ LINE_LEN:         defs 2
 TRIM_PTR:         defs 2
 TRIM_LEN:         defs 2
 IF_DEPTH:         defs 1
+IF_BASE:          defs 1          ; bottom frame index of the current stack
+PREP_SP_SAVE:     defs 2          ; SP at prep_run entry (prep_fail longjmp target)
+PED_STARTED:      defs 1          ; prep_emit_u16_dec: leading-zero suppression
 
 SET_COUNT:        defs 1
 SET_NAMES_PTR:    defs 2
@@ -1653,22 +2502,77 @@ STRPOOL_TOP:      defs 2
 PARAM_TOP:        defs 2
 BODY_TOP:         defs 2
 
+; Macro-invocation staging (tryExpandMacroInvocation / splitMacroArgs /
+; buildSubstituter).  None is live across the expansion recursion — the values
+; the post-recursion tail needs (arena base, call-site line, expanding index)
+; ride the hardware stack, so nested expansions may reuse these freely.
+TE_NAME_PTR:      defs 2
+TE_NAME_LEN:      defs 2
+TE_REC:           defs 2          ; found MACRO_TAB record ptr
+TE_K:             defs 1          ; found record index (MACRO_EXPANDING slot)
+TE_FIND_I:        defs 1          ; prep_macro_find scan cursor
+TE_NPARAMS:       defs 1
+TE_PARAMSPTR:     defs 2
+TE_NBODY:         defs 2
+TE_BODYPTR:       defs 2
+TE_DEFLINE:       defs 2
+TE_WIN_START:     defs 2          ; substituted-body window base
+
+SA_BASE:          defs 2          ; splitMacroArgs cursor state
+SA_LEN:           defs 2
+SA_I:             defs 2
+SA_START:         defs 2
+SA_DEPTH:         defs 1
+SA_INSTR:         defs 1
+ARG_COUNT:        defs 1
+ARG_TOP:          defs 2
+
+BSB_REMAIN:       defs 2          ; prep_build_subst_body loop state
+BSB_BODYP:        defs 2
+BSB_LPTR:         defs 2
+BSB_LLEN:         defs 2
+
+SL_I:             defs 2          ; prep_substitute_line state
+SL_MATCH_J:       defs 1
+SL_MATCH_LEN:     defs 2
+SL_BEST_LEN:      defs 2
+SL_AE_PTR:        defs 2
+SMP_NREM:         defs 1          ; sl_match_param state
+SMP_J:            defs 1
+SMP_PP:           defs 2
+SMP_PPTR:         defs 2
+SMP_PLEN:         defs 2
+SMP_END:          defs 2
+
 PREP_ERR:         defs 1
 
 SET_TAB_MAX:      equ 64
 SET_TAB:          defs 4*64       ; {name_off:2, name_len:1, truthy:1}
 SET_NAMES:        defs 1024       ; name arena
+SET_NAMES_END:                    ; (overflow guard bound)
 IF_STACK:         defs 3*64       ; {active, taken, hadElse}
 STRIP_BUF:        defs 512        ; stripTrailingComment scratch (>= max line)
 
 ; Macro table + pools (see the "Macro definition" section header). Sized with
 ; margin over the real spectrum4 corpus (~33 macro defs, short params/bodies);
-; explicit overflow-to-error guards land with b2b's error plumbing.
+; each append is bounds-checked against its _END bound (jp prep_fail on overflow).
 MACRO_MAX:        equ 64
 MACRO_TAB:        defs 12*64      ; {name_ptr:2,name_len:1,nparams:1,params_ptr:2,nbody:2,body_ptr:2,defline:2}
+MACRO_EXPANDING:  defs 64         ; per-record recursion-cycle flag (== MACRO_MAX)
 PARAM_IDX:        defs 4*256      ; {ptr:2 (into MACRO_STRPOOL), len:2}
+PARAM_IDX_END:                    ; (overflow guard bound)
 BODY_IDX:         defs 4*1024     ; {ptr:2 (into PREP_SRC), len:2}
+BODY_IDX_END:                     ; (overflow guard bound)
 MACRO_STRPOOL:    defs 2048       ; copied param-name bytes
+MACRO_STRPOOL_END:                ; (overflow guard bound)
+
+; Macro-invocation buffers.
+ARG_MAX:          equ 32
+ARG_IDX:          defs 4*32       ; {ptr:2 (into STRIP_BUF), len:2} per call arg
+SUBST_CAP:        equ 4096
+SUBST_ARENA:      defs 4096       ; substituted-body bump stack (nested expansion)
+SUBST_ARENA_END:                  ; (overflow guard bound)
+SUBST_TOP:        defs 2          ; arena bump pointer
 
 PREP_PATH:        defs 128        ; caller writes a NUL-terminated path
 PREP_OUT_CAP:     equ 8192
