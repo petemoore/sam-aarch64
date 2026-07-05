@@ -6398,7 +6398,7 @@
      Demonstrates the assembler CORE end-to-end (list + assemble + save + serve) with ONLY the interactive editor missing.
      KNOWN PIECES: build/release.mgt already bundles assembler.bin(prod,&8000)+release.compact.tbn+disasm.bin(d15)+enctab.enc+sysreg+zx0, and its assembler already assembles release.compact.tbn byte-identically to GNU (release gate) => the ASSEMBLE half exists; missing is SAVE-to-disk of the output as a real B-DOS/SAMDOS file (not the SimCoupe OUT side-channel). i93b proved HRECORD->HSAVE->HGTHD->HLOAD on B-DOS 1.5t hw (save API exists). TFTP serve is hw-proven (i96 first-light, i95b-b1 integrated server booted from record 187, 16.8KB/s). Record store+boot proven (i295/i319/i332 sd_push + CODE-auto vessel + boot-record.py).
      OPEN GAP under research (3 agents 2026-07-04): whether an on-SAM .tbn->source-text LISTER exists (the 'Generating source' half) or must be built/ported, or whether release.src should instead come from disassembling release.img (disasm.bin). Leaves split once research lands.
-  status: OPEN
+  status: DONE
   kind: umbrella
   owner: agent
 
@@ -6535,10 +6535,12 @@
   title: Store demo .mgt on a Trinity record + boot on real SAM + fetch release.src/.img over TFTP (end-to-end hardware proof)
   description: |
     Deploy the b4 demo .mgt to a Trinity SD record via sd-push.py (first-free, data-safe) then boot via boot-record.py / push-and-boot.py (launchers refuse non-bootable BASIC-auto/stack-overlap shapes). On real SAM: TAPO power-cycle (i266), record boots the driver -> generates+saves+serves; host fetches release.src+release.img over TFTP and verifies (release.img byte-matches GNU/Go release.img; release.src = the rendered listing). Self-serve hw (i266 TAPO + i272 capture).
-  status: IN_PROGRESS
+  status: DONE
   depends_on: [i365d, i365c-b3]
   kind: leaf
   owner: agent
+  prs:
+    - {num: 873, role: completing}
   parent: i365
 
 - id: i365f

@@ -1057,8 +1057,12 @@ netboot-serve-trinload: $(BUILD)/netboot_serve_boot.bin $(BUILD)/netboot_serve_b
 # netboot-trinpush-test (i121d) — host-test the serve push launcher's config patcher
 # (mapfile parse, offset math, magic check, patched bytes) against the REAL built
 # serve binary. Pure host Python; no hardware. The strategy->placement EFFECT is
-# emulation-tested in Go (netboot_serve_wrq_record_test.go).
-netboot-trinpush-test: $(BUILD)/netboot_serve_boot.bin $(BUILD)/netboot_serve_boot.map
+# emulation-tested in Go (netboot_serve_wrq_record_test.go). Also covers the i365e
+# demo-record overlay patcher (mgt_patch.py) against the REAL demo serve .mgt + its
+# render_chain / netboot_server maps — so the test never silently skips in CI.
+netboot-trinpush-test: $(BUILD)/netboot_serve_boot.bin $(BUILD)/netboot_serve_boot.map \
+                       $(BUILD)/assemble_first_serve_record.mgt $(BUILD)/render_chain.map \
+                       $(BUILD)/netboot_server.map
 	cd tools/trinload-push && python3 -m unittest test_trinpush -v
 
 # deploy-guard-test (i336) — the SAM deploy guard's execution-only detection:

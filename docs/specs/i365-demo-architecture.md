@@ -31,8 +31,19 @@ loader stub must not leave SP at `&FFFE` (it collides with `rdb_load_tbn`'s stac
 FIX 2 (the free-slot MGT dir writer that preserves existing entries + the BDOS
 stamp, in `render_disk_sink.asm`) is a real shared-card data-safety fix. The
 on-screen RST&10 progress messages are deferred to hardware (`i368`, needs a real
-screen — RST&10 hangs at come-up under an ALHK record boot). Remaining: `i365e`
-(store + boot the real SAM + fetch both) and `i368` (the messages).
+screen — RST&10 hangs at come-up under an ALHK record boot).
+
+**`i365e` is DONE — hardware-proven 2026-07-05.** The demo `.mgt` was patched to
+its target record (see below), stored to record 199 (first-free, data-safe),
+booted on the real SAM, and both files fetched **byte-exact** over TFTP:
+`release.img` (21,752 B == GNU/Go) and `release.src` (417,374 B == `render.Emit`),
+plus the missing-name negative control. The one non-obvious hardware step is
+patching the record number into the `render`/`nbsrv` overlays before the push
+(`RDB_CFG_RECORD` / `NB_BOOT_RECORD`; no runtime self-discovery, a wrong value is a
+data-safety hazard) — `tools/trinload-push/patch-demo-record.py` + `mgt_patch.py`,
+mirroring what the emulation gate patches in memory. Procedure:
+`docs/notes/netboot-trinity-testing.md` §"The demo capstone". Remaining: `i368`
+(the on-screen messages).
 
 ## The two capability walls (why the demo is bigger than "wire it up")
 
