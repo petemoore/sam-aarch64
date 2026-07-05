@@ -124,6 +124,24 @@ prep_run:
                 ld      (SUBST_TOP), hl
                 call    prep_clear_expanding
 
+                ; Path arena; CURRENT_FILE = a persistent copy of PREP_PATH
+                ; (the top-level file). Include recursion tracks the active file
+                ; here so directives name the right file.
+                ld      hl, PATH_ARENA
+                ld      (PATH_TOP), hl
+                call    prep_intern_path_prep   ; copy PREP_PATH -> CURRENT_FILE
+
+                ; Reader vector: default to the memory-backed provider if the
+                ; caller left it unset (the SAM build points it at the real
+                ; UIFA+HGTHD+HLOAD reader before prep_run — no conditional asm).
+                ld      hl, (READER_VEC)
+                ld      a, h
+                or      l
+                jr      nz, prep_reader_set
+                ld      hl, prep_mem_reader
+                ld      (READER_VEC), hl
+prep_reader_set:
+
                 ; Frame stack: one active frame {active=1, taken=0, hadElse=0};
                 ; base = 0 (the top-level stack starts at IF_STACK[0]).
                 xor     a
@@ -137,7 +155,7 @@ prep_run:
                 inc     hl
                 ld      (hl), 0                 ; hadElse
 
-                ; Leading directive: # 1 "<path>"\n  (processFile).
+                ; Leading directive: # 1 "<current file>"\n  (processFile).
                 ld      hl, 1
                 call    prep_emit_line_directive
 
@@ -243,6 +261,9 @@ prep_default:
                 jp      z, prep_after_line      ; inactive: skip the line
 
                 call    prep_try_set            ; capture .set NAME, INT if valid
+                call    prep_try_include        ; A=1 if the line was an .include
+                or      a
+                jp      nz, prep_after_line     ; included: don't emit the .include line
                 call    prep_try_expand         ; A=1 if consumed as a macro call
                 or      a
                 jp      nz, prep_after_line     ; expanded: don't emit the call line
@@ -1338,19 +1359,6 @@ pel_nl:
                 call    prep_emit_byte
                 ret
 
-; prep_emit_path — emit PREP_PATH bytes up to the NUL terminator.
-prep_emit_path:
-                ld      hl, PREP_PATH
-pep_loop:
-                ld      a, (hl)
-                or      a
-                ret     z
-                push    hl
-                call    prep_emit_byte
-                pop     hl
-                inc     hl
-                jr      pep_loop
-
 ; ===========================================================================
 ; Macro definition — .macro/.endm (parseMacroHeader + collectMacroBody).
 ;
@@ -1706,9 +1714,20 @@ pce_loop:
                 djnz    pce_loop
                 ret
 
-; prep_emit_line_directive — emit `# <HL> "<PREP_PATH>"\n` (emitLineDirective).
+; prep_emit_line_directive — emit `# <HL> "<CURRENT_FILE>"\n` (emitLineDirective
+; for the currently-active file). CURRENT_FILE is PREP_PATH at top level and the
+; resolved include path inside an .include.
 ;   In: HL = line number (u16).
 prep_emit_line_directive:
+                ld      de, (CURRENT_FILE_PTR)
+                ld      bc, (CURRENT_FILE_LEN)
+                ; fall through to prep_emit_line_directive_for
+
+; prep_emit_line_directive_for — emit `# <HL> "<file>"\n` for an explicit file.
+;   In: HL = line number; DE = file ptr; BC = file length.
+prep_emit_line_directive_for:
+                ld      (ELD_FILE_PTR), de
+                ld      (ELD_FILE_LEN), bc
                 push    hl
                 ld      a, CH_HASH
                 call    prep_emit_byte
@@ -1720,11 +1739,32 @@ prep_emit_line_directive:
                 call    prep_emit_byte
                 ld      a, CH_QUOTE
                 call    prep_emit_byte
-                call    prep_emit_path          ; PREP_PATH bytes up to NUL
+                call    prep_emit_file          ; ELD_FILE_PTR bytes (ELD_FILE_LEN)
                 ld      a, CH_QUOTE
                 call    prep_emit_byte
                 ld      a, CH_NL
                 call    prep_emit_byte
+                ret
+
+; prep_emit_file — emit ELD_FILE_LEN bytes from ELD_FILE_PTR.
+prep_emit_file:
+                ld      bc, (ELD_FILE_LEN)
+                ld      a, b
+                or      c
+                ret     z
+                ld      hl, (ELD_FILE_PTR)
+pef_loop:
+                ld      a, (hl)
+                push    hl
+                push    bc
+                call    prep_emit_byte
+                pop     bc
+                pop     hl
+                inc     hl
+                dec     bc
+                ld      a, b
+                or      c
+                jr      nz, pef_loop
                 ret
 
 ; prep_emit_u16_dec — emit HL as decimal ASCII (no leading zeros; 0 -> "0").
@@ -2433,6 +2473,413 @@ sse_over:
                 jp      prep_fail
 
 ; ===========================================================================
+; .include — tryParseInclude / handleInclude / processFile recursion.
+;
+; File access is a pluggable reader vector (READER_VEC, defaulted to the
+; memory-backed prep_mem_reader at init; the SAM build points it at the real
+; UIFA+HGTHD+HLOAD reader before prep_run — no conditional assembly). handleInclude
+; builds candidate paths (dir of the including file first, then each -I dir) via a
+; restricted filepath.Join/Dir, calls the reader for each, and on the first hit
+; re-preprocesses the returned bytes as a new file: emit `# 1 "<resolved>"`, run a
+; reentrant prep_process_lines over the file with CURRENT_FILE=resolved and a fresh
+; frame stack, then restore the includer and emit `# <includeline+1> "<includer>"`.
+; ===========================================================================
+
+; prep_intern_path_prep — copy PREP_PATH (NUL-terminated) into PATH_ARENA and set
+; CURRENT_FILE to that persistent copy (the top-level file at prep_run init).
+prep_intern_path_prep:
+                ld      hl, PREP_PATH
+                ld      bc, 0
+pipp_len:
+                ld      a, (hl)
+                or      a
+                jr      z, pipp_gotlen
+                inc     hl
+                inc     bc
+                jr      pipp_len
+pipp_gotlen:
+                ld      (CURRENT_FILE_LEN), bc
+                ld      hl, PREP_PATH
+                call    prep_intern_path        ; DE = arena copy
+                ld      (CURRENT_FILE_PTR), de
+                ret
+
+; prep_intern_path — copy (HL=ptr, BC=len) into PATH_ARENA at PATH_TOP.
+;   Out: DE = the arena copy ptr.  Paths persist for the whole prep_run (macro
+;   def-file and CURRENT_FILE point into the arena), so nothing frees them.
+prep_intern_path:
+                ; overflow guard: PATH_TOP + len > PATH_ARENA_END -> error.
+                push    hl
+                push    bc
+                ld      hl, (PATH_TOP)
+                add     hl, bc
+                ex      de, hl                  ; DE = PATH_TOP + len
+                ld      hl, PATH_ARENA_END
+                or      a
+                sbc     hl, de
+                jp      c, prep_fail
+                pop     bc
+                pop     hl
+                ld      de, (PATH_TOP)
+                push    de                      ; save copy start
+                ld      a, b
+                or      c
+                jr      z, pin_copied
+pin_copy:
+                ld      a, (hl)
+                ld      (de), a
+                inc     hl
+                inc     de
+                dec     bc
+                ld      a, b
+                or      c
+                jr      nz, pin_copy
+pin_copied:
+                ld      (PATH_TOP), de
+                pop     de                      ; DE = copy start
+                ret
+
+; prep_try_include — tryParseInclude on the current line, and handle it.
+;   Reads TRIM_PTR/TRIM_LEN.  Out: A=1 if the line was an .include (consumed),
+;   A=0 otherwise.  A missing file / pool overflow longjmps via prep_fail.
+prep_try_include:
+                ld      de, pat_dot_include
+                call    prep_prefix
+                jr      nc, pti_no
+                jr      z, pti_no               ; exact ".include" (no path) -> not
+                cp      CH_SPACE
+                jr      z, pti_ok
+                cp      CH_TAB
+                jr      z, pti_ok
+                jr      pti_no                  ; ".includeX" -> not a directive
+pti_ok:
+                ; rest = TrimSpace(trimmed[8:]) then stripTrailingComment.
+                ld      hl, (TRIM_PTR)
+                ld      bc, (TRIM_LEN)
+                ld      de, 8                   ; len(".include")
+                add     hl, de
+                ld      a, c
+                sub     8
+                ld      c, a
+                ld      a, b
+                sbc     0
+                ld      b, a
+                call    prep_trim_space
+                call    prep_strip_comment      ; HL=STRIP_BUF, BC=len
+                ; need len >= 2, first byte '"', last byte '"'.
+                ld      a, b
+                or      a
+                jr      nz, pti_len_ok          ; len >= 256 -> certainly >= 2
+                ld      a, c
+                cp      2
+                jr      c, pti_no               ; len < 2
+pti_len_ok:
+                ld      hl, STRIP_BUF
+                ld      a, (hl)
+                cp      CH_QUOTE
+                jr      nz, pti_no
+                ld      hl, STRIP_BUF
+                add     hl, bc
+                dec     hl                      ; -> last byte
+                ld      a, (hl)
+                cp      CH_QUOTE
+                jr      nz, pti_no
+                ; path = STRIP_BUF[1 .. len-1); INC_PATH_LEN = len - 2.
+                ld      hl, STRIP_BUF
+                inc     hl
+                ld      (INC_PATH_PTR), hl
+                dec     bc
+                dec     bc
+                ld      (INC_PATH_LEN), bc
+                call    prep_do_include
+                ld      a, 1
+                ret
+pti_no:
+                xor     a
+                ret
+
+; prep_do_include — resolve INC_PATH, read it, and re-preprocess it as a new file.
+prep_do_include:
+                call    prep_resolve_include    ; CF=1 with resolved name + content
+                jp      nc, prep_fail           ; .include not found in search path
+                ; --- save the includer's context ---
+                ld      hl, (SRC_PTR)
+                push    hl
+                ld      hl, (SRC_END)
+                push    hl
+                ld      hl, (CUR_LINE)          ; the .include line number
+                push    hl
+                ld      hl, (CURRENT_FILE_PTR)
+                push    hl
+                ld      hl, (CURRENT_FILE_LEN)
+                push    hl
+                ld      a, (IF_BASE)
+                ld      h, 0
+                ld      l, a
+                push    hl
+                ; --- switch to the included file ---
+                ld      hl, CAND_BUF
+                ld      bc, (RESOLVED_LEN)
+                ld      (CURRENT_FILE_LEN), bc
+                call    prep_intern_path        ; DE = persistent resolved-name copy
+                ld      (CURRENT_FILE_PTR), de
+                ld      hl, (READ_CONTENT_PTR)
+                ld      (SRC_PTR), hl
+                ld      de, (READ_CONTENT_LEN)
+                add     hl, de
+                ld      (SRC_END), hl
+                ld      hl, 1
+                ld      (CUR_LINE), hl          ; processFile startLine = 1
+                ld      a, (IF_DEPTH)
+                ld      (IF_BASE), a
+                ld      b, 1
+                ld      c, 0
+                call    prep_push_frame         ; fresh active frame
+                ld      hl, 1
+                call    prep_emit_line_directive ; `# 1 "<resolved>"`
+                call    prep_process_lines
+                ; --- restore the includer ---
+                ld      a, (IF_BASE)
+                ld      (IF_DEPTH), a
+                pop     hl                      ; IF_BASE
+                ld      a, l
+                ld      (IF_BASE), a
+                pop     hl                      ; CURRENT_FILE_LEN
+                ld      (CURRENT_FILE_LEN), hl
+                pop     hl                      ; CURRENT_FILE_PTR
+                ld      (CURRENT_FILE_PTR), hl
+                pop     hl                      ; the .include line number
+                ld      (CUR_LINE), hl
+                pop     hl                      ; SRC_END
+                ld      (SRC_END), hl
+                pop     hl                      ; SRC_PTR
+                ld      (SRC_PTR), hl
+                ; `# <includeline+1> "<includer>"`
+                ld      hl, (CUR_LINE)
+                inc     hl
+                call    prep_emit_line_directive
+                ret
+
+; prep_resolve_include — try INC_PATH along the search path: candidate 0 =
+; join(dir(CURRENT_FILE), INC_PATH), then join(each -I dir, INC_PATH).
+;   Out: CF=1 with CAND_BUF/RESOLVED_LEN = resolved name and READ_CONTENT_* set
+;        (first hit); CF=0 if not found.
+prep_resolve_include:
+                call    prep_dir_of_current     ; DIR_PTR/DIR_LEN = dir(CURRENT_FILE)
+                call    prep_build_and_try
+                ret     c
+                ld      a, (PREP_NINCDIRS)
+                or      a
+                ret     z                       ; no -I dirs -> not found (CF=0)
+                ld      (RI_NREM), a
+                ld      hl, PREP_INCDIRS
+                ld      (RI_PTR), hl
+ri_loop:
+                ld      a, (RI_NREM)
+                or      a
+                jr      z, ri_no
+                ; -I entry: [len:1][bytes]
+                ld      hl, (RI_PTR)
+                ld      c, (hl)                 ; dir len
+                inc     hl
+                ld      (DIR_PTR), hl
+                ld      a, c
+                ld      (DIR_LEN), a
+                xor     a
+                ld      (DIR_LEN+1), a
+                ld      b, 0
+                add     hl, bc                  ; -> next entry
+                ld      (RI_PTR), hl
+                call    prep_build_and_try
+                ret     c
+                ld      a, (RI_NREM)
+                dec     a
+                ld      (RI_NREM), a
+                jr      ri_loop
+ri_no:
+                or      a
+                ret
+
+; prep_dir_of_current — DIR_PTR/DIR_LEN = filepath.Dir(CURRENT_FILE): the bytes
+; up to the last '/', or length 0 (meaning ".") if there is no '/'.
+prep_dir_of_current:
+                ld      hl, (CURRENT_FILE_PTR)
+                ld      (DIR_PTR), hl
+                ld      hl, 0
+                ld      (DIR_LEN), hl           ; default: no slash -> "."
+                ld      (DOFC_I), hl
+dofc_scan:
+                ld      hl, (DOFC_I)
+                ld      bc, (CURRENT_FILE_LEN)
+                or      a
+                sbc     hl, bc
+                jr      nc, dofc_done           ; i >= len
+                ld      hl, (CURRENT_FILE_PTR)
+                ld      bc, (DOFC_I)
+                add     hl, bc
+                ld      a, (hl)
+                cp      CH_SLASH
+                jr      nz, dofc_next
+                ld      hl, (DOFC_I)
+                ld      (DIR_LEN), hl           ; dirlen = index of this '/'
+dofc_next:
+                ld      hl, (DOFC_I)
+                inc     hl
+                ld      (DOFC_I), hl
+                jr      dofc_scan
+dofc_done:
+                ret
+
+; prep_build_and_try — build CAND_BUF = join(DIR, INC_PATH) and call the reader.
+;   Out: CF=1 if the reader found the file (READ_CONTENT_* set).
+prep_build_and_try:
+                call    prep_build_candidate    ; CAND_BUF / RESOLVED_LEN
+                ld      hl, CAND_BUF
+                ld      (REQ_NAME_PTR), hl
+                ld      hl, (RESOLVED_LEN)
+                ld      (REQ_NAME_LEN), hl
+                jp      prep_call_reader        ; tail-call: returns CF from reader
+
+; prep_call_reader — call the pluggable reader vector.
+prep_call_reader:
+                ld      hl, (READER_VEC)
+                jp      (hl)
+
+; prep_build_candidate — CAND_BUF = filepath.Join(DIR, INC_PATH), RESOLVED_LEN set.
+; join(".", p) == join("", p) == p; else DIR + "/" + p.
+prep_build_candidate:
+                ; overflow guard: DIR_LEN + 1 + INC_PATH_LEN > CAND_CAP -> error.
+                ld      hl, (DIR_LEN)
+                ld      bc, (INC_PATH_LEN)
+                add     hl, bc
+                ld      bc, 1
+                add     hl, bc
+                ld      bc, CAND_CAP
+                or      a
+                sbc     hl, bc                  ; (dirlen+1+plen) - CAND_CAP
+                jr      c, pbc_room             ; < CAP -> ok
+                jr      z, pbc_room             ; == CAP -> ok (no NUL needed)
+                jp      prep_fail
+pbc_room:
+                ; dir empty -> path only.
+                ld      hl, (DIR_LEN)
+                ld      a, h
+                or      l
+                jr      z, pbc_pathonly
+                ; dir == "." -> path only.
+                ld      a, h
+                or      a
+                jr      nz, pbc_withdir         ; len >= 256 -> with dir
+                ld      a, l
+                cp      1
+                jr      nz, pbc_withdir
+                ld      hl, (DIR_PTR)
+                ld      a, (hl)
+                cp      CH_DOT
+                jr      z, pbc_pathonly
+pbc_withdir:
+                ld      de, CAND_BUF
+                ld      hl, (DIR_PTR)
+                ld      bc, (DIR_LEN)
+                call    pbc_copy
+                ld      a, CH_SLASH
+                ld      (de), a
+                inc     de
+                ld      hl, (INC_PATH_PTR)
+                ld      bc, (INC_PATH_LEN)
+                call    pbc_copy
+                ex      de, hl                  ; HL = end ptr
+                ld      de, CAND_BUF
+                or      a
+                sbc     hl, de                  ; HL = resolved length
+                ld      (RESOLVED_LEN), hl
+                ret
+pbc_pathonly:
+                ld      de, CAND_BUF
+                ld      hl, (INC_PATH_PTR)
+                ld      bc, (INC_PATH_LEN)
+                ld      (RESOLVED_LEN), bc
+                call    pbc_copy
+                ret
+
+; pbc_copy — copy BC bytes from HL to DE; DE/HL advanced, BC=0 on return.
+pbc_copy:
+                ld      a, b
+                or      c
+                ret     z
+pbc_c_loop:
+                ld      a, (hl)
+                ld      (de), a
+                inc     hl
+                inc     de
+                dec     bc
+                ld      a, b
+                or      c
+                jr      nz, pbc_c_loop
+                ret
+
+; prep_mem_reader — the default reader vector: look REQ_NAME up in PREP_FILES,
+; a harness-written table of [name_len:1][name][content_len:2][content] entries
+; (PREP_NFILES of them).  Out: CF=1 with READ_CONTENT_PTR/LEN on a name match.
+prep_mem_reader:
+                ld      a, (PREP_NFILES)
+                or      a
+                jr      z, pmr_no
+                ld      b, a                    ; entries remaining
+                ld      hl, PREP_FILES
+pmr_loop:
+                ld      a, (hl)                 ; name_len
+                ld      (PMR_NAMELEN), a
+                inc     hl                      ; -> name bytes
+                ld      (PMR_NAMEPTR), hl
+                ld      e, a
+                ld      d, 0
+                add     hl, de                  ; -> content_len (lo)
+                ld      e, (hl)
+                inc     hl
+                ld      d, (hl)
+                inc     hl                      ; -> content bytes; DE = content_len
+                ld      (PMR_CONTENTLEN), de
+                ld      (PMR_CONTENTPTR), hl
+                add     hl, de                  ; -> next entry
+                push    hl                      ; save next-entry ptr
+                ; requested len must be < 256 and equal this entry's name_len.
+                ld      a, (REQ_NAME_LEN+1)
+                or      a
+                jr      nz, pmr_next
+                ld      a, (REQ_NAME_LEN)
+                ld      c, a
+                ld      a, (PMR_NAMELEN)
+                cp      c
+                jr      nz, pmr_next
+                or      a
+                jr      z, pmr_hit              ; both zero-length (defensive)
+                ld      hl, (PMR_NAMEPTR)
+                ld      de, (REQ_NAME_PTR)
+pmr_cmp:
+                ld      a, (de)
+                cp      (hl)
+                jr      nz, pmr_next
+                inc     hl
+                inc     de
+                dec     c
+                jr      nz, pmr_cmp
+pmr_hit:
+                pop     hl                      ; discard next-entry ptr
+                ld      de, (PMR_CONTENTPTR)
+                ld      (READ_CONTENT_PTR), de
+                ld      de, (PMR_CONTENTLEN)
+                ld      (READ_CONTENT_LEN), de
+                scf
+                ret
+pmr_next:
+                pop     hl                      ; HL = next entry ptr
+                djnz    pmr_loop
+pmr_no:
+                or      a
+                ret
+
+; ===========================================================================
 ; Pattern strings (NUL-terminated).
 ; ===========================================================================
 pat_dot_if:       defm ".if"
@@ -2446,6 +2893,8 @@ pat_dot_set:      defm ".set"
 pat_dot_macro:    defm ".macro"
                   defb 0
 pat_dot_endm:     defm ".endm"
+                  defb 0
+pat_dot_include:  defm ".include"
                   defb 0
 
 ; ===========================================================================
@@ -2544,37 +2993,82 @@ SMP_PPTR:         defs 2
 SMP_PLEN:         defs 2
 SMP_END:          defs 2
 
+; .include staging (tryParseInclude / handleInclude / the reader vector).
+CURRENT_FILE_PTR: defs 2          ; active file path (into PATH_ARENA)
+CURRENT_FILE_LEN: defs 2
+PATH_TOP:         defs 2          ; PATH_ARENA bump pointer
+ELD_FILE_PTR:     defs 2          ; prep_emit_line_directive_for: file to name
+ELD_FILE_LEN:     defs 2
+INC_PATH_PTR:     defs 2          ; the unquoted .include path (into STRIP_BUF)
+INC_PATH_LEN:     defs 2
+DIR_PTR:          defs 2          ; current candidate's directory
+DIR_LEN:          defs 2
+DOFC_I:           defs 2          ; prep_dir_of_current scan cursor
+RESOLVED_LEN:     defs 2          ; length of the candidate name in CAND_BUF
+REQ_NAME_PTR:     defs 2          ; reader-vector input: resolved name
+REQ_NAME_LEN:     defs 2
+READ_CONTENT_PTR: defs 2          ; reader-vector output: file bytes
+READ_CONTENT_LEN: defs 2
+RI_NREM:          defs 1          ; prep_resolve_include -I loop state
+RI_PTR:           defs 2
+PMR_NAMELEN:      defs 1          ; prep_mem_reader entry cursor
+PMR_NAMEPTR:      defs 2
+PMR_CONTENTLEN:   defs 2
+PMR_CONTENTPTR:   defs 2
+READER_VEC:       defs 2          ; pluggable file reader (0 => default at init)
+
 PREP_ERR:         defs 1
 
+; Pool sizes below are for the FLAT STANDALONE HARNESS only (org &8000 -> a
+; 32 KB window, 0x8000..0xFFFF, with the harness stack at 0x6FFE). The real
+; on-SAM deployment (b4) is paged with its own image, so these need only cover
+; the oracle fixtures, not the spectrum4 corpus. Every append is bounds-checked
+; against its _END bound (jp prep_fail on overflow), so an under-size is a loud
+; error, never silent corruption.
 SET_TAB_MAX:      equ 64
 SET_TAB:          defs 4*64       ; {name_off:2, name_len:1, truthy:1}
-SET_NAMES:        defs 1024       ; name arena
+SET_NAMES:        defs 512        ; name arena
 SET_NAMES_END:                    ; (overflow guard bound)
 IF_STACK:         defs 3*64       ; {active, taken, hadElse}
 STRIP_BUF:        defs 512        ; stripTrailingComment scratch (>= max line)
 
-; Macro table + pools (see the "Macro definition" section header). Sized with
-; margin over the real spectrum4 corpus (~33 macro defs, short params/bodies);
-; each append is bounds-checked against its _END bound (jp prep_fail on overflow).
+; Macro table + pools (see the "Macro definition" section header).
 MACRO_MAX:        equ 64
 MACRO_TAB:        defs 12*64      ; {name_ptr:2,name_len:1,nparams:1,params_ptr:2,nbody:2,body_ptr:2,defline:2}
 MACRO_EXPANDING:  defs 64         ; per-record recursion-cycle flag (== MACRO_MAX)
-PARAM_IDX:        defs 4*256      ; {ptr:2 (into MACRO_STRPOOL), len:2}
+PARAM_IDX:        defs 4*128      ; {ptr:2 (into MACRO_STRPOOL), len:2}
 PARAM_IDX_END:                    ; (overflow guard bound)
-BODY_IDX:         defs 4*1024     ; {ptr:2 (into PREP_SRC), len:2}
+BODY_IDX:         defs 4*256      ; {ptr:2 (into PREP_SRC/PREP_FILES), len:2}
 BODY_IDX_END:                     ; (overflow guard bound)
-MACRO_STRPOOL:    defs 2048       ; copied param-name bytes
+MACRO_STRPOOL:    defs 1024       ; copied param-name bytes
 MACRO_STRPOOL_END:                ; (overflow guard bound)
 
 ; Macro-invocation buffers.
 ARG_MAX:          equ 32
 ARG_IDX:          defs 4*32       ; {ptr:2 (into STRIP_BUF), len:2} per call arg
-SUBST_CAP:        equ 4096
-SUBST_ARENA:      defs 4096       ; substituted-body bump stack (nested expansion)
+SUBST_CAP:        equ 2048
+SUBST_ARENA:      defs 2048       ; substituted-body bump stack (nested expansion)
 SUBST_ARENA_END:                  ; (overflow guard bound)
 SUBST_TOP:        defs 2          ; arena bump pointer
+
+; .include buffers.
+PATH_ARENA:       defs 512        ; persistent file-path strings (CURRENT_FILE)
+PATH_ARENA_END:                   ; (overflow guard bound)
+CAND_CAP:         equ 256
+CAND_BUF:         defs 256        ; a resolved candidate path being tried
 
 PREP_PATH:        defs 128        ; caller writes a NUL-terminated path
 PREP_OUT_CAP:     equ 8192
 PREP_OUT:         defs 8192       ; expanded output
 PREP_SRC:         defs 4096       ; caller writes source; BC = length
+
+; Include-file provider input (memory-backed harness reader). PREP_FILES holds
+; PREP_NFILES entries, each [name_len:1][name][content_len:2][content]; the SAM
+; build points READER_VEC elsewhere and leaves these empty. PREP_INCDIRS holds
+; PREP_NINCDIRS entries, each [len:1][bytes] (the -I search path). Both are
+; harness input, kept last; PREP_FILES must end below &FFFF (a file's content
+; span is SRC_PTR..SRC_PTR+len, which must not wrap the address space).
+PREP_NFILES:      defs 1
+PREP_NINCDIRS:    defs 1
+PREP_INCDIRS:     defs 256
+PREP_FILES:       defs 4096
