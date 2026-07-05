@@ -1792,6 +1792,27 @@ check-hosttest-carveouts:
 check-trinity-authority:
 	bash tools/check-trinity-authority.sh
 
+# bdos15a-bytematch — reassemble the reconstructed B-DOS 1.5a source (pyz80) and
+# assert byte-identity with the freeware bdos15a.bin. This proves the pyz80
+# toolchain reproduces Edwin Blink's binary exactly (the i304a foundation:
+# de-risks the i304b splice that must byte-match the 1.5t binary). The oracle
+# reference/bdos/bdos15a.bin is the freeware B-DOS 1.5a CODE file (redistributable;
+# see reference/bdos/README.md); no private artifacts.
+.PHONY: bdos15a-bytematch
+bdos15a-bytematch:
+	@mkdir -p $(BUILD)
+	pyz80 --obj=$(BUILD)/bdos15a.reasm.bin --nozip reference/bdos/bdos15a.asm
+	cmp $(BUILD)/bdos15a.reasm.bin reference/bdos/bdos15a.bin
+	@echo "bdos15a-bytematch: reconstructed 1.5a source is byte-identical to the freeware binary."
+
+# bdos15a-regen — regenerate reference/bdos/bdos15a.asm from the freeware binary
+# (provenance/bootstrap; NOT a CI gate). Needs z80-unknown-elf-objdump + pyz80.
+# After i304b hand-edits the source to splice 1.5t, this is superseded.
+.PHONY: bdos15a-regen
+bdos15a-regen:
+	python3 reference/bdos/gen-bdos15a.py reference/bdos/bdos15a.bin reference/bdos/bdos15a.asm
+	$(MAKE) bdos15a-bytematch
+
 # check-artifacts-fresh — assert every existing make-managed build/ artifact
 # is up to date with its transitive prerequisites (the mechanised stale-mtime
 # check, i309).  Run before trusting a `go test` invoked outside make.
