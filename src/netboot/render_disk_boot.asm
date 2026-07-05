@@ -56,11 +56,20 @@
 DISASM_ENTRY:           equ     &8000
 DISASM_PAGE:            equ     31
 
-IN_PAGE:                equ     8
-IN_FIRST_LMPR:          equ     &20 | IN_PAGE           ; RAM0 | page 8 = &28
-
+    if defined(DEMO_CHAIN)
+; i365d-b2c: the B-DOS 1.5t DOS code is resident at DOSFLG (&5BC2) = page 29. The
+; IN reblock must NOT overwrite it — else the assemble-chain's B-DOS ops (which
+; page the DOS in via LMPR <- DOSFLG-1) dispatch into render garbage and wedge.
+; Shift the 23-page IN run to pages 4..26 and paged_call to 28, leaving page 29
+; (DOS), 30, and 31 (disasm) clear. b2a keeps 8..30 (it DI;HALTs, no B-DOS after).
+IN_PAGE:                equ     4                       ; IN run = pages 4..26
+PAGED_CALL_PAGE:        equ     28                      ; clear of the DOS page (29)
+    else
+IN_PAGE:                equ     8                       ; IN run = pages 8..30
 PAGED_CALL_PAGE:        equ     7
-LMPR_DECODE:            equ     &20 | (PAGED_CALL_PAGE - 1)      ; = &26
+    endif
+IN_FIRST_LMPR:          equ     &20 | IN_PAGE           ; RAM0 | IN_PAGE
+LMPR_DECODE:            equ     &20 | (PAGED_CALL_PAGE - 1)
 
 ; paged_call installation slots (section B; mirror tbn_render_driver.asm).
 TRAMPOLINE_DST:         equ     &7E00
@@ -87,6 +96,17 @@ PASS_PASS1:             equ     1
 RDB_IM2_TABLE:          equ     &F900          ; 257 bytes: &F900..&FA00 inclusive
 RDB_IM2_VEC:            equ     &F9            ; every table byte
 RDB_IM2_HANDLER:        equ     &F9F9          ; = RDB_IM2_VEC * &101 (ei ; reti)
+
+; --- i365d-b2c overlay-chain slots (section B, clear of B-DOS sysvars <=&5FFF and
+;     of the &7E00+ trampoline area render already owns). The chain-stub is copied
+;     here and run from OUTSIDE the &8000 window it HLOADs the next overlay into.
+OVL_STUB_DST:           equ     &7C00          ; the straight-line loader stub body
+OVL_STUB_SP:            equ     &7DF0          ; the stub's HLOAD scratch stack (grows down);
+                                               ; also the server overlay's come-up + serve stack
+                                               ; (section B; ~7 KB down to &6000, clear of the
+                                               ; B-DOS sysvars <=&5FFF the server's B-DOS walk uses)
+OVL_STUB_HMPR:          equ     &7DFC          ; 1-byte slot: the boot HMPR (exec window), saved
+                                               ; across the 2-page server HLOAD (above OVL_STUB_SP)
 
 ; STAGING_BUF is a LABEL placed after all code (see the end of the file), not
 ; the driver's fixed &E000 — the come-up/sink code occupies what would be the
@@ -204,6 +224,17 @@ IN_END_OFFSET:          defw    0
 ; ===========================================================================
 rdb_main:
                 di
+    if defined(DEMO_CHAIN)
+                ; Capture the pristine B-DOS boot LMPR (ROM0 in section A + the
+                ; B-DOS sysvar page in section B, as ALHK entered us) for the b2c
+                ; chain's B-DOS lookup. rdb_boot_lmpr (captured later in rdb_load_tbn)
+                ; only guarantees ROM0 in section A for the raw SD reads — its
+                ; section B is a data page, which HGTHD's sysvar access needs correct.
+                in      a, (250)
+                ld      (rdb_bdos_lmpr), a
+                in      a, (251)               ; the pristine boot HMPR (the &8000..&FFFF
+                ld      (rdb_boot_hmpr), a     ; exec window ALHK set) for the overlay chain
+    endif
                 ; No ROM screen work at come-up (CLSLOWER / RST &10) — under an ALHK
                 ; record boot that context is not yet safe (it hangs, unlike the
                 ; trinload-booted probe). b2a's gate reads rdb_phase from memory;
@@ -330,6 +361,16 @@ rdb_verdict_set:
                 ld      a, "5"
                 ld      (rdb_phase), a
 
+    if defined(DEMO_CHAIN)
+                ; i365d-b2c Phase B: RELEASESRC is on the record (RELEASEIMG was
+                ; HSAVE'd by the assembler before it chained here). Hand the machine
+                ; to the netboot SERVER overlay (nbsrv) — load it over the &8000
+                ; window and run it; it comes up (EEPROM/ENC/CSD, B-DOS store walk)
+                ; and serves BOTH files disk-backed over TFTP forever. See
+                ; rdb_chain_next.
+                jp      rdb_chain_next
+    endif
+
 ; ===========================================================================
 ; rdb_done — the completion barrier: DI;HALT. The faithful test runs to the halt
 ; and reads rdb_phase/rdb_verdict from memory. A StopPC would be unreliable here —
@@ -340,6 +381,82 @@ rdb_verdict_set:
 rdb_done:
                 di
                 halt
+
+    if defined(DEMO_CHAIN)
+; ===========================================================================
+; rdb_chain_next (i365d-b2c Phase B) — hand the machine to the netboot SERVER
+; overlay (nbsrv). The render is done and RELEASESRC is on the record. We restore
+; a clean B-DOS runtime (boot LMPR = ROM0 in section A + the B-DOS sysvar page in
+; section B, IM 1, DI), arm the HGTHD lookup of the server CODE file, then LDIR a
+; tiny straight-line loader stub to section-B low RAM (OUTSIDE the &8000 window)
+; and JP it. The stub HLOADs nbsrv over &8000 (2 pages, ~19 KB fills sections C+D)
+; and enters it. The server is TERMINAL — its own come-up (EEPROM/ENC/CSD, the
+; B-DOS store walk that indexes RELEASESRC + RELEASEIMG + the NBMANIFEST long-name
+; map) then nb_serve_loop forever — so no return frame is needed; the stub leaves
+; SP in section B (OVL_STUB_SP) for the server's come-up + serve stack.
+;
+; render's IN reblock ran at IN=4..26 (DEMO_CHAIN), so B-DOS's DOS code page (29)
+; survives intact for the server's post-render B-DOS store walk (HRSAD/HGTHD/HLOAD).
+; ===========================================================================
+rdb_chain_next:
+                di
+                im      1
+                ld      a, (rdb_bdos_lmpr)     ; ROM0 in A + B-DOS sysvar page in B
+                out     (250), a               ; (the pristine boot LMPR, from rdb_main)
+                ld      a, (rdb_boot_hmpr)     ; restore the boot exec window so the next
+                out     (251), a               ; overlay loads to &8000 into the RAM page pair
+                                               ; ALHK set (render left HMPR at the
+                                               ; paged_call/IN window during the render)
+
+                ; --- arm HGTHD for nbsrv -> BD_DIFA (pages, length) -------------
+                ; render_disk_write_dirent appended RELEASESRC into the first FREE
+                ; dir slot (no type-0 gap before nbsrv), so B-DOS's directory scan
+                ; reaches nbsrv (whose on-record body sectors sit above RELEASESRC's
+                ; base-40 write band — placed LAST on the record). This HGTHD
+                ; dispatches to REAL B-DOS (the DOS page at DOSFLG survives the
+                ; IN=4..26 reblock).
+                ld      hl, rdb_name_nbsrv
+                ld      (BD_NAME_PTR), hl
+                call    bdos_name_to_uifa
+                call    bdos_lookup_hook       ; UIFA->&4B00, HGTHD arms svde, DIFA->BD_DIFA
+
+                ; --- copy the loader stub to low RAM and enter it ---------------
+                ld      hl, rdb_chain_stub_src
+                ld      de, OVL_STUB_DST
+                ld      bc, rdb_chain_stub_end - rdb_chain_stub_src
+                ldir
+                jp      OVL_STUB_DST
+
+; rdb_chain_stub_src — the straight-line overlay loader, copied to OVL_STUB_DST
+; and run from section B (LMPR-stable, outside the &8000 window it overwrites).
+; Absolute addresses only (no self-relative control flow) so it runs correctly
+; at OVL_STUB_DST regardless of where it is assembled. Reads the armed BD_DIFA
+; (still mapped in section C until the HLOAD) for the page count + length, HLOADs
+; the whole server to &8000, then enters it with SP in section B.  The 2-page
+; (~19 KB) HLOAD to &8000 ADVANCES HMPR per 16 KB (the data lands correctly across
+; sections C+D, no wrap into ROM), so the stub SAVES the boot HMPR first and
+; RESTORES it after — else the server enters at page 2 (section C = its 2nd half).
+rdb_chain_stub_src:
+                ld      sp, OVL_STUB_SP
+                in      a, (251)               ; save the boot exec window (section C = page 1)
+                ld      (OVL_STUB_HMPR), a
+                ld      a, (BD_DIFA + BD_OFF_PAGES)
+                ld      c, a                   ; C = whole-file page count
+                ld      a, (BD_DIFA + BD_OFF_LENGTH)
+                ld      e, a
+                ld      a, (BD_DIFA + BD_OFF_LENGTH + 1)
+                and     BD_DIFA_MARKER         ; clear the +36 bit-7 marker
+                ld      d, a                   ; DE = length-mod-16K
+                ld      hl, &8000              ; HLOAD dest = the current window (section C)
+                rst     8
+                defb    BD_HOOK_HLOAD          ; load nbsrv to &8000 (longjmps on read error)
+                di                             ; PTDOS EIs inside RST 8
+                ld      a, (OVL_STUB_HMPR)     ; restore the boot exec window so the server
+                out     (251), a               ; enters at section C = page 1 (jp netboot_main)
+                ld      sp, OVL_STUB_SP        ; the server's come-up + serve stack (section B)
+                jp      &8000
+rdb_chain_stub_end:
+    endif
 
 ; ===========================================================================
 ; rdb_hload_page — HGTHD + trampoline-HLOAD a named CODE file into a target
@@ -653,6 +770,10 @@ rdb_name_out:   defm    "RELEASESRC"           ; 10-char on-record output name
                 defb    0
 rdb_name_disasm: defm   "disasm"               ; the render's decode engine payload
                 defb    0
+    if defined(DEMO_CHAIN)
+rdb_name_nbsrv: defm    "nbsrv"                 ; i365d-b2c Phase B: the netboot server overlay
+                defb    0
+    endif
 rdb_name_in_padded:                            ; the 10-char on-record name of the
                 defm    "IN        "           ; DOS 'IN' file (2 + 8 spaces), for
                                                ; the directory scan in rdb_load_tbn
@@ -668,6 +789,10 @@ rdb_dst_off:    defw    0                      ; flat write cursor: offset withi
 rdb_hdr_skip:   defb    0                      ; bytes to skip at the stream start (9, then 0)
 rdb_saved_sp:   defw    0                      ; caller SP parked across the LMPR-toggling load
 rdb_boot_lmpr:  defb    0                      ; boot LMPR (ROM0 in section A), restored per read
+    if defined(DEMO_CHAIN)
+rdb_bdos_lmpr:  defb    0                      ; pristine B-DOS boot LMPR (ROM0 A + sysvar B), for the chain
+rdb_boot_hmpr:  defb    0                      ; pristine boot HMPR (the &8000 exec window), for the chain
+    endif
 
 ; ===========================================================================
 ; RDB_CONFIG — host/test-patchable config block (boot_record idiom), patched by

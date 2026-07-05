@@ -10,7 +10,29 @@ missing piece.
 
 This doc is the design home for the leaves `i365c`/`i365d` point at. It is a
 living design doc — fold its durable parts into `docs/ARCHITECTURE.md` and delete
-it when the demo ships.
+it when the demo ships (after `i365e` + `i368`).
+
+## SHIPPED (i365d-b2c, 2026-07-05) — ASSEMBLE-FIRST, not render-first
+
+The demo is implemented and faithful-gated end-to-end: ONE boot assembles
+`release.img`, renders `release.src`, and serves both byte-exact over TFTP
+(`assemble_first_serve_faithful_test.go`). The **"Driver architecture" section
+below (render-first orchestrator) was SUPERSEDED** — render-first is
+architecturally impossible for b2c: the 1600-sector record can't hold IN (729
+sec) + RELEASESRC (820) + RELEASEIMG (43) + the files unless **RELEASESRC reuses
+IN's sectors** (base linearSec 40), but IN is read by BOTH the render and the
+assembler, so they must be **ordered so both read IN before render overwrites it**
+→ assemble-first. The shipped chain is `assembler(AUTO) → render(overlay) →
+server(overlay)`, each HLOAD'd over the `&8000` window from a section-B loader
+stub (the one genuinely new capability). Key overlay-load lesson: a >16 KB
+(2-page) HLOAD to `&8000` ADVANCES HMPR per 16 KB (data lands in C+D fine, but
+HMPR is left at the 2nd page — the stub must save/restore the boot HMPR); and the
+loader stub must not leave SP at `&FFFE` (it collides with `rdb_load_tbn`'s stack).
+FIX 2 (the free-slot MGT dir writer that preserves existing entries + the BDOS
+stamp, in `render_disk_sink.asm`) is a real shared-card data-safety fix. The
+on-screen RST&10 progress messages are deferred to hardware (`i368`, needs a real
+screen — RST&10 hangs at come-up under an ALHK record boot). Remaining: `i365e`
+(store + boot the real SAM + fetch both) and `i368` (the messages).
 
 ## The two capability walls (why the demo is bigger than "wire it up")
 

@@ -57,9 +57,15 @@ func runRenderDiskProbe(t *testing.T, rec, n int, hload bool) (mac *z80h.Machine
 	t.Helper()
 	mac, _, sd, _ = bootToEditorIdleSDENC(t)
 
-	// A fresh all-zeros scratch record, stamped "BDOS"@232 exactly as sd_push
-	// stamps a pushed record, so the probe's HRECORD select validates.
-	seedRecordFromMGT(sd, rec, make([]byte, 819200), "rdscratch")
+	// A realistic formatted Trinity record: the "BDOS"@232 validity stamp plus a
+	// system CODE entry occupying slot 0 — the shape the append-writer assumes (a
+	// real record, like the demo/b2a records, carries a "bdos" entry in slot 0). The
+	// writer appends the streamed file into the first FREE slot AFTER slot 0, so the
+	// "BDOS"@232 stamp (which lives inside slot 0's 256-byte range) is preserved. An
+	// all-zeros (formatted-EMPTY) record leaves slot 0 free: the append lands there
+	// and its 256-byte entry splices over offset 232, clobbering the stamp — which
+	// real B-DOS HRECORD then rejects (wedging its record-select scan).
+	seedFormattedScratchRecord(sd, rec, "rdscratch")
 	seedRecordList(sd, map[int]string{1: "rec1", rec: "rdscratch"})
 
 	code := append([]byte(nil), mustReadFile(t, renderDiskProbeBin, "make netboot-render-disk-probe")...)
@@ -114,6 +120,49 @@ func runRenderDiskProbe(t *testing.T, rec, n int, hload bool) (mac *z80h.Machine
 	return mac, sd, sym, phase, verdict, detail
 }
 
+// seedFormattedScratchRecord seeds a realistic formatted+populated Trinity record:
+// seedRecordFromMGT stamps the "BDOS"@232 validity stamp in linearSec 0, and slot 0
+// carries a system CODE entry so it is OCCUPIED — the exact shape the render sink's
+// append-writer assumes (a real record, like the demo/b2a records, carries a "bdos"
+// entry in slot 0). With slot 0 occupied the writer appends the streamed file into
+// the first free slot after it, leaving the "BDOS"@232 stamp — which sits inside
+// slot 0's 256-byte range — untouched. (A formatted-EMPTY record with slot 0 free
+// makes the append land in slot 0 and splice over offset 232, invalidating it.)
+func seedFormattedScratchRecord(sd *z80h.SDCard, rec int, label string) {
+	img := make([]byte, 819200)
+	img[0] = 0x13 // slot 0 type = CODE: the record's system entry (occupied)
+	copy(img[1:11], "SYSTEM    ")
+	img[0x0B], img[0x0C] = 0, 1 // one sector
+	img[0x0D], img[0x0E] = 1, 1 // start (track 1, sector 1)
+	seedRecordFromMGT(sd, rec, img, label)
+}
+
+// findRecordDirEntry scans a Trinity record's directory (linearSec 0..39, two
+// 256-byte entries per sector) for the CODE (type 0x13) entry with the given
+// space-padded name, returning its first (track,sector) and big-endian sector count.
+// The append-writer places a new file in the first FREE slot after the record's
+// existing entries, so the entry is located by name, not a fixed slot. Fatals if no
+// such entry exists (proving the write produced a findable CODE entry).
+func findRecordDirEntry(t *testing.T, sd *z80h.SDCard, rec int, name string) (track, sector byte, secCount int) {
+	t.Helper()
+	padded := name + "          "[:10-len(name)]
+	for lin := 0; lin < 40; lin++ {
+		sec, ok := sd.RecordDataSector(faithCSDBase, rec, lin)
+		if !ok {
+			continue // an unwritten directory sector — keep scanning
+		}
+		for _, base := range []int{0, 256} {
+			e := sec[base : base+256]
+			if e[0] != 0x13 || string(e[1:11]) != padded {
+				continue
+			}
+			return e[0x0D], e[0x0E], int(e[0x0B])<<8 | int(e[0x0C])
+		}
+	}
+	t.Fatalf("no CODE directory entry named %q found in record %d — the writer did not append a findable entry", name, rec)
+	return 0, 0, 0
+}
+
 // mgtTSToRecordLinear mirrors the asm mgt_ts_to_record_linear
 // (netboot_server.asm:1092): the side-major record-linear a Trinity record
 // stores a given MGT (track_byte, sector) at.
@@ -122,21 +171,18 @@ func mgtTSToRecordLinear(track, sector byte) int {
 }
 
 // reconstructRecordFile FOLLOWS the file's on-disk MGT sector chain — exactly as
-// real B-DOS HLOAD / the i365c serve do — from the directory entry's first
-// (track,sector), hopping each sector's 2-byte forward link through the side-major
-// mapping, until the terminal 0,0 link. This validates the forward-link encoding
-// across every track wrap (sector 10 -> track++) and the side boundary (track
-// 79 -> 128), not just that the data landed at the right linearSec. It asserts the
-// chain is contiguous from rdpDataBase, then strips the 9-byte CODE header and
-// returns the first n DATA bytes.
+// real B-DOS HLOAD / the i365c serve do — from the RELEASESRC directory entry's
+// first (track,sector), located BY NAME (the append-writer places it in the first
+// free slot after the record's existing entries, not a fixed slot), hopping each
+// sector's 2-byte forward link through the side-major mapping, until the terminal
+// 0,0 link. This validates the forward-link encoding across every track wrap (sector
+// 10 -> track++) and the side boundary (track 79 -> 128), not just that the data
+// landed at the right linearSec. It asserts the chain is contiguous from rdpDataBase,
+// then strips the 9-byte CODE header and returns the first n DATA bytes.
 func reconstructRecordFile(t *testing.T, sd *z80h.SDCard, rec, n int) []byte {
 	t.Helper()
-	dir, ok := sd.RecordDataSector(faithCSDBase, rec, 0)
-	if !ok {
-		t.Fatalf("record %d directory sector (linearSec 0) was never written", rec)
-	}
 	secCount := (n + rdpHdrLen + rdpPayload - 1) / rdpPayload // ceil((n+9)/510)
-	track, sector := dir[0x0D], dir[0x0E]
+	track, sector, _ := findRecordDirEntry(t, sd, rec, "RELEASESRC")
 	body := make([]byte, 0, secCount*rdpPayload)
 	for hop := 0; ; hop++ {
 		if hop >= secCount {
@@ -175,28 +221,26 @@ func assertRenderDiskMatch(t *testing.T, got, want []byte) {
 	}
 }
 
-// assertDirEntry checks the directory entry the writer produced in slot 0 of
-// linearSec 0: type CODE, the name, the big-endian sector count, and the intact
-// "BDOS"@232 record-validity stamp.
-func assertDirEntry(t *testing.T, sd *z80h.SDCard, rec, n int) {
+// assertDirEntryByName checks the directory entry the append-writer produced for
+// `name`: it is a CODE entry (found by name in the first free slot after the
+// record's existing entries — findRecordDirEntry fatals otherwise, so type+name are
+// asserted), its big-endian sector count matches the body, AND the record's
+// "BDOS"@232 validity stamp in linearSec 0 SURVIVED the append. The stamp check is
+// the load-bearing proof that the writer preserved the record's validity (an append
+// into slot 0 would splice over offset 232 — real B-DOS HRECORD would then reject it).
+func assertDirEntryByName(t *testing.T, sd *z80h.SDCard, rec int, name string, n int) {
 	t.Helper()
+	_, _, gotSec := findRecordDirEntry(t, sd, rec, name)
+	wantSec := (n + rdpHdrLen + rdpPayload - 1) / rdpPayload
+	if gotSec != wantSec {
+		t.Fatalf("dir entry %q sector count = %d, want %d", name, gotSec, wantSec)
+	}
 	dir, ok := sd.RecordDataSector(faithCSDBase, rec, 0)
 	if !ok {
 		t.Fatalf("record %d directory sector (linearSec 0) was never written", rec)
 	}
-	if dir[0] != 0x13 {
-		t.Fatalf("dir entry type = %#02x, want 0x13 (CODE)", dir[0])
-	}
-	if name := string(dir[1:11]); name != "RELEASESRC" {
-		t.Fatalf("dir entry name = %q, want %q", name, "RELEASESRC")
-	}
 	if !bytes.Equal(dir[232:236], []byte("BDOS")) {
-		t.Fatalf(`dir sector +232 = % X, want "BDOS" — HRECORD would reject this record`, dir[232:236])
-	}
-	wantSec := (n + rdpHdrLen + rdpPayload - 1) / rdpPayload
-	gotSec := int(dir[0x0B])<<8 | int(dir[0x0C]) // big-endian sector count
-	if gotSec != wantSec {
-		t.Fatalf("dir entry sector count = %d, want %d", gotSec, wantSec)
+		t.Fatalf(`dir sector +232 = % X, want "BDOS" — the append clobbered the record-validity stamp HRECORD checks`, dir[232:236])
 	}
 }
 
@@ -235,7 +279,7 @@ func TestRenderDiskWriteRoundtripFaithful(t *testing.T) {
 			}
 			// The physical bytes on the card, reconstructed from the record's sectors.
 			assertRenderDiskMatch(t, reconstructRecordFile(t, sd, rec, c.n), rdpPattern(c.n))
-			assertDirEntry(t, sd, rec, c.n)
+			assertDirEntryByName(t, sd, rec, "RELEASESRC", c.n)
 			// Data safety (i295): nothing written outside the target record's band.
 			if outside := sd.WrittenSectorsOutsideRecord(faithCSDBase, rec); len(outside) != 0 {
 				t.Fatalf("record write escaped record %d's band to LBAs %v — the i295 guard did not hold", rec, outside)
@@ -261,7 +305,7 @@ func TestRenderDiskWriteReleaseSizeFaithful(t *testing.T) {
 	}
 
 	assertRenderDiskMatch(t, reconstructRecordFile(t, sd, rec, n), rdpPattern(n))
-	assertDirEntry(t, sd, rec, n)
+	assertDirEntryByName(t, sd, rec, "RELEASESRC", n)
 
 	if outside := sd.WrittenSectorsOutsideRecord(faithCSDBase, rec); len(outside) != 0 {
 		t.Fatalf("record write escaped record %d's band to LBAs %v — the i295 guard did not hold", rec, outside)

@@ -107,9 +107,9 @@ func TestRenderDiskBootFaithful(t *testing.T) {
 	// (following the MGT forward-link chain, as HLOAD/serve do) and byte-compare
 	// to the Go authority. HLOAD cannot hold 417 KB resident, so this is the
 	// > free-RAM proof (as in TestRenderDiskWriteReleaseSizeFaithful). ---
-	got := reconstructRecordFile(t, sd, bootRecord, n)
+	got := reconstructRecordFileByName(t, sd, bootRecord, "RELEASESRC", n)
 	assertRenderDiskMatch(t, got, want)
-	assertDirEntry(t, sd, bootRecord, n)
+	assertDirEntryByName(t, sd, bootRecord, "RELEASESRC", n)
 
 	// Data safety (i295): nothing written outside the target record's band.
 	if outside := sd.WrittenSectorsOutsideRecord(faithCSDBase, bootRecord); len(outside) != 0 {
