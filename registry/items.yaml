@@ -6141,9 +6141,11 @@
   title: "sd-push has no block retransmit: one lost UDP frame in a 1600-sector stream fails the whole push"
   description: |
     Observed twice back-to-back on the i95b-b1 vessel push (2026-07-02): the pusher windows 4 outstanding acks but an ack timeout only WARNs and moves on (sd-push.py stream loop), and sd_push counts RECEIVED blocks (sp_recv_count) with finalize requiring exactly 1600 - so a single lost '@' frame (or several) anywhere in an ~87 s stream yields finalize 'E' and the record must be deleted and re-pushed from scratch (3rd attempt succeeded). Fix needs BOTH sides: pusher retransmits un-acked sectors, and sd_push counts UNIQUE sectors (or an in-order watermark) so retransmitted duplicates (data landed, ack lost) do not overcount past 1600. Writes are LBA-addressed so duplicate rewrites are idempotent and safe. Until fixed, the workaround is delete + retry.
-  status: OPEN
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 868, role: completing}
 
 - id: i349
   title: "PR 822 review residuals: bound the opt-60 scanner to RX_LEN, fix the duplicate-DATA re-ACK in simulate-pi-client.py, drop NB_ENTRY_LENMOD, list the client in hardware-shot README"
