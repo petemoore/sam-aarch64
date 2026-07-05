@@ -163,13 +163,14 @@ func TestListRecords(t *testing.T) {
 	}
 }
 
-// TestListRecordsBigCardClamp — the 1-byte seam guard: BD_LIST_SECTOR (the list-read
-// seam input) is one byte, so list_records clamps its serveable range to list sectors
-// 1..255 (records 1..8160). On a card whose record count exceeds that (a ~6.7 GB CSD
-// here), a query for sector 256 must be REFUSED ('E') — NOT silently truncated by the
-// 8-bit store into a read of sector 0 (the boot sector) mislabelled as sector 256,
-// which is what the unclamped code did. Sector 255 (in range) still serves.
-func TestListRecordsBigCardClamp(t *testing.T) {
+// TestListRecordsBigCardReach — the 16-bit seam (i326): BD_LIST_SECTOR is now two
+// bytes, so list_records reaches list sectors past 255 (records past 8160). On a card
+// whose record count exceeds 8160 (a ~6.7 GB CSD here), a query for sector 256 now
+// SERVES ('R'+512) — the higher list sectors are no longer unreachable. The range
+// check still refuses a sector genuinely beyond the card's list (> lr_nlist) with 'E',
+// so a bad index never addresses a stray LBA. (Before i326 the 1-byte store truncated
+// sector 256 into a read of sector 0, so the tool clamped its reach to 255.)
+func TestListRecordsBigCardReach(t *testing.T) {
 	if _, err := os.Stat(listRecordsBin); err != nil {
 		t.Fatalf("list_records binary not built (%s); run `make netboot-list-records`", listRecordsBin)
 	}
@@ -187,6 +188,7 @@ func TestListRecordsBigCardClamp(t *testing.T) {
 	enc.InjectRX(sdPushFrame([]byte{'?'}))
 	enc.InjectRX(lrQuery(255))
 	enc.InjectRX(lrQuery(256))
+	enc.InjectRX(lrQuery(60000)) // far beyond nlist for a 6.7 GB card — refused
 	enc.InjectRX(sdPushFrame([]byte{'Q'}))
 
 	if _, err := mac.RunBoot("list_records_main", z80h.Entry{StepCap: 30_000_000}); err != nil {
@@ -194,30 +196,43 @@ func TestListRecordsBigCardClamp(t *testing.T) {
 	}
 	frames := enc.TXFrames()
 
-	// Precondition: the CSD decode really produced a record count past the seam's
-	// 8160-record reach (else this test exercises nothing).
-	bdRecords, err := mac.Sym("BD_RECORDS")
-	if err != nil {
-		t.Fatalf("BD_RECORDS symbol absent from %s", listRecordsMap)
+	// Precondition: the CSD decode really produced a record count past the old
+	// 8160-record reach, and nlist covers sector 256 while 60000 is out of range
+	// (else this test exercises nothing).
+	sym := func(name string) uint16 {
+		a, err := mac.Sym(name)
+		if err != nil {
+			t.Fatalf("symbol %q absent from %s", name, listRecordsMap)
+		}
+		return a
 	}
-	records := int(leU16(mac.Read(bdRecords, 2)))
+	records := int(leU16(mac.Read(sym("BD_RECORDS"), 2)))
 	if records <= 255*32 {
-		t.Fatalf("test CSD decoded to %d records, need > %d to exercise the clamp", records, 255*32)
+		t.Fatalf("test CSD decoded to %d records, need > %d to exercise the widened reach", records, 255*32)
+	}
+	nlist := int(leU16(mac.Read(sym("lr_nlist"), 2)))
+	if nlist < 256 {
+		t.Fatalf("nlist = %d, need >= 256 so sector 256 is in range", nlist)
+	}
+	if 60000 <= nlist {
+		t.Fatalf("out-of-range probe 60000 <= nlist %d — pick a higher probe", nlist)
 	}
 	if got := countPayload(frames, []byte{'!', 'L', 'R', byte(records & 0xFF), byte(records >> 8)}); got < 1 {
 		t.Errorf("no '!LR'+records(%d LE16) discovery reply; tx payloads=%v", records, txPayloads(frames))
 	}
 
-	// Sector 255: the last seam-reachable list sector still serves (unseeded zeros).
+	// Sector 255: still serves (unseeded zeros).
 	if reply := findPayloadPrefix(frames, []byte{'R', 255, 0}); reply == nil || len(reply) != 3+512 {
 		t.Errorf("list sector 255 (in range) did not serve an 'R'+512B reply; got %v", reply)
 	}
-	// Sector 256: past the 1-byte seam — refused, never a boot-sector read in disguise.
-	if got := countPayload(frames, []byte{'E', 0, 1}); got < 1 {
-		t.Errorf("list sector 256 was not refused with 'E' — the 8-bit truncation guard is not holding")
+	// Sector 256: NOW serves — the i326 payoff (past the old 1-byte seam).
+	if reply := findPayloadPrefix(frames, []byte{'R', 0, 1}); reply == nil || len(reply) != 3+512 {
+		t.Errorf("list sector 256 did not serve an 'R'+512B reply — the 16-bit seam should reach past 8160; got %v", reply)
 	}
-	if reply := findPayloadPrefix(frames, []byte{'R', 0, 1}); reply != nil {
-		t.Errorf("list sector 256 got an 'R' reply — the 8-bit store truncated it to a sector-0 read")
+	// Sector 60000: genuinely beyond the card's list — still refused ('E' + echoed
+	// index 0xEA60 LE), never a stray LBA read.
+	if got := countPayload(frames, []byte{'E', 0x60, 0xEA}); got < 1 {
+		t.Errorf("out-of-range list sector 60000 was not refused with 'E' — the range check must still bound queries")
 	}
 
 	// Still read-only on the big card.
@@ -234,7 +249,7 @@ func TestListRecordsBigCardClamp(t *testing.T) {
 // query and the tool returned no inventory. This test attaches the card's REAL
 // captured CSD (csd_probe read-back, 2026-07-02) and asserts the full decode chain
 // (records 65535, base 2050 — the values live-traced from B-DOS on this card) and
-// that list sectors are served again up to the 1-byte-seam clamp.
+// that list sectors are served again across the full 16-bit seam (i326).
 func TestListRecords64GBCard(t *testing.T) {
 	if _, err := os.Stat(listRecordsBin); err != nil {
 		t.Fatalf("list_records binary not built (%s); run `make netboot-list-records`", listRecordsBin)
@@ -257,9 +272,10 @@ func TestListRecords64GBCard(t *testing.T) {
 	mac.StubReturn(0x06B5) // CLSLOWER — hardware-only screen clear (i319a)
 
 	enc.InjectRX(sdPushFrame([]byte{'?'}))
-	enc.InjectRX(lrQuery(1))   // pre-fix: refused ('E') because nlist wrapped to 0
-	enc.InjectRX(lrQuery(255)) // the last seam-reachable sector still serves
-	enc.InjectRX(lrQuery(256)) // past the 1-byte seam: refused
+	enc.InjectRX(lrQuery(1))     // pre-i319a-fix: refused ('E') because nlist wrapped to 0
+	enc.InjectRX(lrQuery(255))   // in range: serves
+	enc.InjectRX(lrQuery(256))   // past the OLD 1-byte seam — now serves (i326)
+	enc.InjectRX(lrQuery(60000)) // beyond nlist (2048): still refused
 	enc.InjectRX(sdPushFrame([]byte{'Q'}))
 
 	if _, err := mac.RunBoot("list_records_main", z80h.Entry{StepCap: 30_000_000}); err != nil {
@@ -286,14 +302,17 @@ func TestListRecords64GBCard(t *testing.T) {
 		t.Errorf("no '!LR'+65535 discovery reply; tx payloads=%v", txPayloads(frames))
 	}
 
-	// THE regression pin: list sector 1 must SERVE (pre-fix it was refused).
-	for _, idx := range []uint16{1, 255} {
+	// THE regression pin: sector 1 must SERVE (pre-i319a-fix it was refused). Sectors
+	// 255 and 256 both serve — the 16-bit seam (i326) reaches past the old 8160 limit
+	// (nlist here is 2048).
+	for _, idx := range []uint16{1, 255, 256} {
 		if reply := findPayloadPrefix(frames, []byte{'R', byte(idx & 0xFF), byte(idx >> 8)}); reply == nil || len(reply) != 3+512 {
-			t.Errorf("list sector %d did not serve an 'R'+512B reply (the nlist overflow refused it pre-fix)", idx)
+			t.Errorf("list sector %d did not serve an 'R'+512B reply", idx)
 		}
 	}
-	if got := countPayload(frames, []byte{'E', 0, 1}); got < 1 {
-		t.Errorf("list sector 256 was not refused — the 1-byte-seam clamp must still hold on the big card")
+	// Sector 60000 is beyond nlist (2048) — still refused ('E' + echoed 0xEA60 LE).
+	if got := countPayload(frames, []byte{'E', 0x60, 0xEA}); got < 1 {
+		t.Errorf("out-of-range list sector 60000 was not refused — the range check must bound queries")
 	}
 	if writes := sd.WrittenSectors(); len(writes) != 0 {
 		t.Fatalf("READ-ONLY VIOLATION: %d SD write(s) at %v", len(writes), writes)
