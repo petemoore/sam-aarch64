@@ -294,7 +294,14 @@ prep_do_macro:
                 ld      (MAC_ACTIVE), a
                 ld      hl, (CUR_LINE)
                 ld      (MAC_DEFLINE), hl
-                or      a
+                ; capture the def-file (Go: m.defPos.file = the file the .macro is
+                ; in).  CURRENT_FILE is the active file — the resolved include path
+                ; when the .macro is inside an .include, PREP_PATH at top level.
+                ld      hl, (CURRENT_FILE_PTR)
+                ld      (MAC_DEFFILE_PTR), hl
+                ld      hl, (CURRENT_FILE_LEN)
+                ld      (MAC_DEFFILE_LEN), hl
+                or      a                       ; A still = MAC_ACTIVE (HL loads don't touch A)
                 jr      z, pdm_collect          ; inactive: header not parsed (Go)
                 call    prep_parse_macro_header ; reads TRIM (the .macro line); CF=error
                 jp      c, prep_fail
@@ -1377,6 +1384,8 @@ pel_nl:
 ; copied into MACRO_STRPOOL because they are derived through stripTrailingComment
 ; (a transient buffer). BODY_IDX entries are {ptr:2 (into PREP_SRC), len:2} —
 ; whole physical body lines, which persist in the source buffer.
+; The def-file (Go m.defPos.file) is held in the parallel MACRO_DEFFILE_PTR/LEN
+; arrays indexed by macro number, not in the record — see their definition.
 ; ===========================================================================
 
 ; prep_scan_ident — BC = count of leading isIdentCont bytes at HL (0..maxlen).
@@ -1693,6 +1702,25 @@ prep_macro_store:
                 ld      (hl), e
                 inc     hl
                 ld      (hl), d
+                ; def-file → parallel arrays MACRO_DEFFILE_PTR/LEN[count] (u16 each).
+                ld      a, (MACRO_COUNT)
+                ld      l, a
+                ld      h, 0
+                add     hl, hl                   ; count*2
+                push    hl                       ; save count*2 for the LEN array
+                ld      de, MACRO_DEFFILE_PTR
+                add     hl, de                   ; -> DEFFILE_PTR[count]
+                ld      de, (MAC_DEFFILE_PTR)
+                ld      (hl), e
+                inc     hl
+                ld      (hl), d
+                pop     hl                       ; count*2
+                ld      de, MACRO_DEFFILE_LEN
+                add     hl, de                   ; -> DEFFILE_LEN[count]
+                ld      de, (MAC_DEFFILE_LEN)
+                ld      (hl), e
+                inc     hl
+                ld      (hl), d
                 ld      a, (MACRO_COUNT)
                 inc     a
                 ld      (MACRO_COUNT), a
@@ -1706,9 +1734,10 @@ prep_macro_store:
 ; check, guard against a recursion cycle, substitute \param in every body line,
 ; and RE-preprocess the substituted text via a reentrant prep_process_lines.
 ; Mid-stream `# <line> "<file>"` directives are emitted at the macro-definition
-; boundary (defline+1) and after the call (callline+1), byte-identical to host
-; emitLineDirective.  There is one file in this brick (PREP_PATH) — .include is
-; Brick 3 — so defPos.file and pos.file are both PREP_PATH.
+; boundary (defline+1, using the macro's stored DEF-file) and after the call
+; (callline+1, using CURRENT_FILE = the call-site file), byte-identical to host
+; emitLineDirective.  The two files differ when a macro is defined in an included
+; file and invoked elsewhere (Go m.defPos.file vs pos.file).
 ; ===========================================================================
 
 ; prep_clear_expanding — zero the per-macro expanding flags.
@@ -1933,6 +1962,25 @@ prep_try_expand:
                 inc     hl
                 ld      d, (hl)
                 ld      (TE_DEFLINE), de
+                ; def-file → TE_DEFFILE_PTR/LEN from parallel arrays[TE_K] (Go m.defPos.file).
+                ld      a, (TE_K)
+                ld      l, a
+                ld      h, 0
+                add     hl, hl                  ; k*2
+                push    hl                      ; save k*2 for the LEN array
+                ld      de, MACRO_DEFFILE_PTR
+                add     hl, de
+                ld      e, (hl)
+                inc     hl
+                ld      d, (hl)
+                ld      (TE_DEFFILE_PTR), de
+                pop     hl                      ; k*2
+                ld      de, MACRO_DEFFILE_LEN
+                add     hl, de
+                ld      e, (hl)
+                inc     hl
+                ld      d, (hl)
+                ld      (TE_DEFFILE_LEN), de
                 ; argText = stripTrailingComment(TrimSpace(rest[namelen:])).
                 ld      hl, (TRIM_PTR)
                 ld      bc, (TE_NAME_LEN)
@@ -1963,10 +2011,14 @@ prep_try_expand:
                 or      a
                 jp      nz, prep_fail           ; recursive expansion (cycle)
                 ld      (hl), 1                 ; mark expanding
-                ; emit `# <defline+1> "<path>"`.
+                ; emit `# <defline+1> "<def-file>"` (Go emitLineDirective at
+                ; m.defPos.file — the DEFINITION file, which differs from the
+                ; call-site file when a macro is defined in an included file).
                 ld      hl, (TE_DEFLINE)
                 inc     hl
-                call    prep_emit_line_directive
+                ld      de, (TE_DEFFILE_PTR)
+                ld      bc, (TE_DEFFILE_LEN)
+                call    prep_emit_line_directive_for
                 ; build the substituted body into the arena (bump stack).
                 ld      hl, (SUBST_TOP)
                 ld      (TE_WIN_START), hl      ; window start = arena base
@@ -2940,6 +2992,8 @@ SC_UNCL:          defs 1
 CUR_LINE:         defs 2
 MAC_ACTIVE:       defs 1
 MAC_DEFLINE:      defs 2
+MAC_DEFFILE_PTR:  defs 2          ; def-file path (CURRENT_FILE at .macro time)
+MAC_DEFFILE_LEN:  defs 2
 MAC_NAME_PTR:     defs 2
 MAC_NAME_LEN:     defs 2
 MAC_NPARAMS:      defs 1
@@ -2972,6 +3026,8 @@ TE_PARAMSPTR:     defs 2
 TE_NBODY:         defs 2
 TE_BODYPTR:       defs 2
 TE_DEFLINE:       defs 2
+TE_DEFFILE_PTR:   defs 2          ; def-file for the # directive (Go m.defPos.file)
+TE_DEFFILE_LEN:   defs 2
 TE_WIN_START:     defs 2          ; substituted-body window base
 
 SA_BASE:          defs 2          ; splitMacroArgs cursor state
@@ -3043,6 +3099,12 @@ STRIP_BUF:        defs 512        ; stripTrailingComment scratch (>= max line)
 MACRO_MAX:        equ 64
 MACRO_TAB:        defs 12*64      ; {name_ptr:2,name_len:1,nparams:1,params_ptr:2,nbody:2,body_ptr:2,defline:2}
 MACRO_EXPANDING:  defs 64         ; per-record recursion-cycle flag (== MACRO_MAX)
+; Parallel per-macro def-file arrays (indexed by macro number, like
+; MACRO_EXPANDING). Kept out of the 12-byte MACRO_TAB record to avoid perturbing
+; its stride; entry k holds the file CURRENT_FILE pointed at when macro k was
+; defined (into PATH_ARENA, persistent for the whole run — Go m.defPos.file).
+MACRO_DEFFILE_PTR: defs 2*64      ; u16 per macro
+MACRO_DEFFILE_LEN: defs 2*64      ; u16 per macro
 PARAM_IDX:        defs 4*128      ; {ptr:2 (into MACRO_STRPOOL), len:2}
 PARAM_IDX_END:                    ; (overflow guard bound)
 BODY_IDX:         defs 4*256      ; {ptr:2 (into PREP_SRC/PREP_FILES), len:2}
