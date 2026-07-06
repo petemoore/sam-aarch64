@@ -6384,9 +6384,11 @@
   title: b8d corpus fixture pinning the packed-header length-escape EMIT branch (15+-byte patch expr)
   description: |
     PR 837 §3-review residual (non-blocking note recorded on the PR): the Z80 packed patch-header DECODE escape branch (insn_patch_header, len nibble 15 -> real u8) is CI-proven via the release gate (the release .tbn carries 4 escaped patches and the SAM leg byte-matches), but the Z80 EMIT escape branch (compact_emit.asm cemit_ai_hdr_esc) has no pinned fixture — no b8d corpus source produces a 15+-byte patch expression, so that branch's only proof is code review. Add a corpus fixture (e.g. a symbol-diff expression long enough to exceed 14 bytes of expr bytecode) under tests/*/sources/ so TestChainPagedB8dCorpus byte-compares the emit escape path against host CompactTBNBytes.
-  status: OPEN
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 885, role: completing}
 
 - id: i354
   title: Delete the gated synthetic list-hook machinery (BD_HOOK_LISTREAD/LISTWRITE 161/162 + oracle cases)
