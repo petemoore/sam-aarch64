@@ -191,6 +191,54 @@ func refDigitForBase(c byte, base int) bool {
 // subset. Returns the tokens (including the trailing EOF) and ok=false if a
 // lexical error was hit (unterminated block comment / lone '<' or '>' /
 // unexpected character) — matching how asmlex sets LEX_ERR.
+// refTryLineDirective mirrors frontend/lexer.go tryConsumeLineDirective: a
+// line-start `# <digit>+ "<file>"` (then newline/EOF) is a cpp line directive
+// the lexer consumes for position, emitting no token. Returns the position past
+// the directive (and its newline) and true on a match; (0,false) otherwise.
+func refTryLineDirective(src []byte, pos int) (int, bool) {
+	n := len(src)
+	p := pos + 1 // past '#'
+	if p >= n || src[p] != ' ' {
+		return 0, false
+	}
+	for p < n && (src[p] == ' ' || src[p] == '\t') {
+		p++
+	}
+	if p >= n || src[p] < '0' || src[p] > '9' {
+		return 0, false
+	}
+	for p < n && src[p] >= '0' && src[p] <= '9' {
+		p++
+	}
+	if p >= n || src[p] != ' ' {
+		return 0, false
+	}
+	for p < n && (src[p] == ' ' || src[p] == '\t') {
+		p++
+	}
+	if p >= n || src[p] != '"' {
+		return 0, false
+	}
+	p++
+	for p < n && src[p] != '"' && src[p] != '\n' {
+		p++
+	}
+	if p >= n || src[p] != '"' {
+		return 0, false
+	}
+	p++
+	for p < n && (src[p] == ' ' || src[p] == '\t' || src[p] == '\r') {
+		p++
+	}
+	if p < n && src[p] != '\n' {
+		return 0, false
+	}
+	if p < n {
+		p++ // consume the newline
+	}
+	return p, true
+}
+
 func refLex(src []byte) (toks []refTok, ok bool) {
 	pos := 0
 	n := len(src)
@@ -216,6 +264,11 @@ func refLex(src []byte) (toks []refTok, ok bool) {
 			emit(refTok{kind: tComma})
 		case c == '#':
 			if atLineStart {
+				if np, isDir := refTryLineDirective(src, pos); isDir {
+					pos = np
+					atLineStart = true // consumed the directive's newline
+					continue
+				}
 				pos++ // consume '#'
 				start := pos
 				for pos < n && src[pos] != '\n' {
@@ -559,8 +612,16 @@ func TestAsmLexHandCases(t *testing.T) {
 		{".word 1 << 4\n", []int{tIdent, tInt, tShl, tInt, tEOL, tEOF}},
 		// label + assorted operators
 		{"loop: x0 + x1 - 1 & 2 | 3 ^ ~4\n", []int{tIdent, tColon, tIdent, tPlus, tIdent, tMinus, tInt, tAmp, tInt, tPipe, tInt, tCaret, tTilde, tInt, tEOL, tEOF}},
-		// '#' at start of line is a comment (cpp directives are out of scope)
+		// '#' at start of line: a normal note is a line comment...
 		{"# a note\nmov x0\n", []int{tLineComment, tEOL, tIdent, tIdent, tEOL, tEOF}},
+		// ...but a cpp line directive (# <n> "<file>") emitted by the preprocessor
+		// is consumed for position, emitting no token (like the host lexer).
+		{"# 5 \"foo.s\"\nmov x0\n", []int{tIdent, tIdent, tEOL, tEOF}},
+		// consecutive directives (a file + macro boundary) are both consumed.
+		{"# 1 \"a.s\"\n# 2 \"a.s\"\nret\n", []int{tIdent, tEOL, tEOF}},
+		// a '#' line that is not a well-formed directive stays a line comment:
+		{"# 5 notaquote\nx0\n", []int{tLineComment, tEOL, tIdent, tEOL, tEOF}},
+		{"#5 \"x.s\"\nx0\n", []int{tLineComment, tEOL, tIdent, tEOL, tEOF}},
 		// local-label refs (frontend/lexer_test.go TestLexLocalLabelRef + 2-digit)
 		{"b 1f\n", []int{tIdent, tLocalRef, tEOL, tEOF}},
 		{"bne 10b cbz x0, 2f\n", []int{tIdent, tLocalRef, tIdent, tIdent, tComma, tLocalRef, tEOL, tEOF}},

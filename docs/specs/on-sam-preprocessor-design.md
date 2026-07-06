@@ -55,10 +55,14 @@ The b8d chain contract today: source bytes at page 8 offset `&0800`
 (`LEX_SRC`, 2048-byte window), `BC` = length (`src/chain_paged_driver.asm`).
 The preprocessor slots in front: input is raw source text in page-pool pages;
 output is expanded text written to `LEX_SRC`, then the existing chain runs
-unchanged. `asmlex` already lexes a line-start `#` as a whole-line comment
-(`src/asmlex.asm` header notes the preprocessor seam explicitly), and the
-parser skips comment tokens — so `# line` directives flow through with no
-`.tbn` effect, while keeping the expanded text byte-comparable to host `-E`.
+unchanged. The chain **preserves comments in the `.tbn`** (i78 source-structure
+preservation), so a `# line` directive lexed as an ordinary comment would
+wrongly appear in the output. To match the host lexer, `asmlex` therefore
+**consumes** line-start `# <n> "<file>"` directives (position markers, no
+token) via `lex_try_line_directive` — a port of `lexer.go`'s
+`tryConsumeLineDirective`; any other line-start `#` is still an ordinary
+comment. This keeps the expanded text byte-comparable to host `-E` while the
+`.tbn` byte-matches `CompactTBNBytes` over the same expanded text (i31b-b4b).
 
 **Expanded-text ceiling.** Expansion output must fit the `LEX_SRC` window;
 over-cap is an explicit user-facing error tag, never a silent truncation.

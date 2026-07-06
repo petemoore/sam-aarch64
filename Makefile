@@ -1729,6 +1729,25 @@ $(BUILD)/b8d_chain_paged_driver.bin $(BUILD)/b8d_chain_paged_driver.map: src/cha
 
 b8d-chain-paged-driver-z80: $(BUILD)/b8d_chain_paged_driver.bin $(BUILD)/b8d_chain_paged_driver.map
 
+# prep-chain-paged-driver-z80 — preprocessor wired in front of the b8d chain
+# (i31b-b4b). Same base as b8d-chain-paged-driver-z80 plus -D PREP_CHAIN_DRIVER=1
+# (activates the prep_chain_paged entry) and a SECOND --importfile for the prep
+# window's symbols (prep_run/PREP_ERR/PREP_OUT). The prep window image lives in
+# pages 10/11 (LMPR=&2A); the parser window stays in pages 8/9. Entry
+# prep_chain_paged: source text -> prep_run -> expanded text -> b8d chain -> .tbn.
+$(BUILD)/prep_chain_paged_driver.bin $(BUILD)/prep_chain_paged_driver.map: src/chain_paged_driver.asm $(asm_deps/src/chain_paged_driver.asm) $(BUILD)/asmparse_paged.sym $(BUILD)/asmprep_paged.sym
+	@mkdir -p $(BUILD)
+	pyz80 -D CHAIN_PAGED_DRIVER=1 -D COMPACT_WALK_REAL_ENCODER=1 \
+	    -D INSN_RUN_FOLD_ONLY=1 -D CEMIT_BUFS_EXTERNAL=1 \
+	    -D BUILD_TESTS_ENCODE=1 -D PREP_CHAIN_DRIVER=1 \
+	    --importfile=$(BUILD)/asmparse_paged.sym \
+	    --importfile=$(BUILD)/asmprep_paged.sym \
+	    --obj=$(BUILD)/prep_chain_paged_driver.bin \
+	    --mapfile=$(BUILD)/prep_chain_paged_driver.map \
+	    src/chain_paged_driver.asm
+
+prep-chain-paged-driver-z80: $(BUILD)/prep_chain_paged_driver.bin $(BUILD)/prep_chain_paged_driver.map
+
 # tbn-render-driver-z80 — standalone driver for the `.tbn` → source-text
 # renderer (i365a).  org &8000; includes reader.asm + tbn_render.asm +
 # paged_bodies.asm.  The renderer reuses build/disasm.bin (the harness loads it
@@ -1772,7 +1791,7 @@ netboot-z80-routines: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-bu
 # lands with the end-to-end .include exercise (i371).
 NETBOOT_PRIVATE_ARTIFACTS := $(if $(wildcard src/netboot/bootloader_chunk1_data.asm),netboot-eeprom-flash-chunk1)
 .PHONY: netboot-z80-artifacts
-netboot-z80-artifacts: netboot-z80-routines netboot-http-boot-debug netboot-http-smoke-boot editmodel-z80 editmodel-paged-z80 pagepool-z80 spill-z80 viewport-z80 asmlex-z80 asmparse-z80 asmprep-z80 prep-reader-z80 asmprep-paged-z80 prep-paged-driver-z80 asmparse-paged-z80 parse-paged-driver-z80 chain-paged-driver-z80 b8d-chain-paged-driver-z80 pass1-ir-z80 compact-ir-z80 compact-ser-z80 sysreg-data netboot-serve-record netboot-server-record netboot-server-largefile-record netboot-server-largefile-manifest-record disk-record tbn-render-driver-z80 netboot-render-disk-probe netboot-render-disk-boot-record netboot-assemble-disk-boot-record netboot-assemble-first-demo-record netboot-assemble-first-serve-record release-unstripped-tbn $(NETBOOT_PRIVATE_ARTIFACTS)
+netboot-z80-artifacts: netboot-z80-routines netboot-http-boot-debug netboot-http-smoke-boot editmodel-z80 editmodel-paged-z80 pagepool-z80 spill-z80 viewport-z80 asmlex-z80 asmparse-z80 asmprep-z80 prep-reader-z80 asmprep-paged-z80 prep-paged-driver-z80 asmparse-paged-z80 parse-paged-driver-z80 chain-paged-driver-z80 b8d-chain-paged-driver-z80 prep-chain-paged-driver-z80 pass1-ir-z80 compact-ir-z80 compact-ser-z80 sysreg-data netboot-serve-record netboot-server-record netboot-server-largefile-record netboot-server-largefile-manifest-record disk-record tbn-render-driver-z80 netboot-render-disk-probe netboot-render-disk-boot-record netboot-assemble-disk-boot-record netboot-assemble-first-demo-record netboot-assemble-first-serve-record release-unstripped-tbn $(NETBOOT_PRIVATE_ARTIFACTS)
 
 ci-netboot-z80: netboot-z80-artifacts
 	cd tools/sampage && go test ./...

@@ -389,4 +389,119 @@ b8d_parse_err:
 B8D_SAVED_LMPR: defs 1
 B8D_SAVED_SP:   defs 2
 
+
+if defined(PREP_CHAIN_DRIVER)
+; ===========================================================================
+; prep_chain_paged — run the preprocessor in front of the b8d assemble chain
+; (i31b-b4b), entirely on-Z80 over the paged arrangement.
+;
+; This extends the b8d two-image pattern with a THIRD window: the prep window
+; (build/asmprep_paged.bin) lives in physical pages 10 (section A = the PREP
+; buffers PREP_OUT/PREP_SRC/PREP_FILES) and 11 (section B = prep code), reached
+; via LMPR=&2A.  The parser window (build/asmparse_paged.bin) stays in pages 8/9
+; (LMPR=&28); ENCTAB in page 4 (LMPR=&24).  This combined driver runs in section
+; C/D (HMPR=5) and imports symbols from BOTH window .syms
+; (--importfile asmprep_paged.sym + asmparse_paged.sym): prep_run/PREP_ERR/
+; PREP_OUT from the prep window, parse_run/LEX_SRC/... from the parser window.
+;
+; Flow:  source text (planted at page-10 PREP_SRC) -> prep_run -> expanded text
+;        at page-10 PREP_OUT -> copied to page-8 LEX_SRC -> b8d_chain_paged ->
+;        .tbn at page-8 B8D_SER_OUT.
+;
+; Entry: BC = source byte length (source at page-10 PREP_SRC = &2000; the
+;        memory reader's PREP_FILES/PREP_PATH/... pre-planted by the harness).
+; Exit:  expanded text left resident at page-10 PREP_OUT (&0000), length in
+;        PC_EXP_LEN (so the harness can gate expanded-text byte-equality without
+;        re-reading it from LEX_SRC, which parse_run leaves intact but page-10 is
+;        untouched by the chain); .tbn at page-8 B8D_SER_OUT (&2F00), length in
+;        ser_out_len.  LMPR and SP restored to entry values.
+; On error: prep error -> fail tag &e0; expanded text over the LEX_SRC window
+;        ceiling -> fail tag &e1 (explicit, never a silent truncation).
+;
+; The expanded text is copied page-10 -> page-8 through a staging buffer in the
+; free section-D gap between this driver's footprint (code + state end ~&CEDD)
+; and the b8d compact buffers (COMPACT_SIDECAR=&F200 upward) — page 6, HMPR-stable
+; and unused during the prep phase (b8d has not run yet).  The prep phase uses a
+; deep stack in that same gap since prep_run recurses through macro/include
+; expansion; the b8d chain's shallow &C0FE stack would risk the section-C driver
+; code below &C000.
+; ===========================================================================
+PC_PREP_LMPR:   equ &2A          ; secA=page10 (PREP bufs), secB=page11 (prep code)
+PC_STAGING:     equ &D000        ; handoff staging (section-D gap, 2 KB to &D800)
+PC_PREP_SP:     equ &F000        ; prep-phase stack top (grows down to &D800, ~6 KB)
+PC_LEXSRC_CAP:  equ 2048         ; LEX_SRC window size (expanded-text ceiling)
+
+prep_chain_paged:
+                ; --- prep phase: save boot state, relocate to a deep stack ---
+                in      a, (&fa)
+                ld      (PC_SAVED_LMPR), a
+                ld      hl, 0
+                add     hl, sp
+                ld      (PC_SAVED_SP), hl
+                ld      sp, PC_PREP_SP
+
+                ; run prep in its window (BC = source length on entry)
+                ld      a, PC_PREP_LMPR
+                out     (&fa), a
+                call    prep_run                ; BC in = src len; BC out = expanded len
+                ld      a, (PREP_ERR)           ; page-11 (section B), mapped now
+                or      a
+                jr      nz, pc_prep_err
+
+                ; expanded length; over-cap check vs the LEX_SRC window
+                ld      (PC_EXP_LEN), bc
+                ld      hl, PC_LEXSRC_CAP
+                or      a
+                sbc     hl, bc                  ; CAP - len; CF if len > CAP
+                jr      c, pc_overcap
+                ld      a, b                    ; empty output? skip (LDIR BC=0 = 64K)
+                or      c
+                jr      z, pc_handoff_done
+
+                ; --- handoff copy 1: PREP_OUT (page-10 &0000) -> staging ---
+                ld      hl, PREP_OUT            ; &0000 (section A = page 10)
+                ld      de, PC_STAGING          ; &D000 (section D = page 6)
+                ldir                            ; BC still = expanded len
+
+                ; --- handoff copy 2: staging -> LEX_SRC (page-8 &0800) ---
+                ld      a, &28                  ; LMPR=&28: secA=page8
+                out     (&fa), a
+                ld      hl, PC_STAGING
+                ld      de, LEX_SRC             ; &0800 (section A = page 8)
+                ld      bc, (PC_EXP_LEN)
+                ldir
+pc_handoff_done:
+                ; --- close the prep bracket ---
+                ld      a, (PC_SAVED_LMPR)
+                out     (&fa), a
+                ld      hl, (PC_SAVED_SP)
+                ld      sp, hl
+
+                ; --- chain phase: source now at page-8 LEX_SRC (b8d owns its
+                ; own LMPR/SP bracket) ---
+                ld      bc, (PC_EXP_LEN)
+                call    b8d_chain_paged
+                ret
+
+pc_prep_err:
+                ld      a, (PC_SAVED_LMPR)
+                out     (&fa), a
+                ld      hl, (PC_SAVED_SP)
+                ld      sp, hl
+                ld      a, &e0
+                jp      fail_with_tag
+pc_overcap:
+                ld      a, (PC_SAVED_LMPR)
+                out     (&fa), a
+                ld      hl, (PC_SAVED_SP)
+                ld      sp, hl
+                ld      a, &e1
+                jp      fail_with_tag
+
+; prep_chain driver state cells (section C, HMPR-stable).
+PC_SAVED_LMPR:  defs 1
+PC_SAVED_SP:    defs 2
+PC_EXP_LEN:     defs 2
+endif   ; defined(PREP_CHAIN_DRIVER)
+
 endif   ; defined(COMPACT_WALK_REAL_ENCODER)
