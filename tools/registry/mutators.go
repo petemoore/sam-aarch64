@@ -609,11 +609,12 @@ func runAdd(args []string, paths mutatorPaths) {
 
 // runSplit implements `split --parent iN --title … [--desc …] [--status …] [--owner …] [--kind …] [--pr N [--role …]] [--dep …]… [--ref …]…`.
 // Promotes the parent to kind:umbrella, adds a leaf child whose id is
-// TOOL-DETERMINED from the parent (nextSubID — the caller never supplies it),
-// and rewrites dependents: any item with depends_on:[parentID] has parentID
-// replaced by all children (conservative reading — spec §"Dependencies":
-// "Split-rewrites-dependents"). This is the only way to create a sub-item; it
-// subsumes "add another child to an existing umbrella" (call it again).
+// TOOL-DETERMINED from the parent (nextSubID — the caller never supplies it).
+// Existing dependents of the parent are LEFT pointing at it (now the umbrella)
+// so they stay gated on the whole deliverable via the umbrella's derived status
+// — NOT rewritten onto the child leaves, which recreated the i87b done-leaf
+// trap (i366). This is the only way to create a sub-item; it subsumes "add
+// another child to an existing umbrella" (call it again).
 func runSplit(args []string, paths mutatorPaths) {
 	fs := flag.NewFlagSet("split", flag.ExitOnError)
 	parentID := fs.String("parent", "", "existing item to promote to umbrella (its id determines the child id)")
@@ -752,33 +753,33 @@ func runSplit(args []string, paths mutatorPaths) {
 		}
 	}
 
-	// All children of this parent after the split (existing + new).
-	allChildren := append(existingChildren, childID)
-
-	// Rewrite dependents: any item with depends_on containing parentID gets
-	// parentID replaced by all allChildren (conservative reading).
+	// Dependents are LEFT pointing at the parent, which is now the umbrella
+	// (i366). The umbrella carries derived status — OPEN until every child is
+	// DONE/WONTFIX — so a dependent on it is gated on the WHOLE deliverable, and
+	// `ready` never surfaces it while any child is open. Rewriting the edge onto
+	// the child leaves instead (the former behaviour) recreated the i87b done-leaf
+	// trap: the first split repointed a dependent onto the sole child, and a later
+	// sibling was never added back, so when that child went DONE the dependent read
+	// as satisfied while its real prerequisite (an OPEN sibling) was unfinished.
+	// A dependent that genuinely needs only one leaf is repointed explicitly with
+	// `dep rm`/`dep add` — the umbrella is the safe default (CLAUDE.md "Depend on
+	// the umbrella for the whole of a multi-part deliverable").
+	dependentCount := 0
 	for i := range reg.Items {
 		if reg.Items[i].ID == *parentID || reg.Items[i].ID == childID {
 			continue
 		}
-		newDeps := []string{}
-		rewrote := false
 		for _, dep := range reg.Items[i].DependsOn {
 			if dep == *parentID {
-				newDeps = append(newDeps, allChildren...)
-				rewrote = true
-			} else {
-				newDeps = append(newDeps, dep)
+				dependentCount++
+				break
 			}
-		}
-		if rewrote {
-			reg.Items[i].DependsOn = dedupStrings(newDeps)
 		}
 	}
 
 	applyAndCommit(reg, paths)
-	fmt.Printf("registry: split %s → umbrella; added child %s; rewrote dependents onto %v\n",
-		*parentID, childID, allChildren)
+	fmt.Printf("registry: split %s → umbrella; added child %s; %d dependent(s) left pointing at the umbrella %s\n",
+		*parentID, childID, dependentCount, *parentID)
 	// Report where the child landed in the ready queue (it takes the parent's
 	// rank when the parent was ranked; see the placement seed above).
 	if paths.priorityYAML != "" {
@@ -1187,17 +1188,4 @@ func (m *multiFlag) String() string { return strings.Join(*m, ",") }
 func (m *multiFlag) Set(v string) error {
 	*m = append(*m, v)
 	return nil
-}
-
-// dedupStrings removes duplicate strings, preserving first-occurrence order.
-func dedupStrings(ss []string) []string {
-	seen := map[string]bool{}
-	out := []string{}
-	for _, s := range ss {
-		if !seen[s] {
-			seen[s] = true
-			out = append(out, s)
-		}
-	}
-	return out
 }

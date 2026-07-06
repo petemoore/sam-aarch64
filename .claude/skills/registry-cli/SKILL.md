@@ -47,10 +47,11 @@ the YAML + regenerated `.md` together.
 - New question: `build/registry add --space questions --owner pete --desc "…"` (id auto-allocated).
 - Sub-item: `build/registry split --parent iNN --title "…" [--desc …] [--status …] [--owner …] [--dep …]… [--ref …]…`
   promotes the parent to an umbrella and adds a child whose id is determined from the
-  parent (`iNN`→`iNNa`, `iNNx`→`iNNx-b1`). It auto-rewrites the parent's dependents onto
-  the children, and the child takes the parent's queue rank (the parent leaves the queue
-  as an umbrella). It WARNS if the parent is DONE (a DONE item becoming a derived-status
-  umbrella is unusual).
+  parent (`iNN`→`iNNa`, `iNNx`→`iNNx-b1`). The parent's existing dependents are LEFT
+  pointing at it (now the umbrella) so they stay gated on the whole deliverable (i366);
+  the child takes the parent's queue rank (the parent leaves the queue as an umbrella).
+  It WARNS if the parent is DONE (a DONE item becoming a derived-status umbrella is
+  unusual).
 
 ## Update
 
