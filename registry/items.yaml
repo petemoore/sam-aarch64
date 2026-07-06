@@ -6501,9 +6501,11 @@
   title: "Local incremental build: TestBootRecordAssemblerRecordVessel fails on stale build/ (enctab.enc vs vessel out of sync); CI-green"
   description: |
     On the Pi host, TestBootRecordAssemblerRecordVessel (the i319b-b2 gate) fails locally: 'enctab.enc page 4 bytes differ ... got &40 want &45 — the boot's HLOAD from the record did not deliver it' (the boot otherwise reaches main_assemble, finalPC=&9D21 reachedStop). FAILS on clean origin/main (proven by stash tests in the i357 AND i360 sessions), UNRELATED to any source change. CI is GREEN — netboot-z80 ran 2m26s->success on #851's run 28694694321 and #850's merge run — so this is LOCAL-ENVIRONMENT-ONLY, i352-class (but a different mechanism: i352 = SimCoupe emulator; this = the Go koron harness + the pyz80 disk-record build). UPDATE (i360 session, 2026-07-04): 'make -B disk-record' (a FORCED full rebuild of the entire vessel chain) STILL fails identically — so this is NOT the incremental-staleness / missing-Makefile-prereq hypothesis from the i357 partial diagnosis (a forced rebuild would clear that). A fresh local build genuinely produces a malformed vessel; a prior-session test_record.mgt (built when the env worked) passed. NEW PRIME SUSPECT: this host's pyz80 differs from CI's pinned pyz80 (CI: pip install git+github.com/simonowen/pyz80), so disk-record assembles a subtly-different/wrong vessel locally (pyz80_packaging asserts byte-identical output only for a matched version). NEXT: diff the locally-built build/test_record.mgt page-4 payload vs build/enctab.enc byte-by-byte to see WHAT is delivered (&40...); compare local pyz80 version/commit vs CI's; if they differ, pin the local pyz80 and re-test. Impairs local dev/verification of the disk-record/vessel path; not a CI gate. Low priority; saves the next local session the re-diagnosis.
-  status: OPEN
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 888, role: completing}
 
 - id: i362
   title: "Record-body read-back tool: expose a served record-relative sector read so a shot can confirm what was written INTO a Trinity record's disk image (not just the card record-LIST)"
@@ -6710,10 +6712,12 @@
 - id: i367
   title: "TestBootRecordAssemblerRecordVessel fails on private rig: page-4 enctab byte-compare &40≠&45"
   description: |
-    Pre-existing failure surfaced during i365d-b2b (2026-07-05). TestBootRecordAssemblerRecordVessel (tools/netboot-oracle/z80/assembler_record_vessel_test.go) FAILS on the private-capture rig: it boots the BUILD_TESTS AUTOasm record vessel green and reaches main_assemble (all boot self-tests pass), but its post-boot assertion that runtime physical page 4 byte-0 equals build/enctab.enc byte-0 fails — got &40, want &45 ('E', the ENC1 magic). i.e. load_enctab does not leave the raw enctab.enc header resident at page-4 offset 0 (it HLOADs then processes the DIFA header), yet the test compares page-4[0:len] to the raw file. Since the assembler boots green + reaches main_assemble, enctab is functionally loaded fine; only the raw-byte assertion is wrong (or the ENC1 header format post-dates the assertion). SKIP_PRIVATE_TESTS-gated so it SKIPS in public CI (main shows green without ever running it) — a latent failure. Confirmed pre-existing: assembler_record_vessel_test.go, src/loader.asm, src/assembler.asm byte-identical to origin/main; a full 'make netboot-z80-artifacts' fresh rebuild still fails. Orthogonal to i365d-b2b (which passes). Fix: correct the test's expected page-4 layout to match what load_enctab leaves (skip/adjust for the ENC1/DIFA header), or confirm+fix a real HLOAD-placement bug. Likely applies to the zx013 page-13 compare in the same test too.
-  status: OPEN
+    RESOLVED (root cause found, not the original hypothesis). Symptom: TestBootRecordAssemblerRecordVessel's post-boot page-4 enctab byte-compare fails (got &40 want &45) on the private-capture rig; SKIP_PRIVATE_TESTS-gated so public CI skips it (main shows green without ever running it). ROOT CAUSE: a StopPC paging-ambiguity bug in the TEST, not a malformed build (i361) nor a wrong raw-byte assertion (i367's original guess). main_assemble (&9D21) is a section-C logical address; the SAME address is a live instruction boundary in the page-15 disasm self-test payload, which runs EARLIER in the boot (paged_call, section C = page 15) than main_assemble. StopPC=&9D21 stopped at that first page-15 alias — before load_enctab HLOADed the enctab into page 4 — so the byte-compares saw an unloaded page 4. Proven by instrumenting the koron harness: only 4 writes ever hit page 4 in the truncated run, ENC1 never written to RAM, load_enctab's validation reads never fired; but running to the REAL main_assemble (section C = page 1) leaves page 4 == enctab.enc byte-for-byte (all 3970 B). FIX: page-qualify the stop — new harness Entry.StopHMPRPage (nil default = unchanged) makes StopPC count only when the intended physical page is mapped into section C; the vessel test sets it to the boot exec window (page 1). Resolves i361 too (its pyz80/stale-build hypotheses disproven — the vessel is fine).
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 888, role: completing}
 
 - id: i368
   title: "i365d-b2c demo: on-screen RST&10 progress messages ('Generating source…' / 'Generating image…')"

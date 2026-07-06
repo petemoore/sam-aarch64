@@ -722,6 +722,17 @@ type Entry struct {
 	// pushed program RETs back into trinload. Zero disables it.
 	StopPC     uint16
 	StopPCSkip int
+	// StopHMPRPage, when non-nil, qualifies the StopPC match: the stop only
+	// counts when the given physical page is mapped into section C (HMPR&0x1F ==
+	// *StopHMPRPage). A StopPC in the &8000-&BFFF section-C window is a *logical*
+	// address, and the same logical address is a live instruction boundary in
+	// every paged payload that runs there (e.g. a page-15 disasm self-test and
+	// the main program both execute at &9D21). Without this qualifier a StopPC on
+	// the main program can false-trigger inside an unrelated payload that happens
+	// to run earlier in the boot — stopping the run before the intended code is
+	// reached. Set it to the section-C page the intended routine runs from (the
+	// boot exec window). Nil (every existing caller) leaves StopPC address-only.
+	StopHMPRPage *uint8
 	// Trace, when non-nil, is called with the CPU's PC immediately before each
 	// instruction is stepped — the observation hook the i190a boot-trace uses to
 	// follow the real patched-ROM → EEPROM-fetch → JP &4000 control flow through
@@ -927,7 +938,8 @@ func (mac *Machine) runLoop(name string, cpu *z80.CPU, in Entry, capIsError bool
 		if in.Trace != nil {
 			in.Trace(cpu.PC)
 		}
-		if in.StopPC != 0 && cpu.PC == in.StopPC {
+		if in.StopPC != 0 && cpu.PC == in.StopPC &&
+			(in.StopHMPRPage == nil || mac.m.pager.HMPR&0x1F == *in.StopHMPRPage) {
 			stopVisits++
 			if stopVisits > in.StopPCSkip {
 				reachedStop = true

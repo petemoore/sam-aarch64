@@ -76,10 +76,20 @@ func TestBootRecordAssemblerRecordVessel(t *testing.T) {
 	// continuation, then the boot HLOADs ~70 more sectors of sibling payloads
 	// (enctab/sd13/zx013/d15 + the BUILD_TESTS payloads) through real B-DOS
 	// hooks + the bit-banged SPI model, then the full self-test ladder runs.
+	//
+	// StopHMPRPage page-qualifies the stop. main_assemble (&9D21) is a section-C
+	// logical address, and that same address is a live instruction boundary in
+	// the page-15 disasm self-test payload, which runs EARLIER in the boot (via
+	// paged_call, section C = page 15) than main_assemble does. Without the page
+	// qualifier the run stops at that first page-15 alias — before load_enctab
+	// has HLOADed the enctab into page 4 — so the payload byte-compares below see
+	// a page 4 that is not yet loaded. The assembler runs from the boot exec
+	// window (section C = page 1), so stop only when page 1 is mapped.
+	stopPage := uint8(page)
 	from := len(*lg)
 	res, err := mac.ContinueFrom(brMain, z80h.Entry{
 		StepCap: 800_000_000, FrameIntPeriod: 60000,
-		StopPC: mainAssemble,
+		StopPC: mainAssemble, StopHMPRPage: &stopPage,
 	})
 	if err != nil {
 		t.Fatalf("boot_record -> assembler record faulted: %v (PC=&%04X)", err, res.PC)
