@@ -17,6 +17,15 @@ fixture `.s` is assembled by our toolchain(s) and byte-compared against GNU
 | `paged/` | 19 | paged IN/OUT at scale (>16 KB output) | container (`make ci-paged`) |
 | `release/` | 1 pair | the vendored spectrum4 release (`release.s` + GNU `release.img`) — the 3-way release gate | container (`tools/run-release-gate.sh`) |
 
+**Preprocessor-bearing fixtures.** The corpora above are all *already
+preprocessed* (no `.macro`/`.if`/`.include`). `test_print_w0.s` is a
+top-level exception: a self-contained spectrum4 slice that still contains the
+`_str` macro, kept as the smallest real macro consumer for the on-SAM
+preprocessor's end-to-end gate
+(`tools/netboot-oracle/z80/prep_chain_paged_test.go`, i31b-b4c). It is read
+from disk and gated two ways — expanded text byte-equal to host `-E`, then
+text→`.tbn` byte-equal to host `CompactTBNBytes` through the full paged chain.
+
 **Running a sweep:** each SimCoupé corpus dir carries a `run-roundtrip.sh`
 that sweeps its `sources/*.s` through `tools/run-roundtrip.sh <corpus>`;
 the `make test-{core,symbols,operands,paged}` / `ci-{core,symbols,operands,paged}`

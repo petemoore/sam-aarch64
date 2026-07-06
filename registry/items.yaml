@@ -599,10 +599,12 @@
   title: "Brick 4c: spectrum4 corpus slice (tests/test_print_w0.s) + end-to-end corpus gate"
   description: |
     Prove the b4b-wired prep->b8d chain on a real spectrum4 slice. Author tests/test_print_w0.s — a self-contained excerpt of spectrum4's print_w0 test exercising the _str macro (the smallest real macro consumer, spec section 7) plus adrp/add/:lo12: relocations. Extend the b4b end-to-end harness gate (prep_chain_paged_test.go) to read it from disk and gate it two ways: expanded text byte-equal to host -E, then text->.tbn byte-equal to host CompactTBNBytes through the full paged chain. Fits current oracle-fixture buffers. The PP_PREP i2-pool tag + right-sizing the paged/flat prep buffers for the full corpus / large real includes is split to i373 (gated on q83, the buffer-architecture decision). Depends on b4b.
-  status: OPEN
+  status: DONE
   depends_on: [i31b-b4b]
   kind: leaf
   owner: agent
+  prs:
+    - {num: 884, role: completing}
   parent: i31b-b4
 
 - id: i31b-b4d
