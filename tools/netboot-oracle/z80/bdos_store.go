@@ -49,14 +49,12 @@ import (
 const (
 	rst8HookAddr = 0x0008 // the RST 8 vector the SAMDOS/B-DOS hooks dispatch through
 
-	bdHookHRECORD   = 0x9C // record select (156)
-	bdHookALHK      = 136  // auto-load hook (0x88): B-DOS 1.5t HAUTO (real &9DBD) stages the selected record's AUTO file and returns E=1; the ROM1 continuation at &E274+ then loads+runs it (i328; KEYBOARD_BOOT_WORKAROUND.md §2 BOOT D8DCH)
-	bdHookHGTHD     = 129  // get file header (lookup by name) — server-side, not modelled here
-	bdHookHSAVE     = 132  // save whole file
-	bdHookHWSAD     = 149  // write raw 512-byte sector at (D=track, E=sector) from HL (bdos15a.src.txt:528-531)
-	bdHookHRSAD     = 160  // read raw 512-byte sector at (D=track, E=sector) into HL
-	bdHookListRead  = 161  // card-absolute list-sector read: E=listSector (1-based), HL=dest (512 bytes)
-	bdHookListWrite = 162  // card-absolute list-sector write: E=listSector (1-based), HL=source (512 bytes)
+	bdHookHRECORD = 0x9C // record select (156)
+	bdHookALHK    = 136  // auto-load hook (0x88): B-DOS 1.5t HAUTO (real &9DBD) stages the selected record's AUTO file and returns E=1; the ROM1 continuation at &E274+ then loads+runs it (i328; KEYBOARD_BOOT_WORKAROUND.md §2 BOOT D8DCH)
+	bdHookHGTHD   = 129  // get file header (lookup by name) — server-side, not modelled here
+	bdHookHSAVE   = 132  // save whole file
+	bdHookHWSAD   = 149  // write raw 512-byte sector at (D=track, E=sector) from HL (bdos15a.src.txt:528-531)
+	bdHookHRSAD   = 160  // read raw 512-byte sector at (D=track, E=sector) into HL
 
 	bdUIFALen = 48 // the UIFA HSAVE reads at IX (bdos_save_hook stages it at &4B00)
 
@@ -89,7 +87,8 @@ const (
 
 // CardModel is the harness model of a Trinity SD card: a central record list (in
 // the boot area) and per-record sector data (at least sector 0, the first data
-// sector). Used by the HRSAD and bdHookListRead handlers to serve reads.
+// sector). Used by the HRSAD handler to serve reads, and by ListSector to model a
+// raw CMD17 read of the card's list area.
 //
 // Linear sector index within a record = track*10 + (sector-1), matching the
 // `conv.de` formula in the SAMDOS source (D=track 0-79, E=sector 1-10).
@@ -101,18 +100,15 @@ const (
 // only that there is no dedicated RST-8 hook named "list records" — which is why
 // EVERY image's list access is the raw CMD17/CMD24 SPI path (NETBOOT_REAL_LISTREAD,
 // modelled at the SPI level by sdcard.go and hardware-proven by sd_push/i319a).
-// The synthetic hook 161 (bdHookListRead, served from this model's ListSector)
-// survives only behind the AllowSyntheticListHooks opt-in — on real B-DOS 1.5t
-// that code is HLDBK and wedges the machine (i70e). Per-record identity (the
-// "BDOS" stamp at +232 and the disk label at +210) is still read via HRSAD after
-// HRECORD-selecting the record — that remains the selected-record view,
-// bdos_inspect_record.
+// Per-record identity (the "BDOS" stamp at +232 and the disk label at +210) is
+// still read via HRSAD after HRECORD-selecting the record — that remains the
+// selected-record view, bdos_inspect_record.
 type CardModel struct {
 	// RecordList holds the 16-byte record-list entries, indexed by record number
 	// minus 1 (entry 0 = record 1). Entries beyond len(RecordList) read as all-zero.
 	// Each entry is the full 16-byte record name (space-padded, bit 7 of byte 0 =
 	// write-protect; free ⇔ (byte0 & 0x7F) == 0 — bdos15a.src.txt:946-948 frec3x).
-	// Served to Z80 code via ListSector / bdHookListRead.
+	// Served to Z80 code via ListSector (the raw CMD17 list-read model).
 	RecordList [][16]byte
 	// Sectors holds the 512-byte sectors for each record (outer index = record
 	// number minus 1, inner index = linear sector within the record:
@@ -273,60 +269,24 @@ type SectorWrite struct {
 	Data      [bdSectorSize]byte // the 512 bytes written
 }
 
-// ListWrite is one captured BD_HOOK_LISTWRITE: a card-absolute record-list sector
-// written back (the bdos_claim_record read-modify-write that marks a pushed record
-// used). It carries the 1-based list sector, and — decoded from the modified
-// sector against the CardModel's prior state — the single record whose 16-byte
-// name entry the write changed and the new name. Exactly one entry changes per
-// claim (the safety invariant); ChangedRecord is that record (0 if none changed).
-type ListWrite struct {
-	ListSector    int                // the 1-based list sector written
-	ChangedRecord int                // the 1-based record whose entry the write changed (0 = none)
-	Name          string             // the new record name (trailing spaces trimmed)
-	Entry         [16]byte           // the raw 16-byte entry written for ChangedRecord
-	RawSector     [bdSectorSize]byte // the full 512 bytes the Z80 wrote back (the unmediated
-	// read-modify-write result, captured before reconciliation — lets a safety test
-	// assert byte-for-byte that ONLY the claimed 16-byte slot changed vs the prior sector).
-}
-
 // BDOSStore models the B-DOS record store for the netboot write-out. Construct
 // with NewBDOSStore and attach with Machine.AttachBDOS.
 type BDOSStore struct {
 	selected     int           // last HRECORD selection; -1 = none selected yet
 	saves        []BDOSSave    // captured HSAVEs, in order
 	sectorWrites []SectorWrite // captured HWSAD writes, in order
-	listWrites   []ListWrite   // captured BD_HOOK_LISTWRITE record-list writes, in order
 	boots        []int         // records ALHK-booted, in order (the i122a boot-a-record primitive)
 	card         *CardModel    // nil = no card modelled; HRSAD returns all-zero
-	// usedRecords tracks records that have been HSAVE'd this session. After each
-	// HSAVE the selected record is marked here so that a subsequent
-	// bdos_find_free_record (via bdHookListRead) sees it as named rather than free,
-	// allowing multi-file provisioning to pick a different record for each file
-	// without an attached CardModel. Records in usedRecords with no card model appear
-	// in the list sector with entry[0]='U' (named/used, bit 7 clear, nonzero).
-	usedRecords map[int]bool
 	// spiCard, when non-nil (MirrorUsedRecordsTo), receives MarkRecordListUsed
 	// after every HSAVE, so a raw CMD17 list read (the NETBOOT_REAL_LISTREAD
-	// scan path) sees HSAVE'd records as used — the SPI-visible twin of
-	// usedRecords (i70e). Without the bridge, multi-file provisioning against
-	// the SPI card would re-pick the same "free" record for every file.
+	// scan path) sees HSAVE'd records as used (i70e). Without the bridge,
+	// multi-file provisioning against the SPI card would re-pick the same "free"
+	// record for every file.
 	spiCard *SDCard
-	// AllowSyntheticListHooks opts in to serving the harness-invented list hooks
-	// 161/162 (BD_HOOK_LISTREAD/LISTWRITE). Default FALSE: a run that issues them
-	// panics, because on real B-DOS 1.5t those codes dispatch to REAL handlers
-	// (161 = HLDBK, 162 = &5E09) that drop into the DI'd, busy-polled,
-	// non-abortable SD driver with the caller's registers — a hard machine wedge
-	// (the 2026-07-03 i70b hardware shot; i70e). Only scan-logic unit tests that
-	// deliberately exercise bdos_seam's NETBOOT_SYNTHETIC_LIST_HOOKS build set
-	// this; a SHIPPED image must use the real CMD17/CMD24 list path
-	// (NETBOOT_REAL_LISTREAD), which the harness models at the SPI level
-	// (sdcard.go), so an image-level test that trips this panic has caught a
-	// real would-wedge-hardware bug.
-	AllowSyntheticListHooks bool
 }
 
 // NewBDOSStore returns a store with no record selected and no saves recorded.
-func NewBDOSStore() *BDOSStore { return &BDOSStore{selected: -1, usedRecords: map[int]bool{}} }
+func NewBDOSStore() *BDOSStore { return &BDOSStore{selected: -1} }
 
 // MirrorUsedRecordsTo bridges HSAVE bookkeeping to the SPI card model: after
 // every HSAVE the selected record is marked used in sd's record-LIST bytes
@@ -344,11 +304,6 @@ func (s *BDOSStore) Saves() []BDOSSave { return s.saves }
 // Each entry carries the record that was selected when the write ran, the
 // linear sector index (track*10 + (sector-1)), and the 512 bytes written.
 func (s *BDOSStore) SectorWrites() []SectorWrite { return s.sectorWrites }
-
-// ListWrites returns the captured record-list sector writes (bdos_claim_record),
-// in order. Each carries the list sector, the single record whose entry changed,
-// and the new name — so a claim test asserts which record was marked used.
-func (s *BDOSStore) ListWrites() []ListWrite { return s.listWrites }
 
 // Boots returns the records ALHK-booted, in order — each is the record that was
 // HRECORD-selected when the auto-load hook fired. On real hardware ALHK stages
@@ -397,16 +352,13 @@ func (s *BDOSStore) handle(cpu *z80.CPU, mac *Machine, retAddr uint16) uint16 {
 		}
 		save := decodeBDOSSave(s.selected, u)
 		s.saves = append(s.saves, save)
-		// Mark the selected record as used so a subsequent bdos_find_free_record
-		// (via bdHookListRead) sees it as named rather than free. This lets
-		// multi-file provisioning pick a different first-free record for each file
-		// (D2: store_begin calls bdos_find_free_record per file; without this the
-		// list reads as all-zero = all free, and every file picks record 1).
-		if s.selected > 0 {
-			s.usedRecords[s.selected] = true
-			if s.spiCard != nil {
-				s.spiCard.MarkRecordListUsed(s.selected)
-			}
+		// Mirror the selected record into the SPI card's record-LIST bytes so a
+		// subsequent raw-CMD17 bdos_find_free_record scan sees it as named rather
+		// than free (multi-file provisioning picks a different first-free record
+		// per file; without this the list reads as all-zero = all free, and every
+		// file picks record 1).
+		if s.selected > 0 && s.spiCard != nil {
+			s.spiCard.MarkRecordListUsed(s.selected)
 		}
 		// Write-back (i144): copy the saved file's bytes from its source page into
 		// the selected record's sectors, so a follow-up HRSAD reads the file back
@@ -457,56 +409,6 @@ func (s *BDOSStore) handle(cpu *z80.CPU, mac *Machine, retAddr uint16) uint16 {
 		for i, b := range data {
 			mac.m.poke(dest+uint16(i), b)
 		}
-	case bdHookListRead:
-		// Card-absolute list-sector read: E = 1-based list-sector number, HL = dest.
-		// Writes 512 bytes (32 × 16-byte record-list entries) to memory at HL.
-		// This models the result of a raw SD CMD17 single-block read at the
-		// card-absolute LBA of the list sector — NOT record-clamped, unlike HRSAD.
-		// Serving it requires the explicit AllowSyntheticListHooks opt-in: hook
-		// 161 does not exist on real B-DOS 1.5t (it is HLDBK there) and wedges
-		// real hardware (i70e).
-		s.requireSyntheticListHooks(hook, retAddr)
-		listSec := int(cpu.DE.Lo)
-		dest := cpu.HL.U16()
-		var data [bdSectorSize]byte
-		if s.card != nil {
-			data = s.card.ListSector(listSec)
-		}
-		// Overlay usedRecords: records that have been HSAVE'd are shown as named
-		// (entry[0] nonzero, bit 7 clear) so bdos_find_free_record skips them. The
-		// card model is the primary source; usedRecords only sets bytes that are still
-		// zero (i.e., the card model hasn't already marked the record named).
-		const entriesPerSector = 32
-		const entrySize = 16
-		for rec := range s.usedRecords {
-			recListSec := (rec-1)/entriesPerSector + 1
-			if recListSec != listSec {
-				continue
-			}
-			entryOff := ((rec - 1) % entriesPerSector) * entrySize
-			if data[entryOff]&0x7F == 0 { // still reads as free
-				data[entryOff] = 'U' // mark used: nonzero, bit 7 clear
-			}
-		}
-		for i, b := range data {
-			mac.m.poke(dest+uint16(i), b)
-		}
-	case bdHookListWrite:
-		// Card-absolute list-sector WRITE: E = 1-based list sector, HL = the 512
-		// bytes (32 × 16-byte record-list entries) to write back. This models the
-		// result of a raw SD single-block WRITE at the card-absolute LBA of the
-		// list sector. bdos_claim_record does a read-modify-write: it loads the
-		// sector, overwrites ONLY the claimed record's 16-byte entry, and writes
-		// the whole sector back. Like bdHookListRead, this is a harness-only hook
-		// gated on AllowSyntheticListHooks (162 is a real 1.5t handler — i70e).
-		s.requireSyntheticListHooks(hook, retAddr)
-		listSec := int(cpu.DE.Lo)
-		src := cpu.HL.U16()
-		var written [bdSectorSize]byte
-		for i := range written {
-			written[i] = mac.m.peek(src + uint16(i))
-		}
-		s.applyListWrite(listSec, written)
 	default:
 		// An unmodelled hook code is a fixture bug, never a no-op: on real
 		// B-DOS 1.5t every code 128-166 dispatches to a REAL handler (the
@@ -516,72 +418,6 @@ func (s *BDOSStore) handle(cpu *z80.CPU, mac *Machine, retAddr uint16) uint16 {
 			"model it faithfully against bdos15t-beta6.annotated.dis before using it", hook, hook, retAddr))
 	}
 	return retAddr + 1 // skip the 1-byte inline hook code
-}
-
-// requireSyntheticListHooks panics unless the test opted in to the
-// harness-invented list hooks 161/162. On real B-DOS 1.5t those codes collide
-// with live handlers (161 = HLDBK block-load, 162 = &5E09) that fall into the
-// SD/SPI driver, which runs entirely under DI with unbounded busy-polls and no
-// ESC-abort (1.5t deleted 1.5a's tst.esc) — so a shipped image issuing them
-// wedges the machine with the network dead, exactly the 2026-07-03 i70b shot
-// (i70e). Shipped images must build with NETBOOT_REAL_LISTREAD (the CMD17/CMD24
-// SPI path the harness models in sdcard.go); only scan-logic unit tests on the
-// NETBOOT_SYNTHETIC_LIST_HOOKS build may opt in.
-func (s *BDOSStore) requireSyntheticListHooks(hook byte, retAddr uint16) {
-	if s.AllowSyntheticListHooks {
-		return
-	}
-	panic(fmt.Sprintf("BDOSStore: RST 8 hook %d (&%02X) at &%04X is a harness-only synthetic list hook — "+
-		"on B-DOS 1.5t this code is a REAL handler and the machine wedges in the DI'd SD driver (i70e). "+
-		"Build the image with NETBOOT_REAL_LISTREAD (raw CMD17/CMD24), or set AllowSyntheticListHooks "+
-		"for a deliberate scan-logic unit test", hook, hook, retAddr))
-}
-
-// applyListWrite reconciles a written list sector against the CardModel: it finds
-// the single 16-byte record entry that changed (the read-modify-write touches
-// exactly one — the safety invariant bdos_claim_record guarantees), commits the
-// new entry to the CardModel so a subsequent bdos_find_free_record reads that
-// record as NAMED (the two-push test depends on this), and records the change as
-// a ListWrite. listSec is 1-based; entry e (0..31) within it is record
-// (listSec-1)*32 + e + 1, mirroring CardModel.ListSector.
-func (s *BDOSStore) applyListWrite(listSec int, written [bdSectorSize]byte) {
-	const entriesPerSector = 32
-	const entrySize = 16
-	lw := ListWrite{ListSector: listSec, RawSector: written}
-	if s.card == nil {
-		s.listWrites = append(s.listWrites, lw)
-		return
-	}
-	prior := s.card.ListSector(listSec)
-	for e := 0; e < entriesPerSector; e++ {
-		var newEntry [entrySize]byte
-		copy(newEntry[:], written[e*entrySize:(e+1)*entrySize])
-		var oldEntry [entrySize]byte
-		copy(oldEntry[:], prior[e*entrySize:(e+1)*entrySize])
-		if newEntry == oldEntry {
-			continue
-		}
-		record := (listSec-1)*entriesPerSector + e + 1
-		s.card.SetRecordEntry(record, newEntry)
-		lw.ChangedRecord = record
-		lw.Entry = newEntry
-		lw.Name = strings.TrimRight(maskName(newEntry[:]), " ")
-		// Exactly one entry changes per claim; stop at the first difference. (A
-		// well-behaved claim writes the sector back otherwise byte-for-byte.)
-		break
-	}
-	s.listWrites = append(s.listWrites, lw)
-}
-
-// maskName renders a record-list name field for display, stripping bit 7 (the
-// write-protect / high bit) off each byte the way B-DOS prints it (AND 127 per
-// byte; bdos15a.src.txt:4107-4114).
-func maskName(b []byte) string {
-	out := make([]byte, len(b))
-	for i, c := range b {
-		out[i] = c & 0x7F
-	}
-	return string(out)
 }
 
 // decodeBDOSSave decodes a captured UIFA the way bdos_difa_to_size / save_out_file

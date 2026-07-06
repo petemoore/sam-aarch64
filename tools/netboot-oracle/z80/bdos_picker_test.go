@@ -11,9 +11,10 @@
 // Tests use the boot binary (cliBootBin / cliBootMap) via z80h.Load, consistent
 // with the B3 tests (bdos_list_test.go): the picker routines call
 // bdos_find_free_record / bdos_record_entry which are in the NETBOOT_HOSTTEST==0
-// block, so they're only in the boot binary.  The harness intercepts RST 8
-// (BD_HOOK_LISTREAD) exactly as in the B3 tests, serving list bytes from a
-// CardModel.
+// block, so they're only in the boot binary.  The list read runs through the real
+// CMD17 SPI path (bd_list_read_hw): the test builds the list bytes with a
+// CardModel and SeedSectors them into the attached SD model, exactly as in the
+// B3 tests.
 //
 // Six tests cover the safety matrix:
 //

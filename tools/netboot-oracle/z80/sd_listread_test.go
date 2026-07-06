@@ -1,8 +1,8 @@
 // sd_listread_test.go — i141: the REAL card-absolute list-sector read.
 //
-// Until i141 the detection routines reached the record list through the harness
-// hook BD_HOOK_LISTREAD, which the CardModel served from its RecordList — the
-// detection geometry was exercised, but the raw SD SPI transaction was modelled
+// Until i141 the detection routines reached the record list through a harness
+// RST-8 hook that the CardModel served from its RecordList — the detection
+// geometry was exercised, but the raw SD SPI transaction was modelled
 // away. i141 adds bd_list_read_hw (src/netboot/sd_csd.asm): a real CMD17
 // single-block read on the Trinity SPI ports, the hardware implementation the
 // boot images' card-absolute list read needs.

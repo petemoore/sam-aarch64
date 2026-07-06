@@ -71,7 +71,8 @@ func sdSlotEntry(sd *z80h.SDCard, listSec, n int) []byte {
 // sdSlotName returns the trimmed B-DOS record name for record n from the SD
 // model's captured LBA listSec. Free records (slot[0]&0x7F == 0) return "".
 // The full 16-byte entry is used (B-DOS record names occupy the whole 16-byte
-// slot, with bit 7 masked and trailing spaces trimmed — matching applyListWrite).
+// slot, with bit 7 masked and trailing spaces trimmed — matching how B-DOS
+// renders record names).
 func sdSlotName(sd *z80h.SDCard, listSec, n int) string {
 	entry := sdSlotEntry(sd, listSec, n)
 	if entry == nil || entry[0]&0x7F == 0 {
