@@ -6434,9 +6434,11 @@
   title: Clean up working-note narrative in test_erratum843419.asm Test 2 comment block
   description: |
     The Test 2 comment block in src/test_erratum843419.asm (from the original i27c commit 872e52e4, NOT the fix) carries working-note narrative with wrong intermediate values ('0x1fff8040', 'something is wrong', 'let me recompute properly'). The final conclusion + the test assertions are correct (0x10,0x40,0x80,0xFF = 0x10FF8040), but the narrative violates the present-tense/no-history comment rule. Trivial: rewrite the comment to state the correct ADR re-encode derivation in present tense. Flagged by the #846 §3 re-review as a non-blocking YELLOW. LOW priority (comment-only, no behaviour change).
-  status: OPEN
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 887, role: completing}
 
 - id: i359
   title: "Disk-image catalogue + store all built .mgt images as Trinity records (with in-repo record->disk mapping)"

@@ -83,94 +83,32 @@ run_erratum843419_self_tests:
 e843t_t1_seq_ok:
 
 ; =======================================================================
-; Test 2 — toggle ON, ADRP at page offset 0xff8, Case A:
-;           scan should rewrite ADRP x0 → ADR x0, -4088.
+; Test 2 — toggle ON, ADRP x0 at page offset 0xff8 (vulnerable), Case A:
+;           e843_rewrite turns ADRP x0,#0 into ADR x0,-4088.
 ;
-; We assemble a 12-byte buffer into RAM at e843t_buf, drive the scan at
-; it by pointing E843_SCAN_PAGE/PTR at its location in section C.  The
-; scan calls e843_read1_bhl which uses OUT_RUN_BASE; for the test we set
-; OUT_RUN_BASE so that page_idx=0 maps to the page holding the buffer.
+; The test drives the rewrite arithmetic directly rather than the full scan:
+; it loads adrpX0 into E843_INSN_BUF+0 (as t1 did), sets SCAN_PC = 0x2ff8,
+; calls e843_rewrite, and checks the four output bytes. The direct path
+; isolates the rewrite arithmetic; a full scan would need OUT_RUN_BASE pointed
+; at the buffer's physical page, which is fragile across builds.
 ;
-; The buffer lives in section C (&8000-&BFFF), physical page 2.
-; OUT_RUN_BASE = 3 → (3 + 0 - 1) | &20 = &22 → section B = physical page 2. ✓
+; Byte-level derivation (matching e843_rewrite's borrow subtraction) for
+; adrpX0 = 00 00 00 90 at place=0x2ff8:
+;   imm21 = 0, so v_b0..v_b3 = 0 and the shifted r_b0..r_b3 start at 0.
+;   Subtract place & 0xfff = 0xff8 (0xf8 in byte0, 0x0f in byte1):
+;     r_b0 = 0 - 0xf8      = 0x08 (borrow)
+;     r_b1 = 0 - 0x0f - 1  = 0xf0 (borrow)
+;     r_b2 = 0 - 0    - 1  = 0xff
+;     r_b3 = 0 - 0    - 1  = 0xff   (r_b2 & 0xf0 = 0xf0 → negative, in ADR range)
+;   Re-encode into the ADR word:
+;     out_b0 = Rd(0) | ((r_b0 & 0x1c) << 3)          = 0x40
+;     out_b1 = ((r_b0 & 0xe0) >> 5) | ((r_b1 & 0x1f) << 3)  = 0x80
+;     out_b2 = ((r_b1 & 0xe0) >> 5) | ((r_b2 & 0x1f) << 3)  = 0xff
+;     out_b3 = 0x10 | ((r_b0 & 0x03) << 5)           = 0x10  (bit 31 clear = ADR)
+;   ADR word LE: 40 80 FF 10 → 0x10FF8040.
 ;
-; Actually the buffer is in section C which is at HMPR-relative addresses.
-; Using OUT_RUN_BASE = HMPR_DEFAULT+1 would be fragile across builds.
-;
-; Simpler approach: load the test words directly into E843_INSN_BUF (as t1
-; already did) and call e843_rewrite directly, then verify the result in
-; E843_INSN_BUF via a poke-and-peek.  This tests the rewrite arithmetic
-; without the full scan infrastructure.
-;
-; To test the rewrite: set SCAN_PC = 0x2ff8 (vulnerable offset), fill
-; E843_INSN_BUF+0 = adrpX0, call e843_rewrite, then check e843_out_b3
-; == 0x10 (ADR opcode, no ADRP bit) and e843_out_b0 == 0x40 (per the
-; derivation above: Rd=0, r_b0[4:2]=0x1, → bits[7:5]=0x1<<5=0x20... wait
-; let me recompute).
-;
-; Recompute for adrpX0 at place=0x2ff8:
-;   insn bytes: 00 00 00 90 (b0=0x00, b1=0x00, b2=0x00, b3=0x90)
-;   v_b0: b3[6:5]=(0x90>>5)&3=4&3=0; b0[7:5]=0; b1[2:0]=0 → v_b0=0
-;   v_b1: b1[7:3]=0; b2[2:0]=0 → v_b1=0
-;   v_b2: b2[7:3]=0 → v_b2=0 → sign=0 (positive)
-;   v_b0..v_b3 = 0,0,0,0 (imm21=0)
-;   r_b0..r_b3 after shift = 0,0,0,0
-;   place & 0xfff = 0x2ff8 & 0xfff = 0xff8 = 0xf8 in byte0, 0x0f in byte1
-;   r_b0 = 0 - 0xf8 = 0x08 (borrow)
-;   r_b1 = 0 - 0x0f - 1 = 0xf0 (borrow)
-;   r_b2 = 0 - 0 - 1 = 0xff
-;   r_b3 = 0 - 0 - 1 = 0xff
-; Range check: r_b3=0xff, r_b2 & 0xf0=0xf0 → negative, in range. ✓
-; out_b0: Rd=0; r_b0[4:2]=0x08 & 0x1c = 0x08, <<3 = 0x40 → out_b0=0x40
-; out_b1: r_b0[7:5]=0; r_b1[4:0]=0xf0 & 0x1f=0x10, <<3=0x80 → out_b1=0x80
-; out_b2: r_b1[7:5]=0xe0; >>5=0x07; r_b2[4:0]=0xff&0x1f=0x1f, <<3=0xf8 → out_b2=0xff
-; out_b3: 0x10 | ((r_b0[1:0])<<5) = 0x10 | ((0x08&0x03)<<5)=0x10|0x00=0x10
-; ADR word LE: 40 80 ff 1f → 0x1fff8040.
-; Note: earlier derivation got 0x1ff80040; recompute confirms 0x1fff8040.
-; (Different because I used -4088 before but now computing directly.
-;  Let me re-verify: -4088 = -(0xff8) = 0xFFFFF008 (32-bit LE: 08 f0 ff ff).
-;  r_b0=0x08, r_b1=0xf0, r_b2=0xff, r_b3=0xff ← matches above. ✓)
-;
-; So the expected out bytes are: b0=0x40, b1=0x80, b2=0xff, b3=0x1f.
-; Wait: 0xFFFFF008 as adr_imm:
-;  out_b3: 0x10 | ((r_b0 & 3) << 5) = 0x10 | ((0x08 & 3) << 5) = 0x10 | 0 = 0x10.
-;  But we want out_b3 = 0x1f from the Go: 0x1fff8040 byte3 = 0x1f.
-;  0x1f = 0001 1111 = 0x10 | 0x0f.  Hmm, 0x0f = (imm[1:0]=3)<<5 = 0x60? No.
-;  Let me re-examine: -4088 = 0xFFFFF008 as 32-bit.
-;  As 21-bit signed: bits[20:0] of 0xFFFFF008 = 0x1FF008? Let's see:
-;  0xFFFFF008 & 0x1FFFFF = 0x1FF008.
-;  out_b3: 0x10 | (imm[1:0] << 5).
-;  imm[1:0] = 0x1FF008 & 3 = 0 (bits 0 and 1 of 0xFFFFF008 are 0).
-;  So out_b3 = 0x10 | 0 = 0x10.
-;  But then out word is 0x10??????, and bits[31:24]=0x10 implies byte3=0x10.
-;  But 0x1fff8040 has byte3=0x1f, which is 0001 1111b.  Something is wrong.
-;  Let me recompute properly.
-;
-; aarch64ReencodeADRImm(0x10000000, imm) with imm = 0xFFFFF008 (int32 = -4088):
-;   = (0x10000000 &^ ((3<<29)|(mask19<<5)))
-;     | ((imm & 3) << 29)
-;     | ((imm & (mask19<<2)) << 3)
-;   mask2 = 3; mask19 = (1<<19)-1 = 0x7FFFF
-;   mask19<<5 = 0x3FFFFFE0; mask2<<29 = 0x60000000
-;   clear mask = 0x60000000 | 0x3FFFFFE0 = 0x7FFFFFE0? No: they don't overlap.
-;   Actually: bits[30:29] and bits[23:5] → 0x60000000 | 0x00FFFFE0.
-;   BUT the instruction layout has immhi at bits[23:5] (19 bits) not all of
-;   bits[30:5].  So clear mask = 0x60000000 | 0x00FFFFE0.
-;   0x10000000 &^ (0x60000000|0x00FFFFE0) = 0x10000000 &^ 0x60FFFFE0
-;                                         = 0x10000000 (no overlap) ✓
-;   imm & 3 = 0 → (0 << 29) = 0
-;   imm & (mask19 << 2) = 0xFFFFF008 & (0x7FFFF << 2) = 0xFFFFF008 & 0x1FFFFC
-;                       = 0x000FF008 & 0x001FFFFC = 0x000FF008
-;   Actually: 0xFFFFF008 & 0x001FFFFC:
-;     0xFFFFF008 = 1111...1111 0000 0000 0000 1000
-;     0x001FFFFC = 0000 0000 0001 1111 1111 1111 1100
-;     AND        = 0000 0000 0001 1111 1111 0000 1000 = 0x001FF008
-;   (0x001FF008 << 3) = 0x00FF8040
-;   new_word = 0x10000000 | 0 | 0x00FF8040 = 0x10FF8040.
-; LE bytes: 40 80 FF 10. So out_b3=0x10, out_b0=0x40, out_b1=0x80, out_b2=0xFF.
-; This agrees with my step-by-step above (b3=0x10, b2=0xff, b1=0x80, b0=0x40).
-; The earlier "0x1ff80040" figure in the comment was wrong — the correct value
-; is 0x10FF8040.
+; This matches the file-header spot-check:
+; aarch64ReencodeADRImm(0x10000000, -4088) = 0x10FF8040.
 ; =======================================================================
 
                 ld      a, 1
@@ -265,21 +203,11 @@ e843t_t4_ok:
                 ld      bc, 4
                 ldir
 
-; seq_p on (BUF+0, BUF+4, BUF+8=ldrX4): BUF+8 is a generic ld/st, NOT a
-; LDSTUIMM (0xf94000a4 byte3=0xf9: 0xf9 & 0x3b = 0x39 ✓, but actually
-; 0xf9 & 0x3b = 0x39... let me check: 0xf9 = 1111 1001, 0x3b = 0011 1011,
-; AND = 0011 1001 = 0x39.  So ldrX4 IS also an LDSTUIMM!  Need a word whose
-; byte3 & 0x3b ≠ 0x39 for the intervening word.
-; Use ldrX4 as-is and just test that seq_p returns false because even though
-; ldrX4 passes LDSTUIMM, its Rn != Rd(ADRP).
-; 0xf94000a4: Rn = bits[9:5] → byte0=0xa4=1010 0100, byte1=0x00.
-;   byte0[7:5] = 101, rlca×3: 1010 0100 → 0010 0101 → 0100 1010 → 1001 0100
-;   Wait I need the 3-left-rotate then & 7:
-;   0xa4 = 1010 0100, rlca: 0100 1001 → rlca: 1001 0010 → rlca: 0010 0101
-;   & 7 = 0x05.
-;   byte1 = 0x00 → top 2 bits = 0. RN = 0x05 | (0 << 3) = 5 (x5).
-; RN=x5 ≠ Rd=x0 → seq_p returns false for (BUF+0, BUF+4, BUF+8=ldrX4).
-; So seq_p should return false for Case A (BUF+8 = ldrX4).
+; seq_p on (BUF+0, BUF+4, BUF+8=ldrX4): ldrX4 (0xf94000a4) IS an LDSTUIMM
+; (byte3=0xf9; 0xf9 & 0x3b = 0x39 ✓), so the predicate can only reject it on the
+; base-register check. Rn is bits[9:5]: byte0=0xa4 (1010 0100) rotated left 3
+; then & 7 = 0x05, and byte1=0x00 contributes 0 to bits[4:3] → Rn = x5. Rn=x5 ≠
+; Rd=x0, so seq_p returns false for Case A (BUF+8 = ldrX4).
                 call    e843_seq_p
                 jr      z, e843t_t5_seqA_ok
                 ld      a, &c5
